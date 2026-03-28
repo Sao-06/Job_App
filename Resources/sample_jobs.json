@@ -1,0 +1,162 @@
+[
+  {
+    "id": "job_001",
+    "title": "IC Design Engineering Intern",
+    "company": "NVIDIA",
+    "location": "Santa Clara, CA",
+    "remote": false,
+    "posted_date": "2026-03-28",
+    "description": "Join NVIDIA's IC design team to work on next-gen GPU silicon.",
+    "requirements": [
+      "Verilog",
+      "SPICE",
+      "CMOS",
+      "digital logic",
+      "MATLAB",
+      "Python"
+    ],
+    "salary_range": "$40\u2013$55/hr",
+    "application_url": "https://nvidia.com/careers/intern-ic",
+    "platform": "LinkedIn"
+  },
+  {
+    "id": "job_002",
+    "title": "Photonics Engineering Intern",
+    "company": "Lumentum",
+    "location": "San Jose, CA",
+    "remote": false,
+    "posted_date": "2026-03-28",
+    "description": "Work on photonic integrated circuits and laser component characterization.",
+    "requirements": [
+      "Photolithography",
+      "Optical characterization",
+      "MATLAB",
+      "thin film",
+      "Python",
+      "cleanroom"
+    ],
+    "salary_range": "$35\u2013$45/hr",
+    "application_url": "https://lumentum.com/careers",
+    "platform": "Indeed"
+  },
+  {
+    "id": "job_003",
+    "title": "FPGA/Hardware Engineering Intern",
+    "company": "Intel",
+    "location": "Hillsboro, OR",
+    "remote": true,
+    "posted_date": "2026-03-28",
+    "description": "Develop and verify FPGA designs for Intel's programmable solutions group.",
+    "requirements": [
+      "Verilog",
+      "VHDL",
+      "FPGA",
+      "digital design",
+      "Python",
+      "Linux"
+    ],
+    "salary_range": "$38\u2013$50/hr",
+    "application_url": "https://intel.com/jobs",
+    "platform": "Handshake"
+  },
+  {
+    "id": "job_004",
+    "title": "Semiconductor Process Engineering Intern",
+    "company": "Micron Technology",
+    "location": "Boise, ID",
+    "remote": false,
+    "posted_date": "2026-03-28",
+    "description": "Support semiconductor fabrication process development and yield improvement.",
+    "requirements": [
+      "Cleanroom processes",
+      "SPICE",
+      "data analysis",
+      "Python",
+      "MATLAB",
+      "SEM"
+    ],
+    "salary_range": "$36\u2013$48/hr",
+    "application_url": "https://micron.com/careers",
+    "platform": "Glassdoor"
+  },
+  {
+    "id": "job_005",
+    "title": "Mixed-Signal IC Design Intern",
+    "company": "Apple",
+    "location": "Cupertino, CA",
+    "remote": false,
+    "posted_date": "2026-03-28",
+    "description": "Design and simulate mixed-signal circuits for Apple Silicon.",
+    "requirements": [
+      "SPICE",
+      "Verilog",
+      "analog design",
+      "CMOS",
+      "Python",
+      "MATLAB"
+    ],
+    "salary_range": "$45\u2013$60/hr",
+    "application_url": "https://apple.com/jobs",
+    "platform": "LinkedIn"
+  },
+  {
+    "id": "job_006",
+    "title": "Hardware Engineering Intern",
+    "company": "Microsoft",
+    "location": "Redmond, WA",
+    "remote": true,
+    "posted_date": "2026-03-28",
+    "description": "Contribute to custom silicon and hardware design for Azure infrastructure.",
+    "requirements": [
+      "FPGA",
+      "Verilog",
+      "Python",
+      "C++",
+      "digital design",
+      "schematic"
+    ],
+    "salary_range": "$42\u2013$55/hr",
+    "application_url": "https://microsoft.com/careers",
+    "platform": "Indeed"
+  },
+  {
+    "id": "job_007",
+    "title": "Nanoelectronics Research Intern",
+    "company": "IBM Research",
+    "location": "Yorktown Heights, NY",
+    "remote": false,
+    "posted_date": "2026-03-28",
+    "description": "Research novel semiconductor devices and nanoelectronics fabrication methods.",
+    "requirements": [
+      "Cleanroom processes",
+      "Photolithography",
+      "device physics",
+      "MATLAB",
+      "Python",
+      "SEM"
+    ],
+    "salary_range": "$38\u2013$50/hr",
+    "application_url": "https://research.ibm.com/careers",
+    "platform": "Handshake"
+  },
+  {
+    "id": "job_008",
+    "title": "EE Hardware Design Intern",
+    "company": "Samsung Semiconductors",
+    "location": "San Jose, CA",
+    "remote": false,
+    "posted_date": "2026-03-28",
+    "description": "Support hardware design and verification for Samsung's memory products.",
+    "requirements": [
+      "Verilog",
+      "SPICE",
+      "MATLAB",
+      "Python",
+      "digital logic",
+      "PCB design"
+    ],
+    "salary_range": "$40\u2013$52/hr",
+    "application_url": "https://samsung.com/us/careers",
+    "platform": "LinkedIn"
+  }
+]

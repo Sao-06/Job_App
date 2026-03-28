@@ -3,7 +3,7 @@
 Job Application Agent
 7-phase autonomous job search and application system.
 Based on: Workflow/job-application-agent.md
-Owner: Sao Aphisith Sithisack | sao.sithisack@ou.edu
+Owner: YOUR NAME | your.email@example.com
 
 Usage:
   python agent.py              # Anthropic Claude (requires ANTHROPIC_API_KEY)
@@ -26,7 +26,7 @@ from rich.table import Table
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 
-OWNER_NAME    = "Sao Aphisith Sithisack"
+OWNER_NAME    = "Your Name"  # TODO: replace with your full name
 OUTPUT_DIR    = Path("output")
 RESOURCES_DIR = Path("resources")
 TODAY         = date.today().strftime("%m/%d/%Y")

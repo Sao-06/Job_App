@@ -1,0 +1,8 @@
+anthropic>=0.40.0
+openpyxl>=3.1.0
+python-docx>=1.1.0
+rich>=13.0.0
+streamlit>=1.54.0
+
+# Optional: needed for --ollama mode only
+openai>=1.0.0

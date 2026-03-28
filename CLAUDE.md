@@ -4,19 +4,21 @@ This is my AI agent workspace. I use it for research, content creation, and prod
 
 # About Me
 
-I am an international undergraduate student in Oklahoma. As of Spring 2026 I am a sophomore studying Electrical Engineering. My interests: integrated circuits, chip design, photonics, nanoelectronics, device physics, and solid-state physics. I am building electrical engineering projects to improve my internship candidacy.
+<!-- TODO: Replace this section with a brief description of yourself -->
+I am a [undergraduate/graduate] student at [University Name]. As of [Semester Year] I am a [year] studying [Major]. My interests: [interest 1], [interest 2], [interest 3]. I am building [field] projects to improve my internship/job candidacy.
 
 # Goals
 
-- Short-term: build 2–3 small EE projects (IC/prototyping/photonic demos); prepare targeted resumes and applications.
-- Medium-term: secure internship offers in IC design, photonics, or related fields.
-- Long-term: graduate with a portfolio of hardware projects and research experience.
+<!-- TODO: Update with your own goals -->
+- Short-term: [e.g., build 2–3 small projects; prepare targeted resumes and applications]
+- Medium-term: [e.g., secure internship offers in X or Y field]
+- Long-term: [e.g., graduate with a portfolio of projects and research experience]
 
 # Priorities
 
 - Primary: Produce a high-quality, tailored resume/CV for each job application.
 - Secondary: Build and document technical projects that align with internship targets.
-- Tertiary: Research companies’ projects and tailor applications accordingly.
+- Tertiary: Research companies' projects and tailor applications accordingly.
 
 # Rules & Agent Behavior
 - Clarify: Always ask clarifying questions before starting a complex task.
@@ -27,6 +29,7 @@ I am an international undergraduate student in Oklahoma. As of Spring 2026 I am 
 - Background updates: Keep personal timeline and status up to date when relevant (ask before making public changes).
 - Permissions: Ask before accessing or modifying private accounts or external services.
 - Include Next Steps suggestion whenever beneficial
+
 ### Job Application Agent Configuration
 - Auto-apply threshold: match score ≥ 75 (requires no review)
 - Manual review: 60–79 match score
@@ -47,19 +50,19 @@ I am an international undergraduate student in Oklahoma. As of Spring 2026 I am 
 # Output Conventions
 
 - Folder: output/
-Filename pattern: YYYYMMDD_task_short-description.ext (example: 20260328_resume_CompanyX.pdf)
+- Filename pattern: YYYYMMDD_task_short-description.ext (example: 20260328_resume_CompanyX.pdf)
 - Formats: drafts as Markdown or Google Docs links; final resumes as PDF; code or data in clearly named subfolders.
 - Citation style: inline links + final sources list.
 - Sample Prompts (examples for consistency)
-“Help me draft a 1-page resume targeting a summer IC design internship at Company X — emphasize Verilog, SPICE simulation, and mixed-signal projects.”
-“Generate a README for my photonics demo project with setup, block diagram, and test instructions.”
-- “Compare job posting A and my resume; produce a prioritized edit list.”
+  - "Help me draft a 1-page resume targeting a summer [role] internship at [Company] — emphasize [skill 1], [skill 2], and [skill 3]."
+  - "Generate a README for my [project name] project with setup, block diagram, and test instructions."
+  - "Compare job posting A and my resume; produce a prioritized edit list."
 
 
 # Templates & Checklists
 
 - Resume checklist: contact, 1-line summary, 3–5 bullets per role/project, skills matrix, projects with outcome/metrics.
-- Project README template: Overview, Hardware, Software, Build, Test, Results, Next steps.
+- Project README template: Overview, Hardware/Software, Build, Test, Results, Next steps.
 
 # Project Structure
 
@@ -70,36 +73,34 @@ Filename pattern: YYYYMMDD_task_short-description.ext (example: 20260328_resume_
 
 # Environment & Preferences
 
-- OS: Windows (local environment)
-- Timezone: Oklahoma (Central Time) — mention if time-sensitive scheduling is needed.
+- OS: [Windows / macOS / Linux]
+- Timezone: [Your timezone] — mention if time-sensitive scheduling is needed.
 - Tone: professional, concise, and helpful.
 - Verbosity: default short; expand on request.
-- Languages & tools: Python, MATLAB, SPICE, Verilog/VHDL, LaTeX (specify when tasks require a language).
+- Languages & tools: [list your languages and tools, e.g., Python, MATLAB, C++]
 
 # Contact & Ownership
-- Owner: Sao Aphisith Sithisack
-- Preferred contact: sao.sithisack@ou.edu.
+- Owner: [YOUR FULL NAME]
+- Preferred contact: [your.email@example.com]
 
-# Fillable Template  (add or update values)
+# Fillable Template  ← fill in your details here
 
-- Full name: Sao Aphisith Sithisack
-- LinkedIn URL: www.linkedin.com/in/saoaphisithsithisack
-- Current university and major: Electrical & Computer Engineering
-- Current year: sophomore, Spring 2026
-- Top 3 technical interests: Hardware, FPGA, IC
-- Key skills & tools (list): 
-    - Pulsed Laser Deposition
-    - Photolithography
-    - Cleanroom Processes
-    - Data visualization using MATLAB, Python, Java, and LaTex
-    - Physics Research
-    - CAD: OnShape, Fusion360, SolidWorks
-    - STEM Tutoring & Mentorship (CRLA Level 2)
-- Primary internship targets (companies or roles):
-    - Primary: Design — NVIDIA, Microsoft, Apple, IBM, Micron, Intel, and Samsung
-    - Secondary: Manufacturing -- TSMC (Taiwan) & ASML, Lumentum
-- Job Board: LinkedIn, Indeed, Glassdoor, ZipRecruiter, Wellfound, Dice, Handshake, and Intertride
-- Preferred tone and verbosity: concise, professional , and respectful
-- Any sensitive data or privacy constraints: Avoid mentioning international student status unless required; ask before sharing immigration details
-- Preferred resume formats: 1 page
-- Permissions: Agent may create/commit files: yes
+- Full name: [YOUR FULL NAME]
+- LinkedIn URL: [https://www.linkedin.com/in/your-profile]
+- Current university and major: [University Name — Major]
+- Current year: [freshman / sophomore / junior / senior / graduate], [Semester Year]
+- Top 3 technical interests: [Interest 1], [Interest 2], [Interest 3]
+- Key skills & tools (list):
+    - [Skill 1]
+    - [Skill 2]
+    - [Skill 3]
+    - [Tool 1]
+    - [Tool 2]
+- Primary internship/job targets (companies or roles):
+    - Primary: [Role type — Company 1, Company 2, Company 3]
+    - Secondary: [Role type — Company 4, Company 5]
+- Job Boards: LinkedIn, Indeed, Glassdoor, ZipRecruiter, Wellfound, Dice, Handshake (add/remove as needed)
+- Preferred tone and verbosity: [concise / detailed], [professional / casual]
+- Any sensitive data or privacy constraints: [e.g., do not mention X unless required]
+- Preferred resume format: [1 page / 2 page]
+- Permissions: Agent may create/commit files: [yes / no]

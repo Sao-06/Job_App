@@ -747,25 +747,86 @@ class JobBoardClient:
         raise NotImplementedError
 
 
-class IndeedClient(JobBoardClient):
-    """Indeed job board client.
-
-    Uses the Indeed MCP tool when INDEED_API_KEY is set in the environment.
-    Falls back to an empty list (causing phase2 to use the provider fallback)
-    when the key is absent or the live fetch fails.
+class JobSpyClient(JobBoardClient):
+    """Scrapes real job postings from LinkedIn, Indeed, Glassdoor, and ZipRecruiter
+    using python-jobspy.  Falls back to an empty list if jobspy is unavailable or
+    returns no results, allowing phase2 to trigger the provider fallback.
     """
 
-    def __init__(self, provider: BaseProvider):
-        self._provider = provider
+    def fetch_jobs(self, titles: list, location: str, days: int = 14) -> list:
+        try:
+            from jobspy import scrape_jobs
+        except ImportError:
+            console.print(
+                "  [yellow]python-jobspy not installed — "
+                "run: pip install python-jobspy[/yellow]"
+            )
+            return []
+
+        all_raw: list = []
+        for title in titles:
+            try:
+                df = scrape_jobs(
+                    site_name=["linkedin", "indeed", "glassdoor", "zip_recruiter"],
+                    search_term=title,
+                    location=location,
+                    results_wanted=20,
+                    hours_old=days * 24,
+                    country_indeed="USA",
+                )
+                all_raw.extend(df.to_dict("records"))
+                console.print(f"  📡 '{title}': {len(df)} results scraped")
+            except Exception as e:
+                console.print(
+                    f"  [yellow]JobSpy scrape failed for '{title}': {e}[/yellow]"
+                )
+
+        jobs = [self._map(r) for r in all_raw if r.get("job_url")]
+        return jobs
+
+    @staticmethod
+    def _map(r: dict) -> dict:
+        import hashlib
+
+        url   = str(r.get("job_url") or "")
+        comp  = str(r.get("company") or "")
+        title = str(r.get("title") or "")
+        uid   = hashlib.md5(f"{comp}{title}{url}".encode()).hexdigest()[:10]
+
+        # Build a human-readable salary range string
+        mn = r.get("min_amount")
+        mx = r.get("max_amount")
+        iv = r.get("interval") or "yr"
+        sal = f"${mn}–${mx}/{iv}" if (mn or mx) else ""
+
+        loc = str(r.get("location") or "")
+
+        # date_posted may be a datetime/date object or a plain string
+        pd_raw = r.get("date_posted")
+        try:
+            posted = pd_raw.isoformat() if hasattr(pd_raw, "isoformat") else str(pd_raw or "")
+        except Exception:
+            posted = ""
+
+        return {
+            "id":              uid,
+            "title":           title,
+            "company":         comp,
+            "location":        loc,
+            "remote":          "remote" in loc.lower() or bool(r.get("is_remote")),
+            "posted_date":     posted,
+            "description":     str(r.get("description") or ""),
+            "requirements":    [],   # LLM extracts requirements from description in phases 3–4
+            "salary_range":    sal,
+            "application_url": url,
+            "platform":        str(r.get("site") or ""),
+        }
+
+
+class IndeedClient(JobBoardClient):
+    """Legacy stub — kept for backwards compatibility.  JobSpyClient is used instead."""
 
     def fetch_jobs(self, titles: list, location: str, days: int = 14) -> list:
-        if not os.environ.get("INDEED_API_KEY"):
-            return []
-        # Live Indeed MCP integration placeholder.
-        # Replace the body below with an actual MCP tool call once credentials
-        # are available (see README §Configuration).
-        console.print("  [dim]IndeedClient: INDEED_API_KEY present but live fetch not yet "
-                      "implemented — falling back to provider.[/dim]")
         return []
 
 
@@ -784,10 +845,14 @@ def phase2_discover_jobs(profile: dict, job_titles: list, location: str,
         console.print(f"  📂 Loaded {len(jobs)} postings from resources/sample_jobs.json")
         return jobs
 
-    # Try live job board first, fall back to provider generation
-    board_client = IndeedClient(provider)
+    # Try live scrape first; fall back to provider demo generation if needed
+    board_client = JobSpyClient()
     jobs = board_client.fetch_jobs(job_titles, location)
     if not jobs:
+        console.print(
+            "  [yellow]⚠️  JobSpy returned 0 results — "
+            "falling back to demo job postings.[/yellow]"
+        )
         console.print("  🤖 Generating demo job postings...")
         jobs = provider.generate_demo_jobs(profile, job_titles, location)
 
@@ -1241,10 +1306,21 @@ def _read_resume(path: Path) -> str:
     elif suffix == ".pdf":
         try:
             import pdfplumber
-            with pdfplumber.open(str(path)) as pdf:
-                return "\n".join(page.extract_text() or "" for page in pdf.pages)
         except ImportError:
             console.print("  [yellow]pdfplumber missing — pip install pdfplumber[/yellow]")
+            return _build_demo_resume()
+        try:
+            with pdfplumber.open(str(path)) as pdf:
+                text = "\n".join(page.extract_text() or "" for page in pdf.pages)
+            if text.strip():
+                return text
+            console.print(
+                "  [yellow]PDF opened but no text extracted — "
+                "the file may be a scanned/image-only PDF.[/yellow]"
+            )
+            return _build_demo_resume()
+        except Exception as e:
+            console.print(f"  [yellow]PDF parse error: {e} — using demo resume.[/yellow]")
             return _build_demo_resume()
     elif suffix == ".docx":
         try:

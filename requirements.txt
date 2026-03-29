@@ -8,6 +8,7 @@ flask>=3.0.0
 playwright>=1.40.0
 streamlit>=1.35.0
 pandas>=2.0.0
+python-jobspy>=1.1.0
 
 # Optional: needed for --ollama mode only
 openai>=1.0.0

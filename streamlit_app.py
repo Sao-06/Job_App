@@ -190,11 +190,27 @@ with st.sidebar:
         uploaded = st.file_uploader("Upload PDF / DOCX / TXT",
                                     type=["pdf", "docx", "txt"])
         if uploaded and _ag:
-            suffix = Path(uploaded.name).suffix
-            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-                tmp.write(uploaded.read())
-            st.session_state.resume_text = _ag._read_resume(Path(tmp.name))
-            st.success(f"Loaded: {uploaded.name}")
+            try:
+                suffix = Path(uploaded.name).suffix
+                # Write to a temp file so _read_resume (and pdfplumber) can open it by path
+                with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                    tmp.write(uploaded.read())
+                    tmp_path = Path(tmp.name)
+                text = _ag._read_resume(tmp_path)
+                # Detect silent fallback to demo resume (means extraction failed)
+                demo = _ag._build_demo_resume()
+                if text.strip() and text.strip() != demo.strip():
+                    st.session_state.resume_text = text
+                    st.success(f"Loaded: {uploaded.name}  ({len(text):,} chars)")
+                else:
+                    st.error(
+                        f"Could not extract text from **{uploaded.name}**. "
+                        "Possible causes: scanned/image-only PDF, corrupted file, "
+                        "or pdfplumber not installed (`pip install pdfplumber`). "
+                        "Try a text-based PDF, DOCX, or TXT file instead."
+                    )
+            except Exception as exc:
+                st.error(f"Failed to read **{uploaded.name}**: {exc}")
 
     elif resume_src == "Paste text":
         pasted = st.text_area("Resume text", height=150,
@@ -369,8 +385,16 @@ with tab_pipeline:
                     "Remote":   "Yes" if j.get("remote") else "No",
                     "Platform": j.get("platform", ""),
                     "Salary":   j.get("salary_range", ""),
+                    "Link":     j.get("application_url", ""),
                 } for j in jobs])
-                st.dataframe(df, use_container_width=True, hide_index=True)
+                st.dataframe(
+                    df,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Link": st.column_config.LinkColumn("Link", display_text="Apply"),
+                    },
+                )
 
         if _errored(2):
             with st.expander("Error details"):
@@ -428,8 +452,16 @@ with tab_pipeline:
                     "Matching": ", ".join(j.get("matching_skills", [])),
                     "Missing":  ", ".join(j.get("missing_skills", [])),
                     "Reason":   j.get("reason", ""),
+                    "Link":     j.get("application_url", ""),
                 } for j in scored])
-                st.dataframe(df, use_container_width=True, hide_index=True)
+                st.dataframe(
+                    df,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Link": st.column_config.LinkColumn("Link", display_text="Apply"),
+                    },
+                )
 
         if _errored(3):
             with st.expander("Error details"):
@@ -619,8 +651,16 @@ with tab_pipeline:
                     "Status":       a.get("status", ""),
                     "Confirmation": a.get("confirmation", ""),
                     "Resume File":  a.get("resume_version", ""),
+                    "Link":         a.get("application_url", ""),
                 } for a in apps])
-                st.dataframe(df, use_container_width=True, hide_index=True)
+                st.dataframe(
+                    df,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Link": st.column_config.LinkColumn("Link", display_text="Apply"),
+                    },
+                )
 
                 if st.session_state.tracker_path:
                     st.success(f"Tracker saved → `{st.session_state.tracker_path}`")

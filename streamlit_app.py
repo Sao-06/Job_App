@@ -121,9 +121,21 @@ def _run_phase(n: int, fn, *args):
         st.session_state.phase_error.pop(n, None)
         st.session_state.phase_done.add(n)
         return result, None
-    except Exception as exc:
+    except (Exception, SystemExit) as exc:
         st.session_state.phase_error[n] = traceback.format_exc()
         return None, str(exc)
+
+
+def _try_provider(phase_n: int):
+    """Create the provider and return (provider, ok).
+    On any error (including Ollama not running / sys.exit) stores the traceback
+    in phase_error and returns (None, False) so the phase block can st.rerun().
+    """
+    try:
+        return _make_provider(), True
+    except (Exception, SystemExit) as exc:
+        st.session_state.phase_error[phase_n] = traceback.format_exc()
+        return None, False
 
 
 # ── Visual helpers ─────────────────────────────────────────────────────────────
@@ -176,6 +188,19 @@ with st.sidebar:
                       placeholder="sk-ant-...")
     elif st.session_state.mode == "ollama":
         st.text_input("Ollama model", key="ollama_model", placeholder="llama3.2")
+        # Live Ollama connectivity check
+        try:
+            import urllib.request as _ur
+            _ur.urlopen("http://localhost:11434/api/tags", timeout=2)
+            st.success("Ollama is running ✓", icon="🟢")
+        except Exception:
+            st.error(
+                "Ollama not reachable at localhost:11434\n\n"
+                "Run these commands first:\n"
+                f"```\nollama pull {st.session_state.ollama_model}\n"
+                "ollama serve\n```",
+                icon="🔴",
+            )
 
     # ── Resume ────────────────────────────────────────────────────────────────
     st.divider()
@@ -308,13 +333,14 @@ with tab_pipeline:
 
             if should_run1:
                 with st.spinner("Extracting profile from resume…"):
-                    provider = _make_provider()
-                    profile, err = _run_phase(
-                        1, _ag.phase1_ingest_resume,
-                        st.session_state.resume_text, provider,
-                    )
-                    if profile is not None:
-                        st.session_state.profile = profile
+                    provider, ok = _try_provider(1)
+                    if ok:
+                        profile, err = _run_phase(
+                            1, _ag.phase1_ingest_resume,
+                            st.session_state.resume_text, provider,
+                        )
+                        if profile is not None:
+                            st.session_state.profile = profile
                 st.rerun()
 
             if st.session_state.profile:
@@ -363,16 +389,17 @@ with tab_pipeline:
 
             if should_run2:
                 with st.spinner("Discovering jobs…"):
-                    provider = _make_provider()
-                    titles = [t.strip() for t in
-                              st.session_state.job_titles.split(",") if t.strip()]
-                    jobs, err = _run_phase(
-                        2, _ag.phase2_discover_jobs,
-                        st.session_state.profile, titles,
-                        st.session_state.location, provider,
-                    )
-                    if jobs is not None:
-                        st.session_state.jobs = jobs
+                    provider, ok = _try_provider(2)
+                    if ok:
+                        titles = [t.strip() for t in
+                                  st.session_state.job_titles.split(",") if t.strip()]
+                        jobs, err = _run_phase(
+                            2, _ag.phase2_discover_jobs,
+                            st.session_state.profile, titles,
+                            st.session_state.location, provider,
+                        )
+                        if jobs is not None:
+                            st.session_state.jobs = jobs
                 st.rerun()
 
             if st.session_state.jobs:
@@ -422,14 +449,15 @@ with tab_pipeline:
 
             if should_run3:
                 with st.spinner("Scoring all jobs against your profile…"):
-                    provider = _make_provider()
-                    scored, err = _run_phase(
-                        3, _ag.phase3_score_jobs,
-                        st.session_state.jobs, st.session_state.profile,
-                        provider, 60,
-                    )
-                    if scored is not None:
-                        st.session_state.scored_jobs = scored
+                    provider, ok = _try_provider(3)
+                    if ok:
+                        scored, err = _run_phase(
+                            3, _ag.phase3_score_jobs,
+                            st.session_state.jobs, st.session_state.profile,
+                            provider, 60,
+                        )
+                        if scored is not None:
+                            st.session_state.scored_jobs = scored
                 st.rerun()
 
             if st.session_state.scored_jobs:
@@ -497,7 +525,9 @@ with tab_pipeline:
             if should_run4:
                 prog = st.progress(0, text="Tailoring resumes…")
                 try:
-                    provider    = _make_provider()
+                    provider, ok = _try_provider(4)
+                    if not ok:
+                        raise RuntimeError(st.session_state.phase_error.get(4, "Provider error"))
                     tailored_map = {}
                     total = len(top_jobs)
                     for i, job in enumerate(top_jobs, 1):
@@ -689,15 +719,16 @@ with tab_pipeline:
 
             if should_run7:
                 with st.spinner("Generating end-of-run report…"):
-                    provider = _make_provider()
-                    report, err = _run_phase(
-                        7, _ag.phase7_run_report,
-                        st.session_state.applications,
-                        st.session_state.tracker_path,
-                        provider,
-                    )
-                    if report is not None:
-                        st.session_state.report = report
+                    provider, ok = _try_provider(7)
+                    if ok:
+                        report, err = _run_phase(
+                            7, _ag.phase7_run_report,
+                            st.session_state.applications,
+                            st.session_state.tracker_path,
+                            provider,
+                        )
+                        if report is not None:
+                            st.session_state.report = report
                     st.session_state.run_all = False  # pipeline complete
                 st.rerun()
 

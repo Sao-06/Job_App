@@ -563,19 +563,42 @@ class OllamaProvider(BaseProvider):
         self._check_ollama()
 
     def _check_ollama(self):
+        import urllib.request as _ur
+        import json as _json
+
+        # 1. Check Ollama server is reachable
         try:
-            import urllib.request
-            urllib.request.urlopen(f"{self.OLLAMA_URL}/api/tags", timeout=5)
+            resp = _ur.urlopen(f"{self.OLLAMA_URL}/api/tags", timeout=5)
+            data = _json.loads(resp.read().decode())
         except Exception as e:
             raise ConnectionError(
                 f"Ollama is not reachable at {self.OLLAMA_URL}.\n"
-                f"Make sure Ollama is installed and running:\n"
-                f"  ollama pull {self.model}\n"
+                f"Start it with:\n"
                 f"  ollama serve\n"
                 f"(original error: {e})"
             ) from e
 
-    def _chat(self, prompt: str, json_mode: bool = False) -> str:
+        # 2. Check the requested model is pulled locally (fast-fail before LLM call)
+        models = data.get("models", [])
+        local_bases = {m.get("name", "").split(":")[0] for m in models}
+        local_full  = {m.get("name", "") for m in models}
+        req_base    = self.model.split(":")[0]
+
+        if self.model not in local_full and req_base not in local_bases:
+            available = ", ".join(sorted(local_bases)) or "none"
+            raise ValueError(
+                f"Model '{self.model}' is not pulled in Ollama.\n"
+                f"Available models: {available}\n"
+                f"Fix: run  ollama pull {self.model}"
+            )
+
+    def _chat(self, prompt: str) -> str:
+        """Send prompt to Ollama and return the raw text response.
+
+        json_mode is intentionally NOT used — not all models support
+        response_format:json_object and it can cause silent hangs.
+        All callers use _parse_json() to extract JSON from plain text.
+        """
         try:
             from openai import OpenAI
         except ImportError as exc:
@@ -587,24 +610,12 @@ class OllamaProvider(BaseProvider):
         oc = OpenAI(
             base_url=f"{self.OLLAMA_URL}/v1",
             api_key="ollama",
-            timeout=180,  # 3-minute timeout; large models can be slow
+            timeout=120,  # 2-minute hard timeout per request
         )
-        kwargs: dict = dict(
+        resp = oc.chat.completions.create(
             model=self.model,
             messages=[{"role": "user", "content": prompt}],
         )
-        if json_mode:
-            kwargs["response_format"] = {"type": "json_object"}
-
-        try:
-            resp = oc.chat.completions.create(**kwargs)
-        except Exception:
-            if json_mode:
-                # Not all models support JSON mode — retry without it
-                kwargs.pop("response_format", None)
-                resp = oc.chat.completions.create(**kwargs)
-            else:
-                raise
         return resp.choices[0].message.content or ""
 
     def _parse_json(self, text: str, fallback: dict) -> dict:
@@ -633,7 +644,7 @@ class OllamaProvider(BaseProvider):
             "resume_gaps (array of strings).\n\n"
             f"Resume:\n{resume_text[:3000]}"  # cap to avoid context-limit hangs
         )
-        raw = self._chat(prompt, json_mode=True)
+        raw = self._chat(prompt)
         return self._parse_json(raw, {
             "name": OWNER_NAME, "email": "", "linkedin": "", "location": "",
             "target_titles": ["IC Design Intern", "Hardware Engineering Intern"],
@@ -657,7 +668,7 @@ class OllamaProvider(BaseProvider):
             f"Requirements: {', '.join(job.get('requirements', []))}\n"
             f"Location: {job.get('location')} (Remote: {job.get('remote', False)})"
         )
-        raw = self._chat(prompt, json_mode=True)
+        raw = self._chat(prompt)
         result = self._parse_json(raw, {
             "job_id": job.get("id", ""), "score": 50,
             "matching_skills": [], "missing_skills": [], "reason": "Scored by Ollama"
@@ -679,7 +690,7 @@ class OllamaProvider(BaseProvider):
             f"Candidate Skills: {', '.join(profile.get('top_hard_skills', []))}\n\n"
             f"Resume (excerpt):\n{resume_text[:2000]}"
         )
-        raw = self._chat(prompt, json_mode=True)
+        raw = self._chat(prompt)
         return self._parse_json(raw, {
             "summary": f"Seeking {job['title']} role at {job['company']}.",
             "skills_reordered": profile.get("top_hard_skills", []),

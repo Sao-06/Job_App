@@ -285,6 +285,84 @@ Phase 3 scores each job 0–100 using this weighted model:
 
 ---
 
+## Configuration
+
+### Environment Variables
+
+| Variable | Required | Description |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | For default mode | Anthropic API key (`sk-ant-...`) |
+| `SMTP_HOST` | Optional | SMTP server hostname (e.g. `smtp.gmail.com`) |
+| `SMTP_PORT` | Optional | SMTP port (e.g. `465` for SSL) |
+| `SMTP_USER` | Optional | SMTP login username / sender address |
+| `SMTP_PASS` | Optional | SMTP login password or app password |
+| `NOTIFY_EMAIL` | Optional | Recipient address for run-completion emails |
+| `INDEED_API_KEY` | Optional | Enables live Indeed job fetch in Phase 2 (stub — implementation pending) |
+
+If all five SMTP variables are set, Phase 7 will email the run report to `NOTIFY_EMAIL` with subject `"Job Application Run Complete — YYYY-MM-DD (N applied)"`. If any variable is missing, email is silently skipped and a warning is printed.
+
+**Setting variables (bash / macOS / Linux):**
+```bash
+export SMTP_HOST=smtp.gmail.com
+export SMTP_PORT=465
+export SMTP_USER=you@gmail.com
+export SMTP_PASS=your-app-password
+export NOTIFY_EMAIL=you@gmail.com
+```
+
+**Setting variables (Windows CMD):**
+```cmd
+set SMTP_HOST=smtp.gmail.com
+set SMTP_PORT=465
+set SMTP_USER=you@gmail.com
+set SMTP_PASS=your-app-password
+set NOTIFY_EMAIL=you@gmail.com
+```
+
+---
+
+### config/skill_keywords.yaml
+
+Controls which skill keywords `DemoProvider` matches against resumes and job requirements. Edit this file to adapt the agent to any field — no Python changes needed.
+
+```yaml
+# config/skill_keywords.yaml
+hardware:         # IC/FPGA/PCB skills
+  - verilog
+  - fpga
+  - cmos
+  - pcb
+
+software:         # Languages and OS tools
+  - python
+  - matlab
+  - c++
+  - linux
+
+domain:           # Domain-specific lab / process skills
+  - photolithography
+  - cleanroom
+  - sem
+  - thin film
+```
+
+All groups are flattened into one list at runtime. Add new groups freely — `DemoProvider` iterates over all top-level keys.
+
+---
+
+### CLI Flags
+
+| Flag | Description |
+|---|---|
+| `--demo` | Template/regex mode — no API key required |
+| `--ollama` | Use local Ollama LLM |
+| `--model MODEL` | Ollama model name (default: `llama3.2`) |
+| `--section-order SECTIONS` | Comma-separated resume section order, e.g. `Summary,Skills,Experience,Projects,Education` |
+| `--real-apply` | Use Playwright for real form submission (Greenhouse boards); falls back to simulation for others |
+| `--dashboard` | Launch Flask dashboard at `http://localhost:5000` after Phase 3 scoring for interactive review |
+
+---
+
 ## Known Limitations & Roadmap
 
 ### Current limitations

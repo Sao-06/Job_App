@@ -1,0 +1,40 @@
+# Skill keywords for DemoProvider resume matching and job scoring.
+# Organized into named groups for field-agnostic configuration.
+# Add, remove, or rename groups to match your target field.
+# DemoProvider flattens all groups into one list for matching.
+
+hardware:
+  - verilog
+  - vhdl
+  - fpga
+  - spice
+  - ltspice
+  - cmos
+  - pcb
+  - digital design
+  - analog design
+  - mixed-signal
+  - rtl
+  - synthesis
+  - schematic
+
+software:
+  - python
+  - matlab
+  - java
+  - c++
+  - linux
+  - latex
+
+domain:
+  - photolithography
+  - cleanroom
+  - pulsed laser deposition
+  - pld
+  - thin film
+  - sem
+  - afm
+  - onshape
+  - fusion360
+  - solidworks
+  - cad

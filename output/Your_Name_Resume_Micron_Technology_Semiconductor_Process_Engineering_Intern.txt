@@ -1,0 +1,22 @@
+TAILORED RESUME
+Role: Semiconductor Process Engineering Intern @ Micron Technology
+Score: 83
+============================================================
+
+PROFESSIONAL SUMMARY
+Highly motivated electrical engineering student with experience in embedded systems, data analysis, and cleanroom processes. Proficient in a range of programming languages and simulation tools. Proven leadership skills with experience in managing teams and organizing events.
+
+EXPERIENCE (tailored)
+
+Undergraduate Research Assistant (Embedded Systems) Jan 2026 – Present
+  • Assisted the Body Sensor Team in developing a PPG sleepiness detection system utilizing machine learning algorithms to classify fatigue levels from heart biometrics in safety-critical environments.
+
+Events Officer Jan 2026 – Present
+
+Lead (Drone Hardware Engineer) Nov 2025 – Present
+  • Technical Lead: Spearheaded recruitment and technical onboarding for 20+ members;
+  • Managed the full development lifecycle of three custom PCBs (Flight Controller, ESC, PDB), BOM selection, and Professional Design Reviews.
+
+ATS GAPS
+FPGA SystemVerilog
+

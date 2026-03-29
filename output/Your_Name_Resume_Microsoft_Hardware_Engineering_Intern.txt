@@ -4,11 +4,11 @@ Score: 78
 ============================================================
 
 PROFESSIONAL SUMMARY
-Electrical & Computer Engineering sophomore with hands-on experience in Verilog, VHDL, FPGA, seeking a Hardware Engineering Intern role at Microsoft. Passionate about contribute to custom silicon and hardware design for azure infrastructure. Eager to apply academic and lab experience to real-world engineering challenges.
+Electrical & Computer Engineering sophomore with hands-on experience in Verilog, FPGA, SPICE, seeking a Hardware Engineering Intern role at Microsoft. Passionate about contribute to custom silicon and hardware design for azure infrastructure. Eager to apply academic and lab experience to real-world engineering challenges.
 
 SKILLS
-FPGA | Verilog | Python | Digital Design | VHDL | SPICE | Mixed-Signal | MATLAB | Java | LaTeX
+FPGA | Verilog | Python | C++ | SPICE | Ltspice | PCB Design | MATLAB | Java | Linux
 
 ATS GAPS
-C++, Schematic
+Digital Design, Schematic
 

@@ -84,7 +84,13 @@ def _make_provider():
             os.environ["ANTHROPIC_API_KEY"] = key
         return _ag.AnthropicProvider()
     if mode == "ollama":
-        return _ag.OllamaProvider(model=st.session_state.ollama_model)
+        model = st.session_state.ollama_model.strip()
+        if not model:
+            raise ValueError(
+                "Ollama model name is empty. "
+                "Enter a model name in the sidebar (e.g. llama3.2)."
+            )
+        return _ag.OllamaProvider(model=model)
     raise ValueError(f"Unknown mode: {mode}")
 
 
@@ -188,6 +194,8 @@ with st.sidebar:
                       placeholder="sk-ant-...")
     elif st.session_state.mode == "ollama":
         st.text_input("Ollama model", key="ollama_model", placeholder="llama3.2")
+        if not st.session_state.ollama_model.strip():
+            st.warning("Enter a model name above, e.g. `llama3.2`")
         # Live Ollama connectivity check
         try:
             import urllib.request as _ur

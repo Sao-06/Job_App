@@ -565,30 +565,46 @@ class OllamaProvider(BaseProvider):
     def _check_ollama(self):
         try:
             import urllib.request
-            urllib.request.urlopen(f"{self.OLLAMA_URL}/api/tags", timeout=3)
-        except Exception:
-            console.print(Panel(
-                "[red bold]Ollama is not running.[/red bold]\n\n"
-                "Install Ollama from [link]https://ollama.com[/link], then run:\n"
-                f"  [bold]ollama pull {self.model}[/bold]\n"
-                f"  [bold]ollama serve[/bold]  (if not already running)\n\n"
-                "Then re-run:  [bold]python agent.py --ollama[/bold]",
-                title="Ollama Setup Required", border_style="red"
-            ))
-            sys.exit(1)
+            urllib.request.urlopen(f"{self.OLLAMA_URL}/api/tags", timeout=5)
+        except Exception as e:
+            raise ConnectionError(
+                f"Ollama is not reachable at {self.OLLAMA_URL}.\n"
+                f"Make sure Ollama is installed and running:\n"
+                f"  ollama pull {self.model}\n"
+                f"  ollama serve\n"
+                f"(original error: {e})"
+            ) from e
 
     def _chat(self, prompt: str, json_mode: bool = False) -> str:
         try:
             from openai import OpenAI
-        except ImportError:
-            console.print("[red]openai package missing. Run: pip install openai[/red]")
-            sys.exit(1)
+        except ImportError as exc:
+            raise ImportError(
+                "openai package is required for Ollama mode. "
+                "Run: pip install openai"
+            ) from exc
 
-        oc = OpenAI(base_url=f"{self.OLLAMA_URL}/v1", api_key="ollama")
-        kwargs = dict(model=self.model, messages=[{"role": "user", "content": prompt}])
+        oc = OpenAI(
+            base_url=f"{self.OLLAMA_URL}/v1",
+            api_key="ollama",
+            timeout=180,  # 3-minute timeout; large models can be slow
+        )
+        kwargs: dict = dict(
+            model=self.model,
+            messages=[{"role": "user", "content": prompt}],
+        )
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
-        resp = oc.chat.completions.create(**kwargs)
+
+        try:
+            resp = oc.chat.completions.create(**kwargs)
+        except Exception:
+            if json_mode:
+                # Not all models support JSON mode — retry without it
+                kwargs.pop("response_format", None)
+                resp = oc.chat.completions.create(**kwargs)
+            else:
+                raise
         return resp.choices[0].message.content or ""
 
     def _parse_json(self, text: str, fallback: dict) -> dict:
@@ -615,7 +631,7 @@ class OllamaProvider(BaseProvider):
             "experience (array of {title, company, dates, bullets[]}), "
             "projects (array of {name, description, skills_used[]}), "
             "resume_gaps (array of strings).\n\n"
-            f"Resume:\n{resume_text}"
+            f"Resume:\n{resume_text[:3000]}"  # cap to avoid context-limit hangs
         )
         raw = self._chat(prompt, json_mode=True)
         return self._parse_json(raw, {

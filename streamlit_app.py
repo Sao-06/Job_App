@@ -298,6 +298,12 @@ tab_pipeline, tab_tracker, tab_files = st.tabs(["🚀 Pipeline", "📊 Tracker",
 # PIPELINE TAB
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_pipeline:
+    # ── Stop run_all BEFORE evaluating any should_runX condition ──────────────
+    # st.rerun() restarts the script from the top, so a bottom-of-page check
+    # is never reached after an error.  Moving the check here breaks the loop.
+    if st.session_state.run_all and st.session_state.phase_error:
+        st.session_state.run_all = False
+
     # Progress bar
     n_done = len(st.session_state.phase_done)
     st.progress(n_done / 7, text=f"Pipeline: {n_done} / 7 phases complete")
@@ -326,7 +332,7 @@ with tab_pipeline:
                 btn_p1 = st.button("▶ Extract Profile", key="btn_p1")
 
             should_run1 = (
-                (btn_p1 or st.session_state.run_all) and
+                (btn_p1 or (st.session_state.run_all and not _errored(1))) and
                 not _done(1) and
                 bool(st.session_state.resume_text)
             )
@@ -385,7 +391,7 @@ with tab_pipeline:
                 st.caption("Loads jobs from resources/sample_jobs.json or generates via provider.")
 
             should_run2 = (
-                (btn_p2 or (st.session_state.run_all and _done(1))) and
+                (btn_p2 or (st.session_state.run_all and _done(1) and not _errored(2))) and
                 not _done(2)
             )
 
@@ -445,7 +451,7 @@ with tab_pipeline:
                 st.caption(f"Min filter: 60  |  Auto-apply threshold: {thr}")
 
             should_run3 = (
-                (btn_p3 or (st.session_state.run_all and _done(2))) and
+                (btn_p3 or (st.session_state.run_all and _done(2) and not _errored(3))) and
                 not _done(3)
             )
 
@@ -521,7 +527,7 @@ with tab_pipeline:
                 )
 
             should_run4 = (
-                (btn_p4 or (st.session_state.run_all and _done(3))) and
+                (btn_p4 or (st.session_state.run_all and _done(3) and not _errored(4))) and
                 not _done(4) and
                 bool(top_jobs)
             )
@@ -607,7 +613,7 @@ with tab_pipeline:
                 )
 
             should_run56 = (
-                (btn_p56 or (st.session_state.run_all and _done(4))) and
+                (btn_p56 or (st.session_state.run_all and _done(4) and not _errored(5))) and
                 not _done(5)
             )
 
@@ -717,7 +723,7 @@ with tab_pipeline:
                 btn_p7 = st.button("▶ Generate Report", key="btn_p7")
 
             should_run7 = (
-                (btn_p7 or (st.session_state.run_all and _done(5))) and
+                (btn_p7 or (st.session_state.run_all and _done(5) and not _errored(7))) and
                 not _done(7)
             )
 
@@ -771,10 +777,8 @@ with tab_pipeline:
             with st.expander("Error details"):
                 st.code(st.session_state.phase_error[7])
 
-    # Halt run_all if any phase errors
-    if st.session_state.run_all and st.session_state.phase_error:
-        st.session_state.run_all = False
-        st.warning("Pipeline halted due to an error in the phase above.")
+    if st.session_state.phase_error and not st.session_state.run_all:
+        st.warning("One or more phases have errors. Fix the issue and click the phase button to retry.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════

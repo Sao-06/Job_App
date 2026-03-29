@@ -393,10 +393,60 @@ with tab_pipeline:
         if not st.session_state.profile:
             st.info("Complete Phase 1 first.")
         else:
+            # ── Cache status ───────────────────────────────────────────────────
+            _cache_file = _ag.RESOURCES_DIR / "sample_jobs.json"
+            if _cache_file.exists():
+                import json as _json
+                try:
+                    _cached = _json.loads(_cache_file.read_text(encoding="utf-8"))
+                    _first_url = (_cached[0].get("application_url", "") if _cached else "")
+                    _is_demo   = any(
+                        demo in _first_url
+                        for demo in ["nvidia.com/careers", "intel.com/jobs",
+                                     "microsoft.com/careers", "apple.com/jobs",
+                                     "lumentum.com/careers", "micron.com/careers",
+                                     "research.ibm.com", "samsung.com/us/careers"]
+                    )
+                except Exception:
+                    _is_demo = False
+
+                if _is_demo:
+                    st.warning(
+                        "**Cached jobs are demo/fake URLs** from a previous run.  "
+                        "Click **Clear cache** to scrape real postings.",
+                        icon="⚠️",
+                    )
+                else:
+                    from datetime import datetime as _dt
+                    _age = _dt.now().timestamp() - _cache_file.stat().st_mtime
+                    _age_h = int(_age / 3600)
+                    st.info(
+                        f"Using cached jobs ({len(_cached)} postings, "
+                        f"{_age_h}h old).  Click **Clear cache** to re-scrape.",
+                        icon="📂",
+                    )
+
+                if st.button("🗑 Clear cache & re-scrape", key="btn_clear_cache"):
+                    _cache_file.unlink(missing_ok=True)
+                    # Also reset phase 2 so it re-runs
+                    st.session_state.phase_done.discard(2)
+                    st.session_state.phase_done.discard(3)
+                    st.session_state.phase_done.discard(4)
+                    st.session_state.phase_done.discard(5)
+                    st.session_state.phase_done.discard(6)
+                    st.session_state.phase_done.discard(7)
+                    st.session_state.jobs        = None
+                    st.session_state.scored_jobs = None
+                    st.session_state.tailored_map = {}
+                    st.session_state.applications = []
+                    st.session_state.report       = None
+                    st.rerun()
+
             btn_p2 = None
             if not _done(2):
                 btn_p2 = st.button("▶ Discover Jobs", key="btn_p2")
-                st.caption("Loads jobs from resources/sample_jobs.json or generates via provider.")
+                if not _cache_file.exists():
+                    st.caption("Will scrape live job boards via JobSpy (LinkedIn, Indeed, Glassdoor, ZipRecruiter).")
 
             should_run2 = (
                 (btn_p2 or (st.session_state.run_all and _done(1) and not _errored(2))) and

@@ -1,22 +1,23 @@
 # Job Application Run Report
 **Date:** 2026-03-28
 
-Run Summary — 2026-03-28
+Job Application Run Summary:
 
-Results:
-  • Jobs evaluated:       8
-  • Applications sent:    0
-  • Manual review needed: 0
-  • Skipped (low match):  8
+Stats: 
+- Total Found: 7
+- Applied: 0
+- Skipped: 7
 
-Top Jobs Applied To:
+Top 3 Jobs:
+No jobs applied yet.
 
+Manual Items:
+No manual items to process.
 
-Recommended Next Steps:
-  1. Add quantified metrics to resume bullets (e.g., 'reduced error rate by 20%').
-  2. Follow up on applied jobs in 7 days via LinkedIn or email.
-  3. Update skills section with any ATS gaps flagged in tailored resumes.
-
+Next Steps:
+1. Review application status and update accordingly.
+2. Address manual item issues, if any.
+3. Submit new applications for top job opportunities.
 
 ---
 **Tracker:** `Job_Applications_Tracker_2026-03.xlsx`

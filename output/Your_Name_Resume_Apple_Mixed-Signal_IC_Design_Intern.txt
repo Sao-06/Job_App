@@ -1,0 +1,11 @@
+TAILORED RESUME
+Role: Mixed-Signal IC Design Intern @ Apple
+Score: 85
+============================================================
+
+PROFESSIONAL SUMMARY
+Results-driven mixed-signal IC design intern with expertise in analog design, CMOS, and programming languages such as Python, MATLAB. Proven track record of leading projects and coordinating large-scale social events for over 8,500 students. Skilled in simulating complex systems using tools like SPICE and ModelSim.
+
+ATS GAPS
+ARM Microcontrollers, FPGA SystemVerilog
+

@@ -1,14 +1,14 @@
 TAILORED RESUME
 Role: FPGA/Hardware Engineering Intern @ Intel
-Score: 83
+Score: 78
 ============================================================
 
 PROFESSIONAL SUMMARY
-Electrical & Computer Engineering sophomore with hands-on experience in Verilog, VHDL, FPGA, seeking a FPGA/Hardware Engineering Intern role at Intel. Passionate about develop and verify fpga designs for intel's programmable solutions group. Eager to apply academic and lab experience to real-world engineering challenges.
+Electrical & Computer Engineering sophomore with hands-on experience in Verilog, FPGA, SPICE, seeking a FPGA/Hardware Engineering Intern role at Intel. Passionate about develop and verify fpga designs for intel's programmable solutions group. Eager to apply academic and lab experience to real-world engineering challenges.
 
 SKILLS
-Verilog | VHDL | FPGA | Digital Design | Python | SPICE | Mixed-Signal | MATLAB | Java | LaTeX
+Verilog | FPGA | Python | Linux | SPICE | Ltspice | PCB Design | MATLAB | Java | C++
 
 ATS GAPS
-Linux
+Vhdl, Digital Design
 

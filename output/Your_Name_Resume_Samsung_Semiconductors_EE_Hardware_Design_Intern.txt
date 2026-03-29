@@ -1,0 +1,25 @@
+TAILORED RESUME
+Role: EE Hardware Design Intern @ Samsung Semiconductors
+Score: 75
+============================================================
+
+PROFESSIONAL SUMMARY
+Highly skilled and detail-oriented EE intern with experience in digital logic, PCB design, andembedded systems. Proven track record of leading projects, developing machine learning algorithms, and collaborating with cross-functional teams. Seeking to apply skills in a software-defined semiconductor company like Samsung Semiconductors.
+
+SKILLS
+Digital Logic | PCB Design | FPGA SystemVerilog | ARM Microcontrollers | C/C++
+
+EXPERIENCE (tailored)
+
+Lead (Drone Hardware Engineer)
+  • Spearheaded recruitment and technical onboarding for 20+ team members,
+
+Events Officer
+  • Organized industry networking events for the ECE student body
+
+Undergraduate Research Assistant (Embedded Systems)
+  • Developed a PPG Sleepiness Detection system utilizing machine learning algorithms to classify fatigue levels from heart biometrics in safety-critical environments.
+
+ATS GAPS
+SPICE, MATLAB
+

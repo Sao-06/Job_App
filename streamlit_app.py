@@ -332,7 +332,9 @@ with tab_pipeline:
             )
 
             if should_run1:
-                with st.spinner("Extracting profile from resume…"):
+                _model_hint = (f" via Ollama ({st.session_state.ollama_model})"
+                               if st.session_state.mode == "ollama" else "")
+                with st.spinner(f"Extracting profile{_model_hint} — this may take up to 2 min…"):
                     provider, ok = _try_provider(1)
                     if ok:
                         profile, err = _run_phase(
@@ -388,7 +390,7 @@ with tab_pipeline:
             )
 
             if should_run2:
-                with st.spinner("Discovering jobs…"):
+                with st.spinner("Discovering jobs (scraping live boards — may take 30–60 s)…"):
                     provider, ok = _try_provider(2)
                     if ok:
                         titles = [t.strip() for t in
@@ -448,7 +450,9 @@ with tab_pipeline:
             )
 
             if should_run3:
-                with st.spinner("Scoring all jobs against your profile…"):
+                _model_hint3 = (f" via Ollama ({st.session_state.ollama_model})"
+                                if st.session_state.mode == "ollama" else "")
+                with st.spinner(f"Scoring jobs{_model_hint3}…"):
                     provider, ok = _try_provider(3)
                     if ok:
                         scored, err = _run_phase(

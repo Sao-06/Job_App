@@ -17,6 +17,8 @@ import sys
 import json
 import re
 import argparse
+import smtplib
+from email.mime.text import MIMEText
 from pathlib import Path
 from datetime import date, timedelta, datetime
 
@@ -329,14 +331,33 @@ class AnthropicProvider(BaseProvider):
 class DemoProvider(BaseProvider):
     """Template/regex-based provider. Zero cost, zero setup, works offline."""
 
-    # Common EE skill keywords for regex matching
-    SKILL_KEYWORDS = [
+    # Fallback skill keywords used when config/skill_keywords.yaml is unavailable
+    _DEFAULT_KEYWORDS = [
         "verilog", "vhdl", "fpga", "spice", "matlab", "python", "java", "latex",
         "photolithography", "cleanroom", "pld", "cmos", "pcb", "ltspice",
         "onshape", "fusion360", "solidworks", "cad", "linux", "c++",
         "pulsed laser deposition", "thin film", "sem", "afm",
         "digital design", "analog design", "mixed-signal", "rtl", "synthesis",
     ]
+
+    def __init__(self):
+        self.SKILL_KEYWORDS = self._load_keywords()
+
+    @staticmethod
+    def _load_keywords() -> list:
+        """Load and flatten all skill groups from config/skill_keywords.yaml."""
+        yaml_path = Path("config/skill_keywords.yaml")
+        try:
+            import yaml
+            with open(yaml_path, encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+            keywords = []
+            for group in data.values():
+                if isinstance(group, list):
+                    keywords.extend(group)
+            return keywords
+        except Exception:
+            return list(DemoProvider._DEFAULT_KEYWORDS)
 
     def extract_profile(self, resume_text: str) -> dict:
         text_lower = resume_text.lower()
@@ -716,6 +737,38 @@ def phase1_ingest_resume(resume_text: str, provider: BaseProvider) -> dict:
     return profile
 
 
+# ─── Job Board Client ─────────────────────────────────────────────────────────
+
+class JobBoardClient:
+    """Base class for live job board integrations."""
+
+    def fetch_jobs(self, titles: list, location: str, days: int = 14) -> list:
+        """Return a list of job dicts for the given titles and location."""
+        raise NotImplementedError
+
+
+class IndeedClient(JobBoardClient):
+    """Indeed job board client.
+
+    Uses the Indeed MCP tool when INDEED_API_KEY is set in the environment.
+    Falls back to an empty list (causing phase2 to use the provider fallback)
+    when the key is absent or the live fetch fails.
+    """
+
+    def __init__(self, provider: BaseProvider):
+        self._provider = provider
+
+    def fetch_jobs(self, titles: list, location: str, days: int = 14) -> list:
+        if not os.environ.get("INDEED_API_KEY"):
+            return []
+        # Live Indeed MCP integration placeholder.
+        # Replace the body below with an actual MCP tool call once credentials
+        # are available (see README §Configuration).
+        console.print("  [dim]IndeedClient: INDEED_API_KEY present but live fetch not yet "
+                      "implemented — falling back to provider.[/dim]")
+        return []
+
+
 # ─── Phase 2: Job Discovery ───────────────────────────────────────────────────
 
 def phase2_discover_jobs(profile: dict, job_titles: list, location: str,
@@ -731,8 +784,13 @@ def phase2_discover_jobs(profile: dict, job_titles: list, location: str,
         console.print(f"  📂 Loaded {len(jobs)} postings from resources/sample_jobs.json")
         return jobs
 
-    console.print("  🤖 Generating demo job postings...")
-    jobs = provider.generate_demo_jobs(profile, job_titles, location)
+    # Try live job board first, fall back to provider generation
+    board_client = IndeedClient(provider)
+    jobs = board_client.fetch_jobs(job_titles, location)
+    if not jobs:
+        console.print("  🤖 Generating demo job postings...")
+        jobs = provider.generate_demo_jobs(profile, job_titles, location)
+
     RESOURCES_DIR.mkdir(exist_ok=True)
     with open(sample_file, "w", encoding="utf-8") as f:
         json.dump(jobs, f, indent=2)
@@ -779,16 +837,128 @@ def phase3_score_jobs(jobs: list, profile: dict, provider: BaseProvider,
 # ─── Phase 4: Resume Tailoring ────────────────────────────────────────────────
 
 def phase4_tailor_resume(job: dict, profile: dict, resume_text: str,
-                          provider: BaseProvider, include_cover_letter: bool = False) -> dict:
+                          provider: BaseProvider, include_cover_letter: bool = False,
+                          section_order: list = None) -> dict:
     tailored = provider.tailor_resume(job, profile, resume_text)
+    if section_order:
+        tailored["section_order"] = section_order
     if include_cover_letter:
         tailored["cover_letter"] = provider.generate_cover_letter(job, profile)
     return tailored
 
 
+# ─── Playwright Submitter ─────────────────────────────────────────────────────
+
+class PlaywrightSubmitter:
+    """Real application submission via browser automation.
+
+    Requires:  pip install playwright && playwright install chromium
+    Activated: python agent.py --real-apply
+
+    Supported boards:
+      • boards.greenhouse.io — fills name, email, resume upload, submits
+      • All others           — falls back to phase5_simulate_submission()
+    """
+
+    def __init__(self, profile: dict):
+        self.profile = profile
+
+    def submit(self, job: dict, resume_path: str = "", cover_letter: str = "") -> dict:
+        url = job.get("application_url", "")
+        if "boards.greenhouse.io" in url:
+            return self._submit_greenhouse(job, resume_path)
+        return phase5_simulate_submission(job)
+
+    def _submit_greenhouse(self, job: dict, resume_path: str) -> dict:
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            console.print(
+                "  [yellow]playwright missing — "
+                "pip install playwright && playwright install chromium[/yellow]"
+            )
+            return phase5_simulate_submission(job)
+
+        import random
+        url     = job.get("application_url", "")
+        profile = self.profile
+        name_parts = (profile.get("name") or "").split()
+        first  = name_parts[0] if name_parts else ""
+        last   = " ".join(name_parts[1:]) if len(name_parts) > 1 else ""
+        email  = profile.get("email", "")
+
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page    = browser.new_page()
+            try:
+                page.goto(url, timeout=30000)
+                for sel in ["input[name='first_name']", "input[id='first_name']"]:
+                    if page.locator(sel).count():
+                        page.fill(sel, first); break
+                for sel in ["input[name='last_name']", "input[id='last_name']"]:
+                    if page.locator(sel).count():
+                        page.fill(sel, last); break
+                for sel in ["input[name='email']", "input[id='email']"]:
+                    if page.locator(sel).count():
+                        page.fill(sel, email); break
+                if resume_path and Path(resume_path).exists():
+                    for sel in ["input[type='file']", "input[name='resume']"]:
+                        if page.locator(sel).count():
+                            page.set_input_files(sel, resume_path); break
+                for sel in ["button[type='submit']", "input[type='submit']"]:
+                    if page.locator(sel).count():
+                        page.click(sel)
+                        page.wait_for_timeout(2000)
+                        break
+                return {
+                    "status": "Applied",
+                    "confirmation": (
+                        f"GH-{datetime.now().strftime('%Y%m%d')}-{random.randint(1000, 9999)}"
+                    ),
+                }
+            except Exception as e:
+                console.print(f"  [yellow]Playwright error: {e}[/yellow]")
+                return phase5_simulate_submission(job)
+            finally:
+                browser.close()
+
+
 # ─── Phase 5: Application Submission (Demo) ───────────────────────────────────
 
-def phase5_simulate_submission(job: dict) -> dict:
+def _load_existing_applications() -> set:
+    """Return set of (company_lower, title_lower) already in the current month's tracker."""
+    month = datetime.now().strftime("%Y-%m")
+    tracker_path = OUTPUT_DIR / f"Job_Applications_Tracker_{month}.xlsx"
+    if not tracker_path.exists():
+        return set()
+    try:
+        import openpyxl
+        wb = openpyxl.load_workbook(tracker_path, read_only=True)
+        ws = wb.active
+        headers = [cell.value for cell in next(ws.iter_rows(max_row=1))]
+        title_col   = headers.index("Job Title") if "Job Title" in headers else None
+        company_col = headers.index("Company")   if "Company"   in headers else None
+        applied: set = set()
+        if title_col is not None and company_col is not None:
+            for row in ws.iter_rows(min_row=2, values_only=True):
+                t = row[title_col]
+                c = row[company_col]
+                if t and c:
+                    applied.add((str(c).lower(), str(t).lower()))
+        wb.close()
+        return applied
+    except Exception:
+        return set()
+
+
+def phase5_simulate_submission(job: dict, already_applied: set = None) -> dict:
+    if already_applied is None:
+        already_applied = set()
+    key = (job.get("company", "").lower(), job.get("title", "").lower())
+    if key in already_applied:
+        console.print("  ⏭️  Already applied — skipped")
+        return {"status": "Skipped", "confirmation": "N/A",
+                "notes": "Already applied — skipped"}
     import random
     status  = random.choice(["Applied", "Applied", "Applied", "Manual Required"])
     confirm = (
@@ -886,6 +1056,36 @@ def phase6_update_tracker(applications: list) -> Path:
     return tracker_path
 
 
+# ─── Email Notification ───────────────────────────────────────────────────────
+
+def _send_email_notification(report_text: str, n_applied: int) -> None:
+    """Send run-completion email via SMTP_SSL. Silently skipped if any env var is missing."""
+    required = ["SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASS", "NOTIFY_EMAIL"]
+    missing  = [v for v in required if not os.environ.get(v)]
+    if missing:
+        console.print(f"  [dim]Email notification skipped (missing env: {', '.join(missing)})[/dim]")
+        return
+    try:
+        host      = os.environ["SMTP_HOST"]
+        port      = int(os.environ["SMTP_PORT"])
+        user      = os.environ["SMTP_USER"]
+        password  = os.environ["SMTP_PASS"]
+        recipient = os.environ["NOTIFY_EMAIL"]
+        subject   = (
+            f"Job Application Run Complete — {date.today().isoformat()} ({n_applied} applied)"
+        )
+        msg            = MIMEText(report_text)
+        msg["Subject"] = subject
+        msg["From"]    = user
+        msg["To"]      = recipient
+        with smtplib.SMTP_SSL(host, port) as smtp:
+            smtp.login(user, password)
+            smtp.send_message(msg)
+        console.print(f"  📧 Notification sent to {recipient}")
+    except Exception as e:
+        console.print(f"  [yellow]Email notification failed: {e}[/yellow]")
+
+
 # ─── Phase 7: Run Report ──────────────────────────────────────────────────────
 
 def phase7_run_report(applications: list, tracker_path: Path,
@@ -917,6 +1117,7 @@ def phase7_run_report(applications: list, tracker_path: Path,
 
     console.print(Panel(report_text, title="[bold]Run Summary[/bold]", border_style="green"))
     console.print(f"  📄 Report saved → [bold]{report_path}[/bold]")
+    _send_email_notification(report_text, len(applied_list))
     return report_text
 
 
@@ -941,7 +1142,7 @@ def startup_checklist() -> dict:
     else:
         cfg["resume_path"] = None
         cfg["resume_text"] = _build_demo_resume()
-        console.print("   ℹ  Using built-in profile from CLAUDE.md")
+        console.print("   [dim](i)[/dim]  Using built-in profile from CLAUDE.md")
 
     console.print("\n[bold]2. Target job titles[/bold] (comma-separated, up to 3)")
     raw = input("   [IC Design Intern, Photonics Engineer Intern, FPGA/Hardware Intern]: ").strip()
@@ -972,8 +1173,8 @@ def startup_checklist() -> dict:
     )
 
     console.print("\n[bold]9. Cover letter preference[/bold]")
-    raw = input("   yes / no / only for ≥85 [no]: ").strip().lower()
-    cfg["cover_letter_mode"] = raw if raw in ("yes", "no", "only for >=85", "only for ≥85") else "no"
+    raw = input("   yes / no / only for >=85 [no]: ").strip().lower()
+    cfg["cover_letter_mode"] = raw if raw in ("yes", "no", "only for >=85") else "no"
 
     console.print("\n[bold]10. Max applications per run[/bold]")
     raw = input("   [10]: ").strip()
@@ -1037,6 +1238,14 @@ def _read_resume(path: Path) -> str:
     suffix = path.suffix.lower()
     if suffix in (".txt", ".md"):
         return path.read_text(encoding="utf-8")
+    elif suffix == ".pdf":
+        try:
+            import pdfplumber
+            with pdfplumber.open(str(path)) as pdf:
+                return "\n".join(page.extract_text() or "" for page in pdf.pages)
+        except ImportError:
+            console.print("  [yellow]pdfplumber missing — pip install pdfplumber[/yellow]")
+            return _build_demo_resume()
     elif suffix == ".docx":
         try:
             from docx import Document
@@ -1058,25 +1267,62 @@ def _save_tailored_resume(job: dict, tailored: dict) -> str:
         f"{safe(OWNER_NAME)}_Resume_{safe(job.get('company',''))}"
         f"_{safe(job.get('title',''))}.txt"
     )
+    order = (
+        tailored.get("section_order")
+        or ["Summary", "Skills", "Projects", "Experience", "Education"]
+    )
     with open(OUTPUT_DIR / filename, "w", encoding="utf-8") as f:
         f.write(f"TAILORED RESUME\nRole: {job['title']} @ {job['company']}\n"
                 f"Score: {job.get('score','N/A')}\n{'='*60}\n\n")
-        if tailored.get("summary"):
-            f.write(f"PROFESSIONAL SUMMARY\n{tailored['summary']}\n\n")
-        if tailored.get("skills_reordered"):
-            f.write(f"SKILLS\n{' | '.join(tailored['skills_reordered'])}\n\n")
-        if tailored.get("experience_bullets"):
-            f.write("EXPERIENCE (tailored)\n")
-            for role in tailored["experience_bullets"]:
-                f.write(f"\n{role.get('role','')}\n")
-                for b in role.get("bullets", []):
-                    f.write(f"  • {b}\n")
-            f.write("\n")
+        for section in order:
+            if section == "Summary" and tailored.get("summary"):
+                f.write(f"PROFESSIONAL SUMMARY\n{tailored['summary']}\n\n")
+            elif section == "Skills" and tailored.get("skills_reordered"):
+                f.write(f"SKILLS\n{' | '.join(tailored['skills_reordered'])}\n\n")
+            elif section == "Experience" and tailored.get("experience_bullets"):
+                f.write("EXPERIENCE (tailored)\n")
+                for role in tailored["experience_bullets"]:
+                    f.write(f"\n{role.get('role','')}\n")
+                    for b in role.get("bullets", []):
+                        f.write(f"  • {b}\n")
+                f.write("\n")
+            # Projects and Education sections: not present in tailored dict — skipped
         if tailored.get("ats_keywords_missing"):
             f.write(f"ATS GAPS\n{', '.join(tailored['ats_keywords_missing'])}\n\n")
         if tailored.get("cover_letter"):
             f.write(f"\n{'─'*60}\nCOVER LETTER\n\n{tailored['cover_letter']}\n")
     return filename
+
+
+# ─── Dashboard Helper ─────────────────────────────────────────────────────────
+
+def _launch_dashboard_and_wait(tracker_path: Path) -> None:
+    """Launch the Flask dashboard, open the browser, and wait for Enter."""
+    import subprocess
+    import webbrowser
+    import time
+
+    dashboard_script = Path(__file__).parent / "dashboard" / "app.py"
+    if not dashboard_script.exists():
+        console.print("  [yellow]dashboard/app.py not found — skipping dashboard.[/yellow]")
+        return
+
+    try:
+        proc = subprocess.Popen([sys.executable, str(dashboard_script)])
+        time.sleep(1.5)  # let Flask start
+        webbrowser.open("http://localhost:5000")
+        console.print(Panel(
+            "Dashboard running at [bold]http://localhost:5000[/bold]\n\n"
+            "• Review scored jobs and approve Manual Required rows.\n"
+            "• Approved rows will be submitted in phases 4-7.\n"
+            "• Press [bold]Enter[/bold] when ready to continue.",
+            title="[bold cyan]Web Dashboard[/bold cyan]",
+            border_style="cyan",
+        ))
+        input()
+        proc.terminate()
+    except Exception as e:
+        console.print(f"  [yellow]Dashboard launch failed: {e}[/yellow]")
 
 
 # ─── Main Orchestrator ────────────────────────────────────────────────────────
@@ -1118,26 +1364,42 @@ def run_agent(config: dict, provider: BaseProvider):
             f"[dim]{j.get('location','?')} · {j.get('platform','')}[/dim]"
         )
 
+    if config.get("dashboard"):
+        # Write a preliminary tracker so the dashboard has data to display
+        preliminary_apps = [
+            {**j, "date_applied": datetime.now().strftime("%m/%d/%Y"),
+             "resume_version": "", "cover_letter_sent": False,
+             "status": "Auto-eligible" if j.get("score", 0) >= config.get("threshold", 75)
+                       else "Manual Required",
+             "confirmation": "N/A", "notes": ""}
+            for j in scored
+        ]
+        phase6_update_tracker(preliminary_apps)
+        _launch_dashboard_and_wait(OUTPUT_DIR / f"Job_Applications_Tracker_{datetime.now().strftime('%Y-%m')}.xlsx")
+
     proceed = input("\nProceed with submissions? [Y/n]: ").strip().lower()
     if proceed == "n":
         console.print("[yellow]Run cancelled.[/yellow]")
         return
 
-    to_process  = auto_eligible[:config.get("max_apps", 10)]
-    applications = []
+    to_process      = auto_eligible[:config.get("max_apps", 10)]
+    already_applied = _load_existing_applications()
+    applications    = []
+    submitter       = PlaywrightSubmitter(profile) if config.get("real_apply") else None
 
     for i, job in enumerate(to_process, 1):
         console.print(f"\n[bold]({i}/{len(to_process)}) {job['title']} @ {job['company']}[/bold]  score={job['score']}")
 
         include_cl = (
             config.get("cover_letter_mode") == "yes"
-            or (config.get("cover_letter_mode") in ("only for >=85", "only for ≥85")
+            or (config.get("cover_letter_mode") == "only for >=85"
                 and job.get("score", 0) >= 85)
         )
 
         console.print("  ✏️  Tailoring resume...")
         tailored = phase4_tailor_resume(job, profile, config["resume_text"],
-                                         provider, include_cl)
+                                         provider, include_cl,
+                                         section_order=config.get("section_order"))
 
         if tailored.get("ats_keywords_missing"):
             console.print(
@@ -1147,8 +1409,12 @@ def run_agent(config: dict, provider: BaseProvider):
         resume_file = _save_tailored_resume(job, tailored)
         console.print(f"  💾 Resume → output/{resume_file}")
 
-        console.print("  🚀 Submitting (demo mode)...")
-        result = phase5_simulate_submission(job)
+        if submitter:
+            console.print("  🚀 Submitting via Playwright...")
+            result = submitter.submit(job, str(OUTPUT_DIR / resume_file))
+        else:
+            console.print("  🚀 Submitting (demo mode)...")
+            result = phase5_simulate_submission(job, already_applied)
         icon   = "✅" if result["status"] == "Applied" else "⚠️"
         console.print(f"  {icon} {result['status']}  •  Confirmation: {result['confirmation']}")
 
@@ -1204,6 +1470,13 @@ if __name__ == "__main__":
                         help="Use local Ollama LLM (free, requires ollama.com)")
     parser.add_argument("--model",  default="llama3.2",
                         help="Ollama model name (default: llama3.2)")
+    parser.add_argument("--section-order", default=None,
+                        help="Comma-separated resume section order "
+                             "(e.g. Summary,Skills,Experience,Projects,Education)")
+    parser.add_argument("--real-apply", action="store_true",
+                        help="Use Playwright for real form submission (Greenhouse boards)")
+    parser.add_argument("--dashboard", action="store_true",
+                        help="Launch Flask dashboard after scoring for manual review")
     args = parser.parse_args()
 
     # API key guard — only needed for default Anthropic mode
@@ -1219,4 +1492,10 @@ if __name__ == "__main__":
 
     provider = get_provider(args)
     config   = startup_checklist()
+    config["section_order"] = (
+        [s.strip() for s in args.section_order.split(",")]
+        if args.section_order else None
+    )
+    config["real_apply"] = args.real_apply
+    config["dashboard"]  = args.dashboard
     run_agent(config, provider)

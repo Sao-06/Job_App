@@ -15,14 +15,21 @@ This is an AI agent workspace for resume/CV generation, AI-initiated job applica
 **Setup** (one-time):
 ```bash
 pip install -r requirements.txt
+# If using --real-apply (Playwright browser automation):
+python -m playwright install
 ```
 
-**Run modes:**
+**Run modes (CLI):**
 ```bash
 python agent.py                              # Anthropic Claude (requires ANTHROPIC_API_KEY env var)
 python agent.py --demo                       # No API key — uses regex/template logic + hardcoded demo jobs
 python agent.py --ollama                     # Local Ollama LLM (requires Ollama running at localhost:11434)
 python agent.py --ollama --model mistral     # Choose specific Ollama model
+```
+
+**Run via Streamlit web UI:**
+```bash
+streamlit run streamlit_app.py               # Interactive browser UI at http://localhost:8501
 ```
 
 **Before running** (Anthropic mode):

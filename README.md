@@ -26,13 +26,18 @@ Three backends are supported with no architecture changes: **Anthropic Claude** 
 ## Project Overview
 
 ```
-agent.py          ← single-file pipeline (all 7 phases + 3 providers)
+agent.py              ← single-file pipeline (all 7 phases + 3 providers)
+streamlit_app.py      ← interactive Streamlit web UI (run with: streamlit run streamlit_app.py)
+dashboard/
+  app.py              ← Flask dashboard for post-scoring review (--dashboard flag)
 Workflow/
   job-application-agent.md   ← canonical spec for all phase logic
+config/
+  skill_keywords.yaml ← configurable skill keyword groups
 resources/
-  sample_jobs.json           ← cached job postings (auto-generated on first run)
-output/                      ← all deliverables land here
-CLAUDE.md                    ← personal context + agent config for Claude Code
+  sample_jobs.json    ← cached job postings (auto-generated on first run)
+output/               ← all deliverables land here
+CLAUDE.md             ← personal context + agent config for Claude Code
 requirements.txt
 ```
 
@@ -94,7 +99,27 @@ flowchart TD
 pip install -r requirements.txt
 ```
 
-`requirements.txt` installs: `anthropic`, `openpyxl`, `python-docx`, `rich`. The `openai` package listed there is only needed for `--ollama` mode.
+`requirements.txt` installs the following packages:
+
+| Package | Purpose |
+|---|---|
+| `anthropic` | Anthropic Claude API (default provider) |
+| `openpyxl` | Excel tracker generation (Phase 6) |
+| `python-docx` | DOCX resume parsing |
+| `rich` | Terminal formatting and progress display |
+| `pyyaml` | Skill keywords config (`config/skill_keywords.yaml`) |
+| `pdfplumber` | PDF resume parsing |
+| `flask` | Dashboard backend (`dashboard/app.py`) |
+| `playwright` | Real application submission (`--real-apply`) |
+| `streamlit` | Interactive web UI (`streamlit_app.py`) |
+| `pandas` | Data manipulation for scoring and tracking |
+| `python-jobspy` | Live job board scraping (Phase 2) |
+| `openai` | *Optional* — only needed for `--ollama` mode |
+
+**Playwright browser setup** (only needed if using `--real-apply`):
+```bash
+python -m playwright install
+```
 
 ---
 
@@ -219,7 +244,7 @@ python agent.py --demo
 python agent.py --demo
 # At prompt 1: Path to resume (PDF/DOCX/TXT): resources/MyResume.docx
 ```
-Supported formats: `.txt`, `.md`, `.docx`. PDF support requires a third-party parser not included by default — convert to DOCX or TXT first.
+Supported formats: `.txt`, `.md`, `.docx`, `.pdf` (PDF parsing via `pdfplumber`).
 
 **Full Claude run with custom jobs:**
 ```bash
@@ -363,24 +388,42 @@ All groups are flattened into one list at runtime. Add new groups freely — `De
 
 ---
 
+## Streamlit Web UI
+
+A full interactive web interface is available via Streamlit. It provides a browser-based way to configure, run, and monitor the agent pipeline.
+
+```bash
+streamlit run streamlit_app.py
+# Opens at http://localhost:8501
+```
+
+The Streamlit UI lets you:
+- Configure run settings (mode, model, thresholds) from the sidebar
+- Upload your resume directly in the browser
+- Monitor pipeline progress through all 7 phases
+- Review scored jobs and tailored materials interactively
+- Download the Excel tracker and run report
+
+---
+
 ## Known Limitations & Roadmap
 
 ### Current limitations
 
-- **No live job board search.** Phase 2 uses `resources/sample_jobs.json` (your own data) or LLM-generated synthetic postings. Real scraping of LinkedIn, Indeed, etc. is not implemented.
-- **No real form submission.** Phase 5 is simulated in all modes. Browser automation (Playwright/Selenium) for actual form filling is not included.
-- **PDF resume parsing is not supported.** Only `.txt`, `.md`, and `.docx` are read. Convert PDFs before passing them in.
-- **Demo provider is EE/semiconductor-specific.** The hardcoded `DEMO_JOBS` and `DemoProvider` skill keywords are tuned for electrical engineering internship profiles. Adapting to other fields requires updating `DEMO_JOBS` and `SKILL_KEYWORDS` in `agent.py`.
+- **Live job scraping has limitations.** Phase 2 can scrape job boards via `python-jobspy`, but rate limits and site changes may affect results. For reliability, you can also provide your own `resources/sample_jobs.json`.
+- **Real form submission is experimental.** `--real-apply` uses Playwright for Greenhouse-style boards; other ATS platforms fall back to simulation.
+- **Demo provider is EE/semiconductor-specific.** The hardcoded `DEMO_JOBS` and `DemoProvider` skill keywords are tuned for electrical engineering internship profiles. Adapting to other fields requires updating `DEMO_JOBS` and `config/skill_keywords.yaml`.
 - **Ollama output quality is model-dependent.** Smaller or quantized models may produce malformed JSON; the provider falls back gracefully but scoring and tailoring will be less precise.
 - **Single-session memory only.** The agent does not persist a cross-run application history. The Excel tracker is the only deduplication record, and it is not read back on subsequent runs.
 
 ### Roadmap
 
-- [ ] Live job board integration (LinkedIn Jobs API, Indeed Publisher API)
-- [ ] Real application submission via Playwright browser automation
-- [ ] PDF resume parsing (via `pypdf` or `pdfplumber`)
+- [x] Live job board scraping (via `python-jobspy` in Phase 2)
+- [x] Real application submission via Playwright browser automation (`--real-apply`)
+- [x] PDF resume parsing (via `pdfplumber`)
+- [x] Web UI / dashboard for reviewing scored jobs before submission (Streamlit UI + Flask dashboard)
+- [x] Email notification on run completion (Phase 7, via SMTP env vars)
+- [x] Support for custom section ordering (`--section-order` flag)
+- [x] Field-agnostic skill keyword config (`config/skill_keywords.yaml`)
 - [ ] Cross-run deduplication by loading existing tracker on startup
-- [ ] Web UI / dashboard for reviewing scored jobs before submission
-- [ ] Email notification on run completion (Phase 7)
-- [ ] Support for multi-page résumés and custom section ordering
-- [ ] Field-agnostic skill keyword config (move `SKILL_KEYWORDS` to a YAML config file)
+- [ ] LinkedIn Jobs API / Indeed Publisher API integration (beyond scraping)

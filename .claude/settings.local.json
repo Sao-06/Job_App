@@ -4,8 +4,7 @@
       "Bash(printf '\\\\n\\\\n\\\\n\\\\n\\\\n\\\\n\\\\n\\\\n\\\\n\\\\nY\\\\n')",
       "Bash(python agent.py --demo)",
       "Bash(python -c \":*)",
-      "Bash(PYTHONIOENCODING=utf-8 python agent.py --demo)",
-      "Bash(python -c \"import json; d=json.load\\(open\\(''resources/sample_jobs.json''\\)\\); print\\(d[0][''application_url''], ''|'', d[0][''company'']\\)\")"
+      "Bash(PYTHONIOENCODING=utf-8 python agent.py --demo)"
     ]
   }
 }

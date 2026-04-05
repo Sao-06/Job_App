@@ -18,6 +18,8 @@ import json
 import re
 import argparse
 import smtplib
+import time
+import threading
 from email.mime.text import MIMEText
 from pathlib import Path
 from datetime import date, timedelta, datetime
@@ -28,12 +30,61 @@ from rich.table import Table
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 
-OWNER_NAME    = "Your Name"  # TODO: replace with your full name
-OUTPUT_DIR    = Path("output")
-RESOURCES_DIR = Path("resources")
-TODAY         = date.today().strftime("%m/%d/%Y")
+OWNER_NAME       = "Your Name"  # TODO: replace with your full name
+OUTPUT_DIR       = Path("output")
+RESOURCES_DIR    = Path("resources")
+TODAY            = date.today().strftime("%m/%d/%Y")
+MAX_SCRAPE_JOBS  = 50  # cap on total jobs collected in Phase 2 to keep Phase 3 fast
 
 console = Console()
+
+
+# ─── CLI loading-spinner ──────────────────────────────────────────────────────
+
+class _CliSpinner:
+    """Background thread that prints a status message every N seconds
+    so the user knows a long-running phase is still alive."""
+
+    _MESSAGES = [
+        "Still working — LLM is processing…",
+        "Hang tight — fetching results…",
+        "Still running — this can take a moment…",
+        "Processing in the background…",
+        "Almost there — please wait…",
+    ]
+
+    def __init__(self, messages=None, interval: int = 20):
+        self._msgs = messages or self._MESSAGES
+        self._interval = interval
+        self._stop = threading.Event()
+        self._thread = None
+
+    def start(self):
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+        return self
+
+    def stop(self):
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout=3)
+
+    def _run(self):
+        idx = 0
+        while not self._stop.wait(self._interval):
+            console.print(f"  [dim]⏳ {self._msgs[idx % len(self._msgs)]}[/dim]")
+            idx += 1
+
+    def __enter__(self):
+        return self.start()
+
+    def __exit__(self, *_):
+        self.stop()
+
+
+# ─── Module-level counters / state ───────────────────────────────────────────
+_last_merge_count: int = 0
+_original_latex_source: str = None   # set by _read_resume when LaTeX is detected
 
 # Hardcoded demo job postings used when sample_jobs.json is missing in --demo mode
 DEMO_JOBS = [
@@ -110,6 +161,192 @@ DEMO_JOBS = [
         "platform": "LinkedIn"
     },
 ]
+
+
+# ─── Inference Helpers ────────────────────────────────────────────────────────
+
+def infer_experience_level(job: dict) -> str:
+    """Infer experience level from job title and description."""
+    text = (job.get("title", "") + " " + job.get("description", "")).lower()
+    if any(k in text for k in ["intern", "internship", "co-op", "coop"]):
+        return "internship"
+    if any(k in text for k in ["entry", "new grad", "graduate", "0-2 years",
+                                "junior", "associate"]):
+        return "entry-level"
+    if any(k in text for k in ["2-5 years", "3+ years", "mid-level"]):
+        return "mid-level"
+    if any(k in text for k in ["senior", "sr.", "staff", "principal", "lead",
+                                "5+ years", "7+ years"]):
+        return "senior"
+    return "unknown"
+
+
+def infer_education_required(job: dict) -> str:
+    """Infer minimum education requirement from job text."""
+    reqs = job.get("requirements", [])
+    req_str = " ".join(reqs) if isinstance(reqs, list) else str(reqs)
+    text = (job.get("title", "") + " " + job.get("description", "") + " " + req_str).lower()
+    if any(k in text for k in ["ph.d", "phd", "doctorate", "doctoral",
+                                "doctor of philosophy"]):
+        return "phd"
+    if any(k in text for k in ["master's", "masters", "m.s.", "ms degree",
+                                "meng", "m.eng", "graduate degree"]):
+        return "masters"
+    if any(k in text for k in ["bachelor's", "bachelors", "bachelor", "b.s.", "bs degree",
+                                "b.eng", "undergraduate", "pursuing a degree"]):
+        return "bachelors"
+    if any(k in text for k in ["associate's", "associates degree", "a.s."]):
+        return "associates"
+    if any(k in text for k in ["high school diploma", "ged", "no degree required"]):
+        return "high_school"
+    return "unknown"
+
+
+def infer_citizenship_required(job: dict) -> str:
+    """Infer US citizenship / clearance requirement from job text."""
+    reqs = job.get("requirements", [])
+    req_str = " ".join(reqs) if isinstance(reqs, list) else str(reqs)
+    text = (job.get("title", "") + " " + job.get("description", "") + " " + req_str).lower()
+    if any(k in text for k in [
+        "us citizen", "u.s. citizen", "united states citizen",
+        "security clearance", "secret clearance", "top secret",
+        "itar", "us persons only", "must be a us citizen",
+        "citizenship required", "due to export control",
+    ]):
+        return "yes"
+    if any(k in text for k in [
+        "visa sponsorship available", "open to all work authorizations",
+        "no clearance required",
+    ]):
+        return "no"
+    return "unknown"
+
+
+def deduplicate_jobs(jobs: list) -> list:
+    """Merge jobs with same company+title, combining their locations."""
+    global _last_merge_count
+
+    def _norm(s: str) -> str:
+        return re.sub(r'[^\w\s]', '', s.strip().lower())
+
+    result: list = []
+    seen: dict = {}  # key -> index in result
+
+    for job in jobs:
+        key = _norm(job.get("company", "")) + "|" + _norm(job.get("title", ""))
+        if key not in seen:
+            result.append(dict(job))
+            seen[key] = len(result) - 1
+        else:
+            idx = seen[key]
+            existing = result[idx]
+            # Merge location
+            new_loc = job.get("location", "")
+            if new_loc and new_loc not in existing.get("location", ""):
+                existing["location"] = existing.get("location", "") + f", {new_loc}"
+            # Merge URL
+            if not existing.get("application_url") and job.get("application_url"):
+                existing["application_url"] = job["application_url"]
+            # Merge salary
+            if not existing.get("salary_range") and job.get("salary_range"):
+                existing["salary_range"] = job["salary_range"]
+            # Merge remote flag
+            if job.get("remote"):
+                existing["remote"] = True
+
+    _last_merge_count = len(jobs) - len(result)
+    return result
+
+
+def detect_latex(text: str) -> bool:
+    """Return True if text appears to be LaTeX source."""
+    if any(text.lstrip().startswith(prefix) for prefix in (
+        r"\documentclass", r"\begin{document}"
+    )):
+        return True
+    latex_indicators = [
+        r"\section{", r"\subsection{", r"\textbf{",
+        r"\cventry", r"\resumeItem", r"\resumeSubheading",
+    ]
+    if any(ind in text for ind in latex_indicators):
+        return True
+    if text.count("\\") >= 3:
+        return True
+    return False
+
+
+def latex_to_plaintext(latex: str) -> str:
+    """Strip LaTeX markup and return clean plain text for LLM parsing."""
+    import re as _re
+    text = latex
+
+    # Remove preamble (everything before \begin{document})
+    doc_start = text.find(r"\begin{document}")
+    if doc_start != -1:
+        text = text[doc_start + len(r"\begin{document}"):]
+
+    # Remove \end{document}
+    text = text.replace(r"\end{document}", "")
+
+    # Remove comments
+    text = _re.sub(r"%.*", "", text)
+
+    # Unwrap common formatting commands: \textbf{X} → X
+    for cmd in ("textbf", "textit", "emph", "underline", "textsc",
+                "textrm", "textsf", "texttt", "small", "large",
+                "Large", "huge", "Huge", "normalsize"):
+        text = _re.sub(rf"\\{cmd}\{{([^}}]*)\}}", r"\1", text)
+
+    # \href{url}{text} → text
+    text = _re.sub(r"\\href\{[^}]*\}\{([^}]*)\}", r"\1", text)
+
+    # \url{...} → (removed)
+    text = _re.sub(r"\\url\{[^}]*\}", "", text)
+
+    # Section headings: \section{X} → X (uppercase)
+    text = _re.sub(r"\\section\*?\{([^}]*)\}", lambda m: m.group(1).upper(), text)
+    text = _re.sub(r"\\subsection\*?\{([^}]*)\}", lambda m: m.group(1).upper(), text)
+
+    # \cventry{dates}{title}{company}{location}{grade}{desc}
+    def _cventry(m):
+        parts = [p.strip() for p in m.group(1).split("}{")]
+        return " | ".join(p for p in parts if p and p != "{}") if parts else ""
+    text = _re.sub(r"\\cventry\{(.*?)\}\s*(?=\\|\n|$)", _cventry, text, flags=_re.DOTALL)
+
+    # \resumeSubheading{title}{dates}{company}{location}
+    def _subheading(m):
+        parts = [p.strip() for p in m.group(1).split("}{")]
+        return " | ".join(p for p in parts if p)
+    text = _re.sub(r"\\resumeSubheading\{(.*?)\}\s*(?=\\|\n|$)", _subheading, text, flags=_re.DOTALL)
+
+    # \resumeItem{text}
+    text = _re.sub(r"\\resumeItem\{([^}]*)\}", r"- \1", text)
+
+    # Remove environments: \begin{X}...\end{X} → just the content
+    text = _re.sub(r"\\begin\{[^}]+\}", "", text)
+    text = _re.sub(r"\\end\{[^}]+\}", "", text)
+
+    # Remove remaining LaTeX commands with braces: \cmd{text} → text
+    text = _re.sub(r"\\[a-zA-Z]+\*?\{([^}]*)\}", r"\1", text)
+
+    # Remove standalone LaTeX commands: \cmd
+    text = _re.sub(r"\\[a-zA-Z]+\*?", " ", text)
+
+    # Remove remaining backslash sequences
+    text = _re.sub(r"\\.", " ", text)
+
+    # Clean up braces and special chars
+    text = text.replace("{", "").replace("}", "")
+    text = text.replace("~", " ").replace("&", " | ")
+
+    # Collapse multiple blank lines
+    text = _re.sub(r"\n{3,}", "\n\n", text)
+
+    # Strip leading/trailing whitespace per line
+    lines = [ln.rstrip() for ln in text.splitlines()]
+    text = "\n".join(lines).strip()
+
+    return text
 
 
 # ─── Provider Abstraction ─────────────────────────────────────────────────────
@@ -250,7 +487,6 @@ class AnthropicProvider(BaseProvider):
             "input_schema": {
                 "type": "object",
                 "properties": {
-                    "summary":              {"type": "string"},
                     "skills_reordered":     {"type": "array", "items": {"type": "string"}},
                     "experience_bullets":   {
                         "type": "array",
@@ -262,14 +498,14 @@ class AnthropicProvider(BaseProvider):
                     "ats_keywords_missing": {"type": "array", "items": {"type": "string"}},
                     "section_order":        {"type": "array", "items": {"type": "string"}},
                 },
-                "required": ["summary", "skills_reordered", "ats_keywords_missing"]
+                "required": ["skills_reordered", "ats_keywords_missing"]
             }
         }
         prompt = (
             f"Tailor this resume for: {job['title']} at {job['company']}.\n"
-            "Rules: rewrite summary (3 sentences, mirror JD title+keywords), "
-            "reorder skills to front-load JD keywords, rephrase bullets naturally — "
-            "NEVER fabricate, never change dates/titles/companies.\n"
+            "Rules: reorder skills to front-load JD keywords, rephrase bullets naturally — "
+            "NEVER fabricate, never change dates/titles/companies. Do NOT include a summary "
+            "or objective section.\n"
             "ATS check: flag top JD keywords missing from resume.\n\n"
             f"JD Requirements: {', '.join(job.get('requirements', []))}\n"
             f"JD Description: {job.get('description', '')}\n\n"
@@ -491,19 +727,11 @@ class DemoProvider(BaseProvider):
             if not any(r in s.lower() or s.lower() in r for s in skills)
         ]
 
-        summary = (
-            f"Electrical & Computer Engineering sophomore with hands-on experience in "
-            f"{', '.join(skills[:3])}, seeking a {job['title']} role at {job['company']}. "
-            f"Passionate about {job.get('description','hardware design').split('.')[0].lower()}. "
-            f"Eager to apply academic and lab experience to real-world engineering challenges."
-        )
-
         return {
-            "summary": summary,
             "skills_reordered": skills_reordered,
             "experience_bullets": [],
             "ats_keywords_missing": missing_kw[:5],
-            "section_order": ["Summary", "Skills", "Projects", "Experience", "Education"],
+            "section_order": ["Skills", "Projects", "Experience", "Education"],
         }
 
     def generate_cover_letter(self, job: dict, profile: dict) -> str:
@@ -612,11 +840,22 @@ class OllamaProvider(BaseProvider):
             api_key="ollama",
             timeout=120,  # 2-minute hard timeout per request
         )
-        resp = oc.chat.completions.create(
-            model=self.model,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        return resp.choices[0].message.content or ""
+        import time
+        for attempt in range(5):
+            try:
+                resp = oc.chat.completions.create(
+                    model=self.model,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                return resp.choices[0].message.content or ""
+            except Exception as e:
+                if "429" in str(e) or "too many concurrent" in str(e).lower():
+                    wait = 2 ** attempt
+                    console.print(f"  [yellow]⏳ Ollama busy — retrying in {wait}s (attempt {attempt+1}/5)…[/yellow]")
+                    time.sleep(wait)
+                else:
+                    raise
+        raise RuntimeError("Ollama rate limit: exceeded 5 retry attempts")
 
     def _parse_json(self, text: str, fallback: dict) -> dict:
         # Try direct parse, then extract from fences
@@ -680,11 +919,11 @@ class OllamaProvider(BaseProvider):
         prompt = (
             f"Tailor this resume for '{job['title']}' at '{job['company']}'.\n"
             "Return ONLY a JSON object with:\n"
-            "  summary (string, 3 sentences mirroring JD title+keywords),\n"
             "  skills_reordered (array, JD-matching skills first),\n"
             "  experience_bullets (array of {role, bullets[]}),\n"
             "  ats_keywords_missing (array of JD keywords not in resume),\n"
-            "  section_order (array of section names).\n"
+            "  section_order (array of section names, do NOT include Summary or Objective).\n"
+            "Do NOT include a summary or objective field. "
             "NEVER fabricate experience. Only rephrase what exists.\n\n"
             f"JD Requirements: {', '.join(job.get('requirements', []))}\n"
             f"Candidate Skills: {', '.join(profile.get('top_hard_skills', []))}\n\n"
@@ -692,11 +931,10 @@ class OllamaProvider(BaseProvider):
         )
         raw = self._chat(prompt)
         return self._parse_json(raw, {
-            "summary": f"Seeking {job['title']} role at {job['company']}.",
             "skills_reordered": profile.get("top_hard_skills", []),
             "experience_bullets": [],
             "ats_keywords_missing": [],
-            "section_order": ["Summary", "Skills", "Projects", "Experience", "Education"],
+            "section_order": ["Skills", "Projects", "Experience", "Education"],
         })
 
     def generate_cover_letter(self, job: dict, profile: dict) -> str:
@@ -755,12 +993,16 @@ def get_provider(args) -> BaseProvider:
 
 def phase1_ingest_resume(resume_text: str, provider: BaseProvider) -> dict:
     console.print("\n[bold cyan]Phase 1 — Resume Ingestion & Profile Extraction[/bold cyan]")
-    profile = provider.extract_profile(resume_text)
+    _t0 = time.time()
+    with _CliSpinner(interval=20):
+        profile = provider.extract_profile(resume_text)
+    elapsed = time.time() - _t0
     if profile:
         console.print(f"  ✅ Profile extracted: [bold]{profile.get('name', OWNER_NAME)}[/bold]")
         console.print(f"  📊 Top skills: {', '.join(profile.get('top_hard_skills', [])[:5])}")
         if profile.get("resume_gaps"):
             console.print(f"  ⚠️  Gaps: {', '.join(profile['resume_gaps'])}")
+    console.print(f"  ⏱️  Phase 1 completed in [bold]{elapsed:.1f}s[/bold]")
     return profile
 
 
@@ -780,7 +1022,8 @@ class JobSpyClient(JobBoardClient):
     returns no results, allowing phase2 to trigger the provider fallback.
     """
 
-    def fetch_jobs(self, titles: list, location: str, days: int = 14) -> list:
+    def fetch_jobs(self, titles: list, location: str, days: int = 14,
+                   max_jobs: int = None) -> list:
         try:
             from jobspy import scrape_jobs
         except ImportError:
@@ -790,14 +1033,20 @@ class JobSpyClient(JobBoardClient):
             )
             return []
 
+        cap = max_jobs or MAX_SCRAPE_JOBS
+        # Spread the cap evenly across job titles so we don't over-fetch
+        per_title = max(5, cap // max(len(titles), 1))
+
         all_raw: list = []
         for title in titles:
+            if len(all_raw) >= cap:
+                break
             try:
                 df = scrape_jobs(
                     site_name=["linkedin", "indeed", "glassdoor", "zip_recruiter"],
                     search_term=title,
                     location=location,
-                    results_wanted=20,
+                    results_wanted=per_title,
                     hours_old=days * 24,
                     country_indeed="USA",
                 )
@@ -809,6 +1058,9 @@ class JobSpyClient(JobBoardClient):
                 )
 
         jobs = [self._map(r) for r in all_raw if r.get("job_url")]
+        if max_jobs and len(jobs) > max_jobs:
+            jobs = jobs[:max_jobs]
+            console.print(f"  ✂️  Capped at {max_jobs} jobs (max_scrape_jobs limit)")
         return jobs
 
     @staticmethod
@@ -835,7 +1087,7 @@ class JobSpyClient(JobBoardClient):
         except Exception:
             posted = ""
 
-        return {
+        job = {
             "id":              uid,
             "title":           title,
             "company":         comp,
@@ -847,7 +1099,12 @@ class JobSpyClient(JobBoardClient):
             "salary_range":    sal,
             "application_url": url,
             "platform":        str(r.get("site") or ""),
+            "source":          "jobspy",
         }
+        job["experience_level"]    = infer_experience_level(job)
+        job["education_required"]  = infer_education_required(job)
+        job["citizenship_required"] = infer_citizenship_required(job)
+        return job
 
 
 class IndeedClient(JobBoardClient):
@@ -857,24 +1114,174 @@ class IndeedClient(JobBoardClient):
         return []
 
 
+class SimplifyJobsScraper:
+    """Scrapes the SimplifyJobs Summer 2026 internship board from GitHub."""
+
+    README_URL = (
+        "https://raw.githubusercontent.com/SimplifyJobs/"
+        "Summer2026-Internships/dev/README.md"
+    )
+
+    def fetch_jobs(self, section: str = "hardware") -> list:
+        import urllib.request as _ur
+
+        try:
+            with _ur.urlopen(self.README_URL, timeout=15) as resp:
+                raw = resp.read().decode("utf-8", errors="replace")
+        except Exception as e:
+            console.print(f"  [yellow]SimplifyJobs fetch failed: {e}[/yellow]")
+            return []
+
+        lines = raw.splitlines()
+
+        # Find the Hardware Engineering section header (## line)
+        section_start = -1
+        for i, line in enumerate(lines):
+            if "hardware engineering" in line.lower() and line.strip().startswith("#"):
+                section_start = i
+                break
+        if section_start == -1:
+            console.print("  [yellow]SimplifyJobs: Hardware Engineering section not found[/yellow]")
+            return []
+
+        # Collect section lines until next ## header
+        section_lines = []
+        for line in lines[section_start + 1:]:
+            if line.strip().startswith("##"):
+                break
+            section_lines.append(line)
+
+        # Join and parse HTML <tr> rows from the section
+        section_text = "\n".join(section_lines)
+
+        # Each <tr>…</tr> block is one job row
+        row_blocks = re.findall(r'<tr>(.*?)</tr>', section_text, re.DOTALL | re.I)
+
+        jobs: list = []
+        last_company = ""
+
+        for block in row_blocks:
+            # Extract <td> cells
+            cells = re.findall(r'<td>(.*?)</td>', block, re.DOTALL | re.I)
+            if len(cells) < 4:
+                continue
+
+            # Cell 0: company  (may be ↳ meaning same company as previous row)
+            company_raw = cells[0].strip()
+            if company_raw == "↳" or company_raw == "":
+                company = last_company
+            else:
+                company = re.sub(r'<[^>]+>', '', company_raw).strip()
+                # Clean HTML entities
+                company = company.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+                last_company = company
+
+            # Cell 1: role/title
+            title = re.sub(r'<[^>]+>', '', cells[1]).strip()
+            # Remove emoji suffixes like 🎓
+            title = re.sub(r'[\U00010000-\U0010ffff]', '', title).strip()
+
+            # Cell 2: location (may use <br> for multiple)
+            location_raw = cells[2].strip()
+            location = re.sub(r'<br\s*/?>', ', ', location_raw, flags=re.I)
+            location = re.sub(r'<[^>]+>', '', location).strip()
+            location = re.sub(r',\s*,', ',', location).strip(", ")
+
+            # Cell 3: application link
+            link_cell = cells[3].strip()
+
+            # Skip closed listings (lock emoji or no href)
+            if "\U0001f512" in link_cell or "closed" in link_cell.lower():
+                continue
+
+            # Extract first https URL from the link cell
+            url_match = re.search(r'href="(https?://[^"]+)"', link_cell)
+            if not url_match:
+                continue
+            url = url_match.group(1)
+            # Prefer direct application links over simplify.jobs intermediates when available
+            direct = re.findall(r'href="(https?://[^"]+)"', link_cell)
+            if direct:
+                # Pick non-simplify.jobs link if present
+                non_simplify = [u for u in direct if "simplify.jobs" not in u]
+                url = non_simplify[0] if non_simplify else direct[0]
+
+            # Cell 4: age/date
+            date_cell = cells[4].strip() if len(cells) > 4 else ""
+            date_posted = date.today().isoformat()
+
+            if not company or not title:
+                continue
+
+            job_stub = {"title": title, "description": "", "requirements": []}
+            job = {
+                "id":              f"simplify_{abs(hash(company + title + url)) % 100000}",
+                "title":           title,
+                "company":         company,
+                "location":        location,
+                "remote":          "remote" in location.lower(),
+                "posted_date":     date_posted,
+                "description":     f"{title} internship at {company}.",
+                "requirements":    [],
+                "salary_range":    "",
+                "application_url": url,
+                "platform":        "SimplifyJobs/GitHub",
+                "source":          "simplify",
+                "experience_level": "internship",
+                "education_required": "unknown",
+                "citizenship_required": infer_citizenship_required(job_stub),
+            }
+            jobs.append(job)
+
+        jobs = deduplicate_jobs(jobs)
+        return jobs
+
+
 # ─── Phase 2: Job Discovery ───────────────────────────────────────────────────
 
 def phase2_discover_jobs(profile: dict, job_titles: list, location: str,
-                          provider: BaseProvider) -> list:
+                          provider: BaseProvider,
+                          use_simplify: bool = True,
+                          max_jobs: int = None) -> list:
     console.print("\n[bold cyan]Phase 2 — Job Discovery & Search[/bold cyan]")
     console.print(f"  🔍 Searching: {', '.join(job_titles)}")
     console.print(f"  📍 Location: {location}")
+    cap = max_jobs or MAX_SCRAPE_JOBS
+    console.print(f"  🔢 Max jobs cap: {cap}")
+    _t0 = time.time()
 
     sample_file = RESOURCES_DIR / "sample_jobs.json"
     if sample_file.exists():
         with open(sample_file, encoding="utf-8") as f:
             jobs = json.load(f)
         console.print(f"  📂 Loaded {len(jobs)} postings from resources/sample_jobs.json")
+        # Apply cap to cached jobs so Phase 3 never scores more than max_jobs
+        if cap and len(jobs) > cap:
+            jobs = jobs[:cap]
+            console.print(f"  ✂️  Capped cached list to {cap} jobs (max_scrape_jobs limit)")
+        # Ensure all cached jobs have the inference fields populated
+        for job in jobs:
+            job.setdefault("experience_level",    infer_experience_level(job))
+            job.setdefault("education_required",  infer_education_required(job))
+            job.setdefault("citizenship_required", infer_citizenship_required(job))
+            job.setdefault("source", "cache")
+        console.print(f"  ✅ Returning {len(jobs)} cached jobs")
+        console.print(f"  ⏱️  Phase 2 completed in [bold]{time.time() - _t0:.1f}s[/bold]")
         return jobs
 
     # Try live scrape first; fall back to provider demo generation if needed
     board_client = JobSpyClient()
-    jobs = board_client.fetch_jobs(job_titles, location)
+    with _CliSpinner(
+        messages=[
+            "Scraping LinkedIn, Indeed, Glassdoor, ZipRecruiter…",
+            "Still fetching job listings — network can be slow…",
+            "Hang tight — scraping multiple job boards…",
+            "Almost done collecting postings…",
+            "Deduplicating and filtering results…",
+        ],
+        interval=20,
+    ):
+        jobs = board_client.fetch_jobs(job_titles, location, max_jobs=cap)
     if not jobs:
         console.print(
             "  [yellow]⚠️  JobSpy returned 0 results — "
@@ -883,23 +1290,90 @@ def phase2_discover_jobs(profile: dict, job_titles: list, location: str,
         console.print("  🤖 Generating demo job postings...")
         jobs = provider.generate_demo_jobs(profile, job_titles, location)
 
+    # Add inference fields to any jobs that don't have them yet
+    for job in jobs:
+        job.setdefault("experience_level",    infer_experience_level(job))
+        job.setdefault("education_required",  infer_education_required(job))
+        job.setdefault("citizenship_required", infer_citizenship_required(job))
+        job.setdefault("source", "jobspy")
+
+    # Merge SimplifyJobs listings
+    if use_simplify:
+        simplify_jobs = SimplifyJobsScraper().fetch_jobs()
+        console.print(f"  📋 SimplifyJobs: {len(simplify_jobs)} listings")
+        if simplify_jobs:
+            simplify_urls = {j["application_url"] for j in simplify_jobs
+                             if j.get("application_url")}
+            jobs = [j for j in jobs if j.get("application_url") not in simplify_urls]
+            jobs = jobs + simplify_jobs
+
+    # Deduplicate by company + title
+    before = len(jobs)
+    jobs = deduplicate_jobs(jobs)
+    after = len(jobs)
+    console.print(
+        f"  🔀 Deduplication: {before} → {after} jobs "
+        f"({before - after} duplicates merged)"
+    )
+
+    # Enforce cap after dedup + merge
+    if cap and len(jobs) > cap:
+        jobs = jobs[:cap]
+        console.print(f"  ✂️  Final list capped at {cap} jobs")
+
     RESOURCES_DIR.mkdir(exist_ok=True)
     with open(sample_file, "w", encoding="utf-8") as f:
         json.dump(jobs, f, indent=2)
     console.print(f"  ✅ {len(jobs)} postings saved to resources/sample_jobs.json")
+    console.print(f"  ⏱️  Phase 2 completed in [bold]{time.time() - _t0:.1f}s[/bold]")
     return jobs
 
 
 # ─── Phase 3: Scoring & Shortlisting ─────────────────────────────────────────
 
 def phase3_score_jobs(jobs: list, profile: dict, provider: BaseProvider,
-                       min_score: int = 60) -> list:
+                       min_score: int = 60,
+                       experience_levels=None,
+                       education_filter=None,
+                       citizenship_filter: str = "all") -> list:
     console.print("\n[bold cyan]Phase 3 — Relevance Scoring & Shortlisting[/bold cyan]")
 
+    filtered = list(jobs)
+
+    # Experience level filter
+    if experience_levels and experience_levels != ["all"]:
+        filtered = [j for j in filtered
+                    if j.get("experience_level", "unknown") in experience_levels]
+        console.print(f"  🎯 Experience filter {experience_levels}: {len(filtered)} jobs remain")
+
+    # Education filter (always keep "unknown")
+    if education_filter and education_filter != ["all"]:
+        filtered = [j for j in filtered if (
+            j.get("education_required", "unknown") in education_filter
+            or j.get("education_required", "unknown") == "unknown"
+        )]
+        console.print(f"  🎓 Education filter {education_filter}: {len(filtered)} jobs remain")
+
+    # Citizenship filter
+    if citizenship_filter == "exclude_required":
+        filtered = [j for j in filtered if j.get("citizenship_required", "unknown") != "yes"]
+        console.print(f"  🇺🇸 Citizenship filter (exclude required): {len(filtered)} jobs remain")
+    elif citizenship_filter == "only_required":
+        filtered = [j for j in filtered if j.get("citizenship_required", "unknown") == "yes"]
+        console.print(f"  🇺🇸 Citizenship filter (only required): {len(filtered)} jobs remain")
+
+    console.print(f"  🔢 Scoring {len(filtered)} jobs…")
+    _t0_score = time.time()
     scored = []
-    for job in jobs:
+    for i, job in enumerate(filtered, 1):
         result = provider.score_job(job, profile)
         scored.append({**job, **result})
+        if i % 10 == 0 or i == len(filtered):
+            elapsed_s = time.time() - _t0_score
+            console.print(
+                f"  [dim]📊 Scored {i}/{len(filtered)} jobs  "
+                f"({elapsed_s:.0f}s elapsed)[/dim]"
+            )
 
     scored = [j for j in scored if j.get("score", 0) >= min_score]
     scored.sort(key=lambda x: x.get("score", 0), reverse=True)
@@ -923,6 +1397,10 @@ def phase3_score_jobs(jobs: list, profile: dict, provider: BaseProvider,
                       f"[{colour}]{s}[/{colour}]", status)
 
     console.print(table)
+    console.print(
+        f"  ⏱️  Phase 3 completed in [bold]{time.time() - _t0_score:.1f}s[/bold]  "
+        f"({len(scored)} jobs passed the {min_score} score threshold)"
+    )
     return scored
 
 
@@ -1231,9 +1709,11 @@ def startup_checklist() -> dict:
     if path_str:
         cfg["resume_path"] = Path(path_str)
         cfg["resume_text"] = _read_resume(Path(path_str))
+        cfg["latex_source"] = _original_latex_source
     else:
         cfg["resume_path"] = None
         cfg["resume_text"] = _build_demo_resume()
+        cfg["latex_source"] = None
         console.print("   [dim](i)[/dim]  Using built-in profile from CLAUDE.md")
 
     console.print("\n[bold]2. Target job titles[/bold] (comma-separated, up to 3)")
@@ -1324,12 +1804,23 @@ Integrated circuits · Chip design · Photonics · Nanoelectronics · Device phy
 
 
 def _read_resume(path: Path) -> str:
+    global _original_latex_source
     if not path.exists():
         console.print(f"  [yellow]File not found: {path} — using demo resume.[/yellow]")
         return _build_demo_resume()
     suffix = path.suffix.lower()
+    if suffix == ".tex":
+        raw = path.read_text(encoding="utf-8")
+        _original_latex_source = raw
+        console.print("  [cyan]LaTeX resume detected — converting to plain text for parsing.[/cyan]")
+        return latex_to_plaintext(raw)
     if suffix in (".txt", ".md"):
-        return path.read_text(encoding="utf-8")
+        raw = path.read_text(encoding="utf-8")
+        if detect_latex(raw):
+            _original_latex_source = raw
+            console.print("  [cyan]LaTeX content detected — converting to plain text for parsing.[/cyan]")
+            return latex_to_plaintext(raw)
+        return raw
     elif suffix == ".pdf":
         try:
             import pdfplumber
@@ -1364,23 +1855,139 @@ def _read_resume(path: Path) -> str:
             return _build_demo_resume()
 
 
-def _save_tailored_resume(job: dict, tailored: dict) -> str:
-    safe = lambda s: re.sub(r"[^a-zA-Z0-9_\-]", "_", s)
-    filename = (
-        f"{safe(OWNER_NAME)}_Resume_{safe(job.get('company',''))}"
-        f"_{safe(job.get('title',''))}.txt"
+def remove_summary_section(latex: str) -> str:
+    """Strip summary/objective section from a LaTeX resume."""
+    import re as _re
+    # Remove \section{Summary}, \section{Objective}, \section{Professional Summary}
+    # and everything up to the next \section or \end{document}
+    pattern = (
+        r"\\section\*?\{(?:Summary|Objective|Professional Summary|Career Objective)"
+        r"\}.*?(?=\\section|\\end\{document\})"
     )
+    return _re.sub(pattern, "", latex, flags=_re.IGNORECASE | _re.DOTALL)
+
+
+def apply_tailoring_to_latex(latex_source: str, tailored: dict, job: dict) -> str:
+    """Inject tailored skills into a LaTeX resume and strip the summary section."""
+    import re as _re
+
+    latex = remove_summary_section(latex_source)
+
+    # Replace skills section if provider gave us reordered skills
+    skills = tailored.get("skills_reordered")
+    if skills:
+        skills_line = ", ".join(skills)
+        # Try to replace content of a skills section (\section{Skills}...next \section)
+        def _replace_skills(m):
+            header = m.group(1)  # e.g. \section{Skills}
+            rest = m.group(2)    # content before next section
+            # Replace itemize/enumerate content or plain text
+            new_content = f"\n{skills_line}\n\n"
+            # Preserve itemize environment structure if present
+            if r"\begin{itemize}" in rest or r"\begin{description}" in rest:
+                new_content = (
+                    "\n\\begin{itemize}\n"
+                    + "".join(f"  \\item {s}\n" for s in skills)
+                    + "\\end{itemize}\n\n"
+                )
+            return header + new_content
+        latex = _re.sub(
+            r"(\\section\*?\{(?:Skills|Technical Skills|Core Competencies)[^}]*\})"
+            r"(.*?)(?=\\section|\\end\{document\})",
+            _replace_skills,
+            latex,
+            flags=_re.IGNORECASE | _re.DOTALL,
+        )
+
+    # Append ATS keywords as a comment at the end (invisible in output)
+    missing = tailored.get("ats_keywords_missing")
+    if missing:
+        latex = latex.rstrip()
+        if r"\end{document}" in latex:
+            latex = latex.replace(
+                r"\end{document}",
+                f"% ATS gaps: {', '.join(missing)}\n\\end{{document}}"
+            )
+
+    return latex
+
+
+def compile_latex_to_pdf(latex_source: str, output_path: Path) -> bool:
+    """Write latex_source to a .tex file and compile it to PDF via pdflatex.
+
+    Returns True on success, False on failure.
+    """
+    import subprocess
+    import tempfile
+    import shutil
+
+    if not shutil.which("pdflatex"):
+        console.print(
+            "  [yellow]pdflatex not found — install TeX Live or MiKTeX to compile PDFs.[/yellow]"
+        )
+        return False
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        tex_file = tmp / "resume.tex"
+        tex_file.write_text(latex_source, encoding="utf-8")
+        try:
+            result = subprocess.run(
+                ["pdflatex", "-interaction=nonstopmode", "resume.tex"],
+                cwd=tmpdir,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            pdf_file = tmp / "resume.pdf"
+            if pdf_file.exists():
+                shutil.copy(str(pdf_file), str(output_path))
+                return True
+            console.print(
+                f"  [yellow]pdflatex ran but no PDF produced. "
+                f"Stdout: {result.stdout[-500:]}[/yellow]"
+            )
+            return False
+        except subprocess.TimeoutExpired:
+            console.print("  [yellow]pdflatex timed out after 60s.[/yellow]")
+            return False
+        except Exception as e:
+            console.print(f"  [yellow]pdflatex error: {e}[/yellow]")
+            return False
+
+
+def _save_tailored_resume(job: dict, tailored: dict, latex_source: str = None) -> str:
+    safe = lambda s: re.sub(r"[^a-zA-Z0-9_\-]", "_", s)
+    base_name = (
+        f"{safe(OWNER_NAME)}_Resume_{safe(job.get('company',''))}"
+        f"_{safe(job.get('title',''))}"
+    )
+
+    # ── LaTeX / PDF output ────────────────────────────────────────────────────
+    if latex_source:
+        tailored_latex = apply_tailoring_to_latex(latex_source, tailored, job)
+        tex_path = OUTPUT_DIR / (base_name + ".tex")
+        tex_path.write_text(tailored_latex, encoding="utf-8")
+        pdf_path = OUTPUT_DIR / (base_name + ".pdf")
+        compiled = compile_latex_to_pdf(tailored_latex, pdf_path)
+        if compiled:
+            console.print(f"  [green]PDF saved → {pdf_path.name}[/green]")
+            return base_name + ".pdf"
+        else:
+            console.print(f"  [cyan]LaTeX source saved → {tex_path.name}[/cyan]")
+            return base_name + ".tex"
+
+    # ── Plain-text output (original behaviour) ────────────────────────────────
+    filename = base_name + ".txt"
     order = (
         tailored.get("section_order")
-        or ["Summary", "Skills", "Projects", "Experience", "Education"]
+        or ["Skills", "Projects", "Experience", "Education"]
     )
     with open(OUTPUT_DIR / filename, "w", encoding="utf-8") as f:
         f.write(f"TAILORED RESUME\nRole: {job['title']} @ {job['company']}\n"
                 f"Score: {job.get('score','N/A')}\n{'='*60}\n\n")
         for section in order:
-            if section == "Summary" and tailored.get("summary"):
-                f.write(f"PROFESSIONAL SUMMARY\n{tailored['summary']}\n\n")
-            elif section == "Skills" and tailored.get("skills_reordered"):
+            if section == "Skills" and tailored.get("skills_reordered"):
                 f.write(f"SKILLS\n{' | '.join(tailored['skills_reordered'])}\n\n")
             elif section == "Experience" and tailored.get("experience_bullets"):
                 f.write("EXPERIENCE (tailored)\n")
@@ -1443,13 +2050,22 @@ def run_agent(config: dict, provider: BaseProvider):
         console.print("[red]Phase 1 failed — cannot parse resume.[/red]")
         return
 
-    jobs = phase2_discover_jobs(profile, config["job_titles"], config["location"], provider)
+    jobs = phase2_discover_jobs(
+        profile, config["job_titles"], config["location"], provider,
+        use_simplify=config.get("use_simplify", True),
+        max_jobs=config.get("max_scrape_jobs", MAX_SCRAPE_JOBS),
+    )
     if config.get("blacklist"):
         bl = {c.lower() for c in config["blacklist"]}
         jobs = [j for j in jobs if j.get("company", "").lower() not in bl]
 
     threshold = config.get("threshold", 75)
-    scored = phase3_score_jobs(jobs, profile, provider, min_score=60)
+    scored = phase3_score_jobs(
+        jobs, profile, provider, min_score=60,
+        experience_levels=config.get("experience_levels"),
+        education_filter=config.get("education_filter"),
+        citizenship_filter=config.get("citizenship_filter", "all"),
+    )
 
     auto_eligible = [j for j in scored if j.get("score", 0) >= threshold]
     review_needed = [j for j in scored if 60 <= j.get("score", 0) < threshold]
@@ -1509,7 +2125,7 @@ def run_agent(config: dict, provider: BaseProvider):
                 f"  ⚠️  ATS gaps: [yellow]{', '.join(tailored['ats_keywords_missing'][:4])}[/yellow]"
             )
 
-        resume_file = _save_tailored_resume(job, tailored)
+        resume_file = _save_tailored_resume(job, tailored, config.get("latex_source"))
         console.print(f"  💾 Resume → output/{resume_file}")
 
         if submitter:
@@ -1580,6 +2196,27 @@ if __name__ == "__main__":
                         help="Use Playwright for real form submission (Greenhouse boards)")
     parser.add_argument("--dashboard", action="store_true",
                         help="Launch Flask dashboard after scoring for manual review")
+    parser.add_argument(
+        "--experience", default="internship,entry-level",
+        help="Comma-separated experience levels to include "
+             "(internship, entry-level, mid-level, senior, unknown, all). "
+             "Default: internship,entry-level",
+    )
+    parser.add_argument(
+        "--education", default="bachelors,masters,unknown",
+        help="Comma-separated education levels to include "
+             "(high_school, associates, bachelors, masters, phd, unknown, all). "
+             "Default: bachelors,masters,unknown",
+    )
+    parser.add_argument(
+        "--citizenship", default="all",
+        choices=["all", "exclude_required", "only_required"],
+        help="Citizenship filter. Default: all",
+    )
+    parser.add_argument(
+        "--no-simplify", action="store_true",
+        help="Skip SimplifyJobs/GitHub internship listings",
+    )
     args = parser.parse_args()
 
     # API key guard — only needed for default Anthropic mode
@@ -1599,6 +2236,10 @@ if __name__ == "__main__":
         [s.strip() for s in args.section_order.split(",")]
         if args.section_order else None
     )
-    config["real_apply"] = args.real_apply
-    config["dashboard"]  = args.dashboard
+    config["real_apply"]        = args.real_apply
+    config["dashboard"]         = args.dashboard
+    config["use_simplify"]      = not args.no_simplify
+    config["experience_levels"] = [x.strip() for x in args.experience.split(",")]
+    config["education_filter"]  = [x.strip() for x in args.education.split(",")]
+    config["citizenship_filter"] = args.citizenship
     run_agent(config, provider)

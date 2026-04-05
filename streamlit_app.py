@@ -13,6 +13,8 @@ Prerequisites:
 import streamlit as st
 import sys
 import os
+import time
+import threading
 import traceback
 import tempfile
 from pathlib import Path
@@ -42,17 +44,24 @@ except Exception as _e:
 # ── Session state defaults ─────────────────────────────────────────────────────
 _DEFAULTS: dict = {
     # Config
-    "mode":         "demo",
-    "api_key":      "",
-    "ollama_model": "llama3.2",
-    "resume_text":  "",
-    "job_titles":   "IC Design Intern, Photonics Engineer Intern, FPGA/Hardware Intern",
-    "location":     "Remote",
-    "threshold":    75,
-    "max_apps":     10,
-    "cover_letter": False,
-    "blacklist":    "",
-    "whitelist":    "NVIDIA, Apple, Microsoft, Intel, IBM, Micron, Samsung, TSMC",
+    "mode":              "ollama",
+    "api_key":           "",
+    "ollama_model":      "",
+    "resume_text":       "",
+    "latex_source":      None,
+    "job_titles":        "Engineer",
+    "location":          "United States",
+    "threshold":         75,
+    "max_apps":          10,
+    "max_scrape_jobs":   50,
+    "cover_letter":      False,
+    "blacklist":         "",
+    "whitelist":         "NVIDIA, Apple, Microsoft, Intel, IBM, Micron, Samsung, TSMC",
+    # Filters
+    "experience_levels": ["internship", "entry-level"],
+    "education_filter":  ["bachelors"],
+    "citizenship_filter": "exclude_required",
+    "use_simplify":      True,
     # Phase results
     "profile":      None,
     "jobs":         None,
@@ -64,6 +73,7 @@ _DEFAULTS: dict = {
     # Pipeline state
     "phase_done":   set(),
     "phase_error":  {},
+    "phase_times":  {},   # phase_n -> elapsed seconds
     "run_all":      False,
 }
 
@@ -84,12 +94,7 @@ def _make_provider():
             os.environ["ANTHROPIC_API_KEY"] = key
         return _ag.AnthropicProvider()
     if mode == "ollama":
-        model = st.session_state.ollama_model.strip()
-        if not model:
-            raise ValueError(
-                "Ollama model name is empty. "
-                "Enter a model name in the sidebar (e.g. llama3.2)."
-            )
+        model = st.session_state.ollama_model.strip() or "llama3.2"
         return _ag.OllamaProvider(model=model)
     raise ValueError(f"Unknown mode: {mode}")
 
@@ -132,6 +137,92 @@ def _run_phase(n: int, fn, *args):
         return None, str(exc)
 
 
+# Loading messages per phase
+_PHASE_MESSAGES = {
+    1: [
+        "Parsing resume — extracting skills and experience…",
+        "LLM is reading your resume, hang tight…",
+        "Identifying education, skills, and target roles…",
+        "Still extracting profile data…",
+        "Almost done parsing your resume…",
+    ],
+    2: [
+        "Scraping LinkedIn, Indeed, Glassdoor, ZipRecruiter…",
+        "Fetching job listings — network scrapes can be slow…",
+        "Collecting and deduplicating postings…",
+        "Merging SimplifyJobs listings…",
+        "Almost done discovering jobs…",
+    ],
+    3: [
+        "Scoring jobs against your profile…",
+        "LLM is evaluating each job posting…",
+        "Matching skills, titles, and experience…",
+        "Running relevance scoring — this scales with job count…",
+        "Almost done scoring all jobs…",
+    ],
+}
+
+_GENERIC_MESSAGES = [
+    "Working — please wait…",
+    "Still processing…",
+    "LLM is thinking…",
+    "Running in background…",
+    "Almost there…",
+]
+
+
+def _run_phase_animated(n: int, fn, *args, interval: int = 20):
+    """Run fn(*args) in a background thread while cycling status messages in the UI.
+
+    Updates session_state.phase_done / phase_error / phase_times.
+    Returns (result, elapsed_seconds, error_str).
+    """
+    msgs = _PHASE_MESSAGES.get(n, _GENERIC_MESSAGES)
+
+    result_holder: list = [None]
+    error_holder: list = [None]   # (exception, traceback_str) or None
+    done_event = threading.Event()
+
+    def _worker():
+        try:
+            result_holder[0] = fn(*args)
+        except Exception as exc:
+            error_holder[0] = (exc, traceback.format_exc())
+        finally:
+            done_event.set()
+
+    t = threading.Thread(target=_worker, daemon=True)
+    t.start()
+
+    status_box = st.empty()
+    start = time.time()
+    # Show first message immediately
+    status_box.info(f"⏳ {msgs[0]}")
+    idx = 1
+
+    # Poll every `interval` seconds, updating the status message
+    while not done_event.wait(timeout=interval):
+        elapsed = int(time.time() - start)
+        msg = msgs[idx % len(msgs)]
+        status_box.info(f"⏳ {msg}  *(~{elapsed}s elapsed)*")
+        idx += 1
+
+    t.join()
+    elapsed = round(time.time() - start, 1)
+    status_box.empty()
+
+    if error_holder[0] is not None:
+        exc, tb = error_holder[0]
+        st.session_state.phase_error[n] = tb
+        st.session_state.phase_times[n] = elapsed
+        return None, elapsed, str(exc)
+
+    st.session_state.phase_error.pop(n, None)
+    st.session_state.phase_done.add(n)
+    st.session_state.phase_times[n] = elapsed
+    return result_holder[0], elapsed, None
+
+
 def _try_provider(phase_n: int):
     """Create the provider and return (provider, ok).
     On any error (including Ollama not running / sys.exit) stores the traceback
@@ -161,6 +252,30 @@ def _status_dot(status: str) -> str:
     }.get(status, "⬜")
 
 
+def _edu_icon(level: str) -> str:
+    return {
+        "phd":        "🎓 PhD",
+        "masters":    "🎓 MS",
+        "bachelors":  "🎓 BS",
+        "associates": "🎓 AS",
+        "high_school": "🎓 HS",
+    }.get(level, "❓")
+
+
+def _cit_icon(status: str) -> str:
+    return {
+        "yes": "🇺🇸 Required",
+        "no":  "🌍 Open",
+    }.get(status, "❓ Unknown")
+
+
+def _loc_prefix(location: str) -> str:
+    """Prefix multi-location strings with 📍."""
+    if location and "," in location:
+        return "📍 " + location
+    return location
+
+
 def _reset_pipeline():
     for k in ["profile", "jobs", "scored_jobs", "report", "tracker_path"]:
         st.session_state[k] = None
@@ -168,6 +283,7 @@ def _reset_pipeline():
     st.session_state.applications = []
     st.session_state.phase_done   = set()
     st.session_state.phase_error  = {}
+    st.session_state.phase_times  = {}
     st.session_state.run_all      = False
 
 
@@ -181,7 +297,7 @@ with st.sidebar:
     st.markdown("### LLM Backend")
     st.selectbox(
         "Mode",
-        options=["demo", "anthropic", "ollama"],
+        options=["ollama", "anthropic", "demo"],
         format_func=lambda x: {
             "demo":      "Demo (no API key)",
             "anthropic": "Anthropic Claude",
@@ -193,22 +309,81 @@ with st.sidebar:
         st.text_input("ANTHROPIC_API_KEY", type="password", key="api_key",
                       placeholder="sk-ant-...")
     elif st.session_state.mode == "ollama":
-        st.text_input("Ollama model", key="ollama_model", placeholder="llama3.2")
-        if not st.session_state.ollama_model.strip():
-            st.warning("Enter a model name above, e.g. `llama3.2`")
-        # Live Ollama connectivity check
+        ollama_running   = False
+        available_models = []
+        model_data       = []
         try:
             import urllib.request as _ur
-            _ur.urlopen("http://localhost:11434/api/tags", timeout=2)
-            st.success("Ollama is running ✓", icon="🟢")
+            import json as _json
+            resp = _ur.urlopen("http://localhost:11434/api/tags", timeout=3)
+            data = _json.loads(resp.read())
+            model_data       = data.get("models", [])
+            available_models = [m["name"] for m in model_data]
+            ollama_running   = True
         except Exception:
+            pass
+
+        if not ollama_running:
             st.error(
                 "Ollama not reachable at localhost:11434\n\n"
-                "Run these commands first:\n"
-                f"```\nollama pull {st.session_state.ollama_model}\n"
-                "ollama serve\n```",
+                "Start it with:\n```\nollama serve\n```",
                 icon="🔴",
             )
+            st.info("No models yet? Run:\n```\nollama pull llama3.2\n```")
+        elif not available_models:
+            st.warning(
+                "Ollama is running but no models are pulled.\n\n"
+                "```\nollama pull llama3.2\n```",
+                icon="⚠️",
+            )
+        else:
+            st.success(
+                f"Ollama running — {len(available_models)} model(s) available",
+                icon="🟢",
+            )
+
+            # Reset to first model if current selection is invalid
+            if st.session_state.ollama_model not in available_models:
+                st.session_state.ollama_model = available_models[0]
+
+            st.selectbox(
+                "Select model (smaller models are faster, larger models may improve quality)",
+                options=available_models,
+                index=available_models.index(st.session_state.ollama_model),
+                key="ollama_model",
+                help="Models currently pulled on your local Ollama installation.",
+            )
+
+            # Show model metadata beneath the selectbox
+            model_info = next(
+                (m for m in model_data
+                 if m["name"] == st.session_state.ollama_model),
+                None,
+            )
+            if model_info:
+                size_gb = model_info.get("size", 0) / 1e9
+                family  = model_info.get("details", {}).get("family", "")
+                params  = model_info.get("details", {}).get("parameter_size", "")
+                st.caption(
+                    f"📦 {params}  |  🏷️ {family}  |  💾 {size_gb:.1f} GB"
+                )
+
+            # Warn if selected model is known to be slow
+            FAST_MODELS = ["llama3.2", "llama3.1", "mistral", "phi3", "gemma3", "qwen2"]
+            selected = st.session_state.ollama_model
+            is_fast  = any(f in selected.lower() for f in FAST_MODELS)
+            if not is_fast:
+                st.warning(
+                    f"'{selected}' may be slow for pipeline use. "
+                    "llama3.2, mistral, or phi3 are faster.",
+                    icon="🐢",
+                )
+
+            if st.button("🔄 Refresh model list",
+                         use_container_width=True, key="refresh_models"):
+                st.rerun()
+
+            st.caption("To add a model: `ollama pull mistral` → Refresh.")
 
     # ── Resume ────────────────────────────────────────────────────────────────
     st.divider()
@@ -220,36 +395,55 @@ with st.sidebar:
     )
 
     if resume_src == "Upload file":
-        uploaded = st.file_uploader("Upload PDF / DOCX / TXT",
-                                    type=["pdf", "docx", "txt"])
+        uploaded = st.file_uploader("Upload PDF / DOCX / TXT / TEX",
+                                    type=["pdf", "docx", "txt", "tex"])
         if uploaded and _ag:
             try:
-                suffix = Path(uploaded.name).suffix
-                # Write to a temp file so _read_resume (and pdfplumber) can open it by path
-                with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-                    tmp.write(uploaded.read())
-                    tmp_path = Path(tmp.name)
-                text = _ag._read_resume(tmp_path)
-                # Detect silent fallback to demo resume (means extraction failed)
-                demo = _ag._build_demo_resume()
-                if text.strip() and text.strip() != demo.strip():
-                    st.session_state.resume_text = text
-                    st.success(f"Loaded: {uploaded.name}  ({len(text):,} chars)")
+                suffix = Path(uploaded.name).suffix.lower()
+                raw_bytes = uploaded.read()
+                if suffix == ".tex":
+                    # LaTeX source — store original and convert to plaintext
+                    raw_str = raw_bytes.decode("utf-8", errors="replace")
+                    st.session_state.latex_source = raw_str
+                    st.session_state.resume_text = _ag.latex_to_plaintext(raw_str)
+                    st.success(f"LaTeX resume loaded: {uploaded.name}  "
+                               f"({len(st.session_state.resume_text):,} chars plain text)")
                 else:
-                    st.error(
-                        f"Could not extract text from **{uploaded.name}**. "
-                        "Possible causes: scanned/image-only PDF, corrupted file, "
-                        "or pdfplumber not installed (`pip install pdfplumber`). "
-                        "Try a text-based PDF, DOCX, or TXT file instead."
-                    )
+                    # Write to a temp file so _read_resume (and pdfplumber) can open it by path
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                        tmp.write(raw_bytes)
+                        tmp_path = Path(tmp.name)
+                    text = _ag._read_resume(tmp_path)
+                    # _read_resume sets _original_latex_source if it detects LaTeX
+                    if _ag._original_latex_source:
+                        st.session_state.latex_source = _ag._original_latex_source
+                    # Detect silent fallback to demo resume (means extraction failed)
+                    demo = _ag._build_demo_resume()
+                    if text.strip() and text.strip() != demo.strip():
+                        st.session_state.resume_text = text
+                        latex_note = " (LaTeX detected)" if _ag._original_latex_source else ""
+                        st.success(f"Loaded: {uploaded.name}  ({len(text):,} chars){latex_note}")
+                    else:
+                        st.error(
+                            f"Could not extract text from **{uploaded.name}**. "
+                            "Possible causes: scanned/image-only PDF, corrupted file, "
+                            "or pdfplumber not installed (`pip install pdfplumber`). "
+                            "Try a text-based PDF, DOCX, TXT, or TEX file instead."
+                        )
             except Exception as exc:
                 st.error(f"Failed to read **{uploaded.name}**: {exc}")
 
     elif resume_src == "Paste text":
         pasted = st.text_area("Resume text", height=150,
-                              placeholder="Paste your resume here…")
-        if pasted:
-            st.session_state.resume_text = pasted
+                              placeholder="Paste your resume here… (LaTeX source also accepted)")
+        if pasted and _ag:
+            if _ag.detect_latex(pasted):
+                st.session_state.latex_source = pasted
+                st.session_state.resume_text = _ag.latex_to_plaintext(pasted)
+                st.info("LaTeX source detected — converted to plain text for parsing.")
+            else:
+                st.session_state.latex_source = None
+                st.session_state.resume_text = pasted
 
     else:  # Demo profile
         if _ag and not st.session_state.resume_text:
@@ -259,6 +453,8 @@ with st.sidebar:
                 st.session_state.resume_text = _ag._build_demo_resume()
 
     if st.session_state.resume_text:
+        if st.session_state.latex_source:
+            st.caption("LaTeX source loaded — PDF output enabled if pdflatex is installed.")
         with st.expander("Preview resume"):
             preview = st.session_state.resume_text
             st.code(
@@ -274,12 +470,58 @@ with st.sidebar:
     st.slider("Auto-apply threshold (score)", 50, 100, key="threshold")
     st.number_input("Max applications per run", min_value=1, max_value=50,
                     key="max_apps")
+    st.number_input(
+        "Max jobs to scrape (Phase 2)",
+        min_value=5, max_value=200, step=5,
+        key="max_scrape_jobs",
+        help="Caps the total jobs collected in Phase 2. Fewer jobs = faster Phase 3 scoring.",
+    )
     st.checkbox("Generate cover letters", key="cover_letter")
+
+    st.multiselect(
+        "Experience level",
+        options=["internship", "entry-level", "mid-level", "senior", "unknown"],
+        default=st.session_state.experience_levels,
+        key="experience_levels",
+    )
+
+    st.multiselect(
+        "Education requirement",
+        options=["high_school", "associates", "bachelors", "masters", "phd", "unknown"],
+        default=st.session_state.education_filter,
+        format_func=lambda x: {
+            "high_school": "High School / GED",
+            "associates":  "Associate's Degree",
+            "bachelors":   "Bachelor's (BS/BE)",
+            "masters":     "Master's (MS/MEng)",
+            "phd":         "PhD / Doctorate",
+            "unknown":     "Not specified",
+        }[x],
+        key="education_filter",
+    )
+
+    st.checkbox(
+        "Include SimplifyJobs/GitHub listings",
+        value=st.session_state.use_simplify,
+        key="use_simplify",
+        help="Scrapes real-time internship listings from github.com/SimplifyJobs/Summer2026-Internships",
+    )
 
     with st.expander("Advanced filters"):
         st.text_input("Blacklist companies (comma-sep)", key="blacklist",
                       placeholder="e.g. Acme, Globex")
         st.text_input("Priority companies (comma-sep)", key="whitelist")
+        st.radio(
+            "US Citizenship requirement",
+            options=["all", "exclude_required", "only_required"],
+            format_func=lambda x: {
+                "all":              "Show all jobs",
+                "exclude_required": "Exclude citizenship-required roles",
+                "only_required":    "Only citizenship-required roles",
+            }[x],
+            key="citizenship_filter",
+            index=0,
+        )
 
     # ── Reset ─────────────────────────────────────────────────────────────────
     st.divider()
@@ -346,17 +588,14 @@ with tab_pipeline:
             )
 
             if should_run1:
-                _model_hint = (f" via Ollama ({st.session_state.ollama_model})"
-                               if st.session_state.mode == "ollama" else "")
-                with st.spinner(f"Extracting profile{_model_hint} — this may take up to 2 min…"):
-                    provider, ok = _try_provider(1)
-                    if ok:
-                        profile, err = _run_phase(
-                            1, _ag.phase1_ingest_resume,
-                            st.session_state.resume_text, provider,
-                        )
-                        if profile is not None:
-                            st.session_state.profile = profile
+                provider, ok = _try_provider(1)
+                if ok:
+                    profile, elapsed, err = _run_phase_animated(
+                        1, _ag.phase1_ingest_resume,
+                        st.session_state.resume_text, provider,
+                    )
+                    if profile is not None:
+                        st.session_state.profile = profile
                 st.rerun()
 
             if st.session_state.profile:
@@ -379,6 +618,9 @@ with tab_pipeline:
 
                 if p.get("resume_gaps"):
                     st.warning("Resume gaps: " + " | ".join(p["resume_gaps"]))
+
+                if st.session_state.phase_times.get(1):
+                    st.caption(f"⏱️ Completed in {st.session_state.phase_times[1]:.1f}s")
 
         if _errored(1):
             with st.expander("Error details"):
@@ -454,31 +696,41 @@ with tab_pipeline:
             )
 
             if should_run2:
-                with st.spinner("Discovering jobs (scraping live boards — may take 30–60 s)…"):
-                    provider, ok = _try_provider(2)
-                    if ok:
-                        titles = [t.strip() for t in
-                                  st.session_state.job_titles.split(",") if t.strip()]
-                        jobs, err = _run_phase(
-                            2, _ag.phase2_discover_jobs,
-                            st.session_state.profile, titles,
-                            st.session_state.location, provider,
-                        )
-                        if jobs is not None:
-                            st.session_state.jobs = jobs
+                provider, ok = _try_provider(2)
+                if ok:
+                    titles = [t.strip() for t in
+                              st.session_state.job_titles.split(",") if t.strip()]
+                    jobs, elapsed, err = _run_phase_animated(
+                        2, _ag.phase2_discover_jobs,
+                        st.session_state.profile, titles,
+                        st.session_state.location, provider,
+                        st.session_state.use_simplify,
+                        st.session_state.max_scrape_jobs,
+                    )
+                    if jobs is not None:
+                        st.session_state.jobs = jobs
                 st.rerun()
 
             if st.session_state.jobs:
                 jobs = st.session_state.jobs
-                st.metric("Jobs found", len(jobs))
+                _mc1, _mc2, _mc3 = st.columns(3)
+                _mc1.metric("Jobs found", len(jobs))
+                _mc2.metric("Duplicates merged", _ag._last_merge_count)
+                if st.session_state.phase_times.get(2):
+                    _mc3.metric("Time", f"{st.session_state.phase_times[2]:.0f}s")
                 df = pd.DataFrame([{
-                    "Company":  j.get("company", ""),
-                    "Title":    j.get("title", ""),
-                    "Location": j.get("location", ""),
-                    "Remote":   "Yes" if j.get("remote") else "No",
-                    "Platform": j.get("platform", ""),
-                    "Salary":   j.get("salary_range", ""),
-                    "Link":     j.get("application_url", ""),
+                    "Company":     j.get("company", ""),
+                    "Role":        j.get("title", ""),
+                    "Location":    _loc_prefix(j.get("location", "")),
+                    "Remote":      "Yes" if j.get("remote") else "No",
+                    "Experience":  j.get("experience_level", "unknown"),
+                    "Education":   _edu_icon(j.get("education_required", "unknown")),
+                    "Citizenship": _cit_icon(j.get("citizenship_required", "unknown")),
+                    "Salary":      j.get("salary_range", ""),
+                    "Platform":    j.get("platform", ""),
+                    "Source":      j.get("source", ""),
+                    "Date Posted": j.get("posted_date", ""),
+                    "Link":        j.get("application_url", ""),
                 } for j in jobs])
                 st.dataframe(
                     df,
@@ -514,18 +766,18 @@ with tab_pipeline:
             )
 
             if should_run3:
-                _model_hint3 = (f" via Ollama ({st.session_state.ollama_model})"
-                                if st.session_state.mode == "ollama" else "")
-                with st.spinner(f"Scoring jobs{_model_hint3}…"):
-                    provider, ok = _try_provider(3)
-                    if ok:
-                        scored, err = _run_phase(
-                            3, _ag.phase3_score_jobs,
-                            st.session_state.jobs, st.session_state.profile,
-                            provider, 60,
-                        )
-                        if scored is not None:
-                            st.session_state.scored_jobs = scored
+                provider, ok = _try_provider(3)
+                if ok:
+                    scored, elapsed, err = _run_phase_animated(
+                        3, _ag.phase3_score_jobs,
+                        st.session_state.jobs, st.session_state.profile,
+                        provider, 60,
+                        st.session_state.experience_levels,
+                        st.session_state.education_filter,
+                        st.session_state.citizenship_filter,
+                    )
+                    if scored is not None:
+                        st.session_state.scored_jobs = scored
                 st.rerun()
 
             if st.session_state.scored_jobs:
@@ -533,22 +785,27 @@ with tab_pipeline:
                 auto   = [j for j in scored if j.get("score", 0) >= thr]
                 review = [j for j in scored if 60 <= j.get("score", 0) < thr]
 
-                m1, m2, m3 = st.columns(3)
+                m1, m2, m3, m4 = st.columns(4)
                 m1.metric("Auto-eligible",    len(auto),   help=f"Score ≥ {thr}")
                 m2.metric("Review needed",    len(review), help="Score 60–74")
                 m3.metric("Total shortlisted", len(scored))
+                if st.session_state.phase_times.get(3):
+                    m4.metric("Time", f"{st.session_state.phase_times[3]:.0f}s")
 
                 df = pd.DataFrame([{
-                    "":         _score_dot(j.get("score", 0)),
-                    "Company":  j.get("company", ""),
-                    "Title":    j.get("title", ""),
-                    "Score":    j.get("score", 0),
-                    "Status":   ("Auto-eligible" if j.get("score", 0) >= thr
-                                 else "Review needed"),
-                    "Matching": ", ".join(j.get("matching_skills", [])),
-                    "Missing":  ", ".join(j.get("missing_skills", [])),
-                    "Reason":   j.get("reason", ""),
-                    "Link":     j.get("application_url", ""),
+                    "":            _score_dot(j.get("score", 0)),
+                    "Company":     j.get("company", ""),
+                    "Role":        j.get("title", ""),
+                    "Score":       j.get("score", 0),
+                    "Status":      ("Auto-eligible" if j.get("score", 0) >= thr
+                                    else "Review needed"),
+                    "Experience":  j.get("experience_level", "unknown"),
+                    "Education":   _edu_icon(j.get("education_required", "unknown")),
+                    "Citizenship": _cit_icon(j.get("citizenship_required", "unknown")),
+                    "Matching Skills": ", ".join(j.get("matching_skills", [])),
+                    "Missing Skills":  ", ".join(j.get("missing_skills", [])),
+                    "Salary":      j.get("salary_range", ""),
+                    "Link":        j.get("application_url", ""),
                 } for j in scored])
                 st.dataframe(
                     df,
@@ -629,24 +886,52 @@ with tab_pipeline:
                         f"**{job.get('company')}** — {job.get('title')}  "
                         f"(score: {job.get('score')})"
                     ):
-                        st.markdown(f"**Summary:** {t.get('summary', '—')}")
-                        st.markdown(
-                            "**Skills (ATS-ordered):** " +
-                            " | ".join(t.get("skills_reordered", []))
-                        )
-                        st.markdown(
-                            "**Section order:** " +
-                            " → ".join(t.get("section_order", []))
-                        )
-                        if t.get("ats_keywords_missing"):
-                            st.warning(
-                                "ATS gaps — consider adding: " +
-                                ", ".join(t["ats_keywords_missing"])
-                            )
+                        skills_raw = t.get("skills_reordered", [])
+                        skills_str = [s if isinstance(s, str) else str(s) for s in skills_raw]
+                        st.markdown("**Skills (ATS-ordered):** " + " | ".join(skills_str))
+                        section_raw = t.get("section_order", [])
+                        section_str = [s if isinstance(s, str) else str(s) for s in section_raw]
+                        st.markdown("**Section order:** " + " → ".join(section_str))
+                        ats_raw = t.get("ats_keywords_missing", [])
+                        ats_str = [s if isinstance(s, str) else str(s) for s in ats_raw]
+                        if ats_str:
+                            st.warning("ATS gaps — consider adding: " + ", ".join(ats_str))
                         if t.get("cover_letter"):
                             st.markdown("---")
                             st.markdown("**Cover Letter**")
                             st.text(t["cover_letter"])
+
+                        # ── Download buttons ───────────────────────────────
+                        latex_src = st.session_state.latex_source
+                        if latex_src and _ag:
+                            safe = lambda s: __import__("re").sub(
+                                r"[^a-zA-Z0-9_\-]", "_", s)
+                            base = (
+                                f"{safe(_ag.OWNER_NAME)}_Resume"
+                                f"_{safe(job.get('company',''))}"
+                                f"_{safe(job.get('title',''))}"
+                            )
+                            tailored_latex = _ag.apply_tailoring_to_latex(latex_src, t, job)
+                            dl_col1, dl_col2 = st.columns(2)
+                            dl_col1.download_button(
+                                "⬇ Download .tex",
+                                data=tailored_latex.encode("utf-8"),
+                                file_name=base + ".tex",
+                                mime="text/plain",
+                                key=f"dl_tex_{jk}",
+                            )
+                            # Try to compile PDF on-the-fly
+                            import tempfile as _tmp
+                            pdf_tmp = Path(_tmp.mktemp(suffix=".pdf"))
+                            compiled = _ag.compile_latex_to_pdf(tailored_latex, pdf_tmp)
+                            if compiled and pdf_tmp.exists():
+                                dl_col2.download_button(
+                                    "⬇ Download .pdf",
+                                    data=pdf_tmp.read_bytes(),
+                                    file_name=base + ".pdf",
+                                    mime="application/pdf",
+                                    key=f"dl_pdf_{jk}",
+                                )
 
         if _errored(4):
             with st.expander("Error details"):
@@ -688,7 +973,9 @@ with tab_pipeline:
                             result  = _ag.phase5_simulate_submission(job, already_applied)
 
                             _ag.OUTPUT_DIR.mkdir(exist_ok=True)
-                            resume_file = _ag._save_tailored_resume(job, tailored)
+                            resume_file = _ag._save_tailored_resume(
+                                job, tailored, st.session_state.latex_source
+                            )
                             processed_ids.add(job.get("id"))
 
                             applications.append({
@@ -742,11 +1029,14 @@ with tab_pipeline:
                 m4.metric("Total processed", len(apps))
 
                 df = pd.DataFrame([{
-                    "":             _status_dot(a.get("status", "")),
-                    "Company":      a.get("company", ""),
-                    "Title":        a.get("title", ""),
-                    "Score":        a.get("score", 0),
-                    "Status":       a.get("status", ""),
+                    "":            _status_dot(a.get("status", "")),
+                    "Company":     a.get("company", ""),
+                    "Role":        a.get("title", ""),
+                    "Score":       a.get("score", 0),
+                    "Status":      a.get("status", ""),
+                    "Experience":  a.get("experience_level", "unknown"),
+                    "Education":   _edu_icon(a.get("education_required", "unknown")),
+                    "Citizenship": _cit_icon(a.get("citizenship_required", "unknown")),
                     "Confirmation": a.get("confirmation", ""),
                     "Resume File":  a.get("resume_version", ""),
                     "Link":         a.get("application_url", ""),

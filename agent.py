@@ -354,7 +354,7 @@ def latex_to_plaintext(latex: str) -> str:
 class BaseProvider:
     """Abstract base for LLM providers."""
 
-    def extract_profile(self, resume_text: str) -> dict:
+    def extract_profile(self, resume_text: str, preferred_titles: list = None) -> dict:
         raise NotImplementedError
 
     def score_job(self, job: dict, profile: dict) -> dict:
@@ -399,7 +399,7 @@ class AnthropicProvider(BaseProvider):
                 return block.input
         return {}
 
-    def extract_profile(self, resume_text: str) -> dict:
+    def extract_profile(self, resume_text: str, preferred_titles: list = None) -> dict:
         tool = {
             "name": "save_profile",
             "description": "Save the extracted resume profile as structured data.",
@@ -410,7 +410,16 @@ class AnthropicProvider(BaseProvider):
                     "email":           {"type": "string"},
                     "linkedin":        {"type": "string"},
                     "location":        {"type": "string"},
-                    "target_titles":   {"type": "array", "items": {"type": "string"}},
+                    "target_titles":   {
+                        "type": "array", "items": {"type": "string"},
+                        "description": (
+                            "5–8 specific job titles this candidate is best suited for, "
+                            "based on their skills, experience, and education. "
+                            "Use industry-standard title variants (e.g. 'IC Design Intern', "
+                            "'VLSI Design Engineer', 'Photonics Engineer Intern'). "
+                            "Weight heavily toward the candidate's stated preferences."
+                        ),
+                    },
                     "top_hard_skills": {"type": "array", "items": {"type": "string"}},
                     "top_soft_skills": {"type": "array", "items": {"type": "string"}},
                     "education": {
@@ -440,10 +449,21 @@ class AnthropicProvider(BaseProvider):
                 "required": ["name", "top_hard_skills", "top_soft_skills", "target_titles"]
             }
         }
+        pref_hint = ""
+        if preferred_titles:
+            pref_hint = (
+                f"\n\nThe candidate's preferred job titles are: {', '.join(preferred_titles)}. "
+                "Use these as a strong signal when generating target_titles — include these "
+                "and closely related industry-standard variants that match their background."
+            )
         prompt = (
             "Parse this resume. Extract a complete structured profile. "
             "Build a Master Skills Profile: top 10 hard skills and top 5 soft skills "
-            "ranked by frequency and recency. Flag any resume gaps.\n\n"
+            "ranked by frequency and recency. Flag any resume gaps.\n"
+            "For target_titles: suggest 5–8 specific job titles this candidate is realistically "
+            "suited for based on their skills, projects, and experience level. "
+            "Use concrete, searchable titles (not generic ones like 'Engineer')."
+            f"{pref_hint}\n\n"
             f"Resume:\n{resume_text}"
         )
         return self._tool_call(tool, prompt, thinking=True)
@@ -595,7 +615,7 @@ class DemoProvider(BaseProvider):
         except Exception:
             return list(DemoProvider._DEFAULT_KEYWORDS)
 
-    def extract_profile(self, resume_text: str) -> dict:
+    def extract_profile(self, resume_text: str, preferred_titles: list = None) -> dict:
         text_lower = resume_text.lower()
 
         # Extract email
@@ -638,14 +658,28 @@ class DemoProvider(BaseProvider):
                 name = line
                 break
 
-        # Infer target titles from resume content
+        # Infer target titles from resume content, then merge with user preferences
         title_map = {
             "fpga": "FPGA/Hardware Engineering Intern",
             "photolithography": "Photonics Engineering Intern",
+            "photonics": "Photonics Engineering Intern",
             "spice": "IC Design Engineering Intern",
             "verilog": "IC Design Engineering Intern",
+            "vhdl": "VLSI Design Engineering Intern",
+            "cmos": "IC Design Engineering Intern",
+            "pcb": "Hardware Engineering Intern",
+            "mixed-signal": "Mixed-Signal Design Intern",
+            "semiconductor": "Semiconductor Process Engineering Intern",
+            "thin film": "Thin Film / Materials Engineering Intern",
         }
-        target_titles = list({title_map[k] for k in title_map if k in text_lower})
+        inferred = list({title_map[k] for k in title_map if k in text_lower})
+        # Merge preferred titles first (user's stated preference takes priority)
+        seen = set()
+        target_titles = []
+        for t in (preferred_titles or []) + inferred:
+            if t not in seen:
+                seen.add(t)
+                target_titles.append(t)
         if not target_titles:
             target_titles = ["IC Design Engineering Intern", "Hardware Engineering Intern"]
 
@@ -872,21 +906,31 @@ class OllamaProvider(BaseProvider):
                 pass
         return fallback
 
-    def extract_profile(self, resume_text: str) -> dict:
+    def extract_profile(self, resume_text: str, preferred_titles: list = None) -> dict:
+        pref_hint = ""
+        if preferred_titles:
+            pref_hint = (
+                f"\nThe candidate's preferred roles are: {', '.join(preferred_titles)}. "
+                "Weight these heavily when suggesting target_titles; include these and "
+                "closely related industry-standard title variants."
+            )
         prompt = (
             "Parse this resume and return ONLY a JSON object with these fields:\n"
-            "name, email, linkedin, location, target_titles (array), "
+            "name, email, linkedin, location, "
+            "target_titles (array of 5-8 specific searchable job titles this candidate "
+            "is best suited for based on their skills and experience level), "
             "top_hard_skills (array of 10), top_soft_skills (array of 5), "
             "education (array of {degree, institution, year, gpa}), "
             "experience (array of {title, company, dates, bullets[]}), "
             "projects (array of {name, description, skills_used[]}), "
-            "resume_gaps (array of strings).\n\n"
+            "resume_gaps (array of strings)."
+            f"{pref_hint}\n\n"
             f"Resume:\n{resume_text[:3000]}"  # cap to avoid context-limit hangs
         )
         raw = self._chat(prompt)
         return self._parse_json(raw, {
             "name": OWNER_NAME, "email": "", "linkedin": "", "location": "",
-            "target_titles": ["IC Design Intern", "Hardware Engineering Intern"],
+            "target_titles": preferred_titles or ["IC Design Intern", "Hardware Engineering Intern"],
             "top_hard_skills": ["MATLAB", "Python", "Verilog", "SPICE", "Photolithography"],
             "top_soft_skills": ["Teamwork", "Problem-solving", "Communication",
                                  "Detail-oriented", "Time management"],
@@ -991,15 +1035,19 @@ def get_provider(args) -> BaseProvider:
 
 # ─── Phase 1: Resume Ingestion ────────────────────────────────────────────────
 
-def phase1_ingest_resume(resume_text: str, provider: BaseProvider) -> dict:
+def phase1_ingest_resume(resume_text: str, provider: BaseProvider,
+                         preferred_titles: list = None) -> dict:
     console.print("\n[bold cyan]Phase 1 — Resume Ingestion & Profile Extraction[/bold cyan]")
     _t0 = time.time()
     with _CliSpinner(interval=20):
-        profile = provider.extract_profile(resume_text)
+        profile = provider.extract_profile(resume_text, preferred_titles=preferred_titles)
     elapsed = time.time() - _t0
     if profile:
         console.print(f"  ✅ Profile extracted: [bold]{profile.get('name', OWNER_NAME)}[/bold]")
         console.print(f"  📊 Top skills: {', '.join(profile.get('top_hard_skills', [])[:5])}")
+        titles = profile.get("target_titles", [])
+        if titles:
+            console.print(f"  🎯 Target titles: {', '.join(titles[:4])}")
         if profile.get("resume_gaps"):
             console.print(f"  ⚠️  Gaps: {', '.join(profile['resume_gaps'])}")
     console.print(f"  ⏱️  Phase 1 completed in [bold]{elapsed:.1f}s[/bold]")
@@ -2045,7 +2093,10 @@ def run_agent(config: dict, provider: BaseProvider):
     console.print("[bold green]🤖  Job Application Agent — Run Starting[/bold green]")
     console.print("─" * 64)
 
-    profile = phase1_ingest_resume(config["resume_text"], provider)
+    profile = phase1_ingest_resume(
+        config["resume_text"], provider,
+        preferred_titles=config.get("job_titles"),
+    )
     if not profile:
         console.print("[red]Phase 1 failed — cannot parse resume.[/red]")
         return

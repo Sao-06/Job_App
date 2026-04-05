@@ -590,9 +590,11 @@ with tab_pipeline:
             if should_run1:
                 provider, ok = _try_provider(1)
                 if ok:
+                    preferred = [t.strip() for t in
+                                 st.session_state.job_titles.split(",") if t.strip()]
                     profile, elapsed, err = _run_phase_animated(
                         1, _ag.phase1_ingest_resume,
-                        st.session_state.resume_text, provider,
+                        st.session_state.resume_text, provider, preferred,
                     )
                     if profile is not None:
                         st.session_state.profile = profile
@@ -607,9 +609,20 @@ with tab_pipeline:
 
                 left, right = st.columns(2)
                 with left:
-                    st.markdown("**Target titles**")
-                    for t in p.get("target_titles", []):
-                        st.write(f"• {t}")
+                    titles = p.get("target_titles", [])
+                    st.markdown("**Suggested target titles**")
+                    if titles:
+                        for t in titles:
+                            st.write(f"• {t}")
+                        if st.button(
+                            "Use these titles for job search",
+                            key="btn_use_titles",
+                            help="Replaces your Search Settings job titles with these suggestions",
+                        ):
+                            st.session_state.job_titles = ", ".join(titles)
+                            st.rerun()
+                    else:
+                        st.caption("No titles suggested — add preferences in Search Settings.")
                 with right:
                     st.markdown("**Hard skills**")
                     st.write(", ".join(p.get("top_hard_skills", [])))

@@ -35,7 +35,7 @@ ROOT = Path(__file__).parent
 sys.path.insert(0, str(ROOT))
 
 try:
-    import agent as _ag
+    import pipeline as _ag
     _ag_err = None
 except Exception as _e:
     _ag = None
@@ -413,15 +413,14 @@ with st.sidebar:
                     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
                         tmp.write(raw_bytes)
                         tmp_path = Path(tmp.name)
-                    text = _ag._read_resume(tmp_path)
-                    # _read_resume sets _original_latex_source if it detects LaTeX
-                    if _ag._original_latex_source:
-                        st.session_state.latex_source = _ag._original_latex_source
+                    text, latex_src = _ag._read_resume(tmp_path)
+                    if latex_src:
+                        st.session_state.latex_source = latex_src
                     # Detect silent fallback to demo resume (means extraction failed)
                     demo = _ag._build_demo_resume()
                     if text.strip() and text.strip() != demo.strip():
                         st.session_state.resume_text = text
-                        latex_note = " (LaTeX detected)" if _ag._original_latex_source else ""
+                        latex_note = " (LaTeX detected)" if latex_src else ""
                         st.success(f"Loaded: {uploaded.name}  ({len(text):,} chars){latex_note}")
                     else:
                         st.error(
@@ -728,7 +727,7 @@ with tab_pipeline:
                 jobs = st.session_state.jobs
                 _mc1, _mc2, _mc3 = st.columns(3)
                 _mc1.metric("Jobs found", len(jobs))
-                _mc2.metric("Duplicates merged", _ag._last_merge_count)
+                _mc2.metric("Duplicates merged", _ag.helpers._last_merge_count)
                 if st.session_state.phase_times.get(2):
                     _mc3.metric("Time", f"{st.session_state.phase_times[2]:.0f}s")
                 df = pd.DataFrame([{

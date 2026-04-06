@@ -16,6 +16,8 @@ Three backends are supported with no architecture changes: **Anthropic Claude** 
   - [Mode 2 — Ollama (local, free)](#mode-2--ollama-local-free)
   - [Mode 3 — Anthropic Claude (default)](#mode-3--anthropic-claude-default)
 - [Personalizing CLAUDE.md](#personalizing-claudemd)
+- [Web UI (Streamlit)](#web-ui-streamlit)
+- [Launching the App](#launching-the-app)
 - [Usage Examples](#usage-examples)
 - [Output Files](#output-files)
 - [Scoring Model](#scoring-model)
@@ -191,6 +193,21 @@ OWNER_NAME = "Your Full Name"   # line 29
 ```
 
 This string is used in every output filename and cover letter.
+
+---
+
+## Launching the App
+
+The user-facing entry point is the Streamlit web UI. After completing the setup for your chosen mode above, launch it with:
+
+```bash
+pip install streamlit pandas
+python -m streamlit run streamlit_app.py
+```
+
+The app opens at `http://localhost:8501`. Backend mode (Anthropic / Ollama / Demo) is selected from the sidebar.
+
+You can also run `agent.py` directly from the CLI — see the examples below.
 
 ---
 

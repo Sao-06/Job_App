@@ -3,7 +3,7 @@
 Streamlit Web UI for the Job Application Agent.
 
 Run:
-    streamlit run streamlit_app.py
+    python -m streamlit run streamlit_app.py
 
 Prerequisites:
     pip install streamlit pandas

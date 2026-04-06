@@ -17,7 +17,12 @@ This is an AI agent workspace for resume/CV generation, AI-initiated job applica
 pip install -r requirements.txt
 ```
 
-**Run modes:**
+**Launch the app (Streamlit web UI):**
+```bash
+python -m streamlit run streamlit_app.py
+```
+
+**Run the backend directly (CLI):**
 ```bash
 python agent.py                              # Anthropic Claude (requires ANTHROPIC_API_KEY env var)
 python agent.py --demo                       # No API key — uses regex/template logic + hardcoded demo jobs
@@ -125,7 +130,7 @@ I am a [undergraduate/graduate] student at [University Name]. As of [Semester Ye
 - Key skills & tools:
     - [Skill 1], [Skill 2], [Skill 3]
     - [Tool 1], [Tool 2]
-- Primary internship/job targets:
+- Primary internship/job 1targets:
     - Primary: [Role type — Company 1, Company 2, Company 3]
     - Secondary: [Role type — Company 4, Company 5]
 - Job Boards: LinkedIn, Indeed, Glassdoor, ZipRecruiter, Wellfound, Dice, Handshake (add/remove as needed)

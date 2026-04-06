@@ -112,15 +112,7 @@ def apply_tailoring_to_latex(latex_source: str, tailored: dict, job: dict) -> st
     if skills:
         def _replace_skills(m):
             header = m.group(1)
-            rest = m.group(2)
-            if r"\begin{itemize}" in rest or r"\begin{description}" in rest:
-                new_content = (
-                    "\n\\begin{itemize}\n"
-                    + "".join(f"  \\item {s}\n" for s in skills)
-                    + "\\end{itemize}\n\n"
-                )
-            else:
-                new_content = f"\n{', '.join(skills)}\n\n"
+            new_content = f"\n{', '.join(skills)}\n\n"
             return header + new_content
 
         latex = re.sub(

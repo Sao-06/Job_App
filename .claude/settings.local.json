@@ -5,7 +5,17 @@
       "Bash(python agent.py --demo)",
       "Bash(python -c \":*)",
       "Bash(PYTHONIOENCODING=utf-8 python agent.py --demo)",
-      "Bash(python -c \"import json; d=json.load\\(open\\(''resources/sample_jobs.json''\\)\\); print\\(d[0][''application_url''], ''|'', d[0][''company'']\\)\")"
+      "Bash(python -c \"import json; d=json.load\\(open\\(''resources/sample_jobs.json''\\)\\); print\\(d[0][''application_url''], ''|'', d[0][''company'']\\)\")",
+      "Bash(python -c ':*)",
+      "Bash(python -c \"import agent; print\\('Import OK'\\)\")",
+      "Bash(printf '\\\\n\\\\n\\\\n\\\\n\\\\n\\\\n\\\\n\\\\n\\\\n\\\\n\\\\n')",
+      "Bash(python -c \"import agent; print\\('agent.py OK'\\); print\\('detect_latex:', callable\\(agent.detect_latex\\)\\); print\\('latex_to_plaintext:', callable\\(agent.latex_to_plaintext\\)\\); print\\('remove_summary_section:', callable\\(agent.remove_summary_section\\)\\); print\\('apply_tailoring_to_latex:', callable\\(agent.apply_tailoring_to_latex\\)\\); print\\('compile_latex_to_pdf:', callable\\(agent.compile_latex_to_pdf\\)\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('agent.py'\\).read\\(\\)\\); print\\('agent.py: OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('streamlit_app.py'\\).read\\(\\)\\); print\\('streamlit_app.py: OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('agent.py', encoding='utf-8'\\).read\\(\\)\\); print\\('agent.py: OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('streamlit_app.py', encoding='utf-8'\\).read\\(\\)\\); print\\('streamlit_app.py: OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('agent.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")",
+      "Bash(python -c \"import agent; print\\('OK'\\)\")"
     ]
   }
 }

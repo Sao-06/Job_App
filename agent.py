@@ -54,7 +54,7 @@ def startup_checklist() -> dict:
     cfg: dict = {}
 
     console.print("\n[bold]1. Resume file[/bold]")
-    path_str = input("   Path to resume (PDF/DOCX/TXT/TEX) [built-in demo profile]: ").strip()
+    path_str = input("   Path to resume (PDF/DOCX/TXT/TEX) [built-in demo profile]: ").strip().strip('"').strip("'")
     if path_str:
         resume_text, latex_source = _read_resume(Path(path_str))
         cfg["resume_path"]  = Path(path_str)
@@ -131,6 +131,8 @@ def run_agent(config: dict, provider: BaseProvider) -> None:
         profile, config["job_titles"], config["location"], provider,
         use_simplify=config.get("use_simplify", True),
         max_jobs=config.get("max_scrape_jobs", MAX_SCRAPE_JOBS),
+        education_filter=config.get("education_filter"),
+        include_unknown_education=config.get("include_unknown_education", False),
     )
     if config.get("blacklist"):
         bl   = {c.lower() for c in config["blacklist"]}
@@ -140,12 +142,13 @@ def run_agent(config: dict, provider: BaseProvider) -> None:
     scored = phase3_score_jobs(
         jobs, profile, provider, min_score=60,
         experience_levels=config.get("experience_levels"),
-        education_filter=config.get("education_filter"),
         citizenship_filter=config.get("citizenship_filter", "all"),
     )
 
-    auto_eligible = [j for j in scored if j.get("score", 0) >= threshold]
-    review_needed = [j for j in scored if 60 <= j.get("score", 0) < threshold]
+    # Phase 4 only sees jobs that actually passed scoring.
+    passed = [j for j in scored if j.get("filter_status") == "passed"]
+    auto_eligible = [j for j in passed if j.get("score", 0) >= threshold]
+    review_needed = [j for j in passed if 60 <= j.get("score", 0) < threshold]
 
     console.print(
         f"\n  📋 [bold]{len(auto_eligible)}[/bold] auto-eligible (≥{threshold})  |  "
@@ -187,15 +190,22 @@ def run_agent(config: dict, provider: BaseProvider) -> None:
         console.print("[yellow]Run cancelled.[/yellow]")
         return
 
-    to_process      = auto_eligible[:config.get("max_apps", 10)]
+    # Phase 4 decoupling: tailor a resume for EVERY job that passed Phase 3,
+    # regardless of auto-apply threshold. Only the auto-slice is submitted;
+    # the remainder get "Manual Review" so the user can send them manually.
+    shortlist       = passed
+    auto_slice      = auto_eligible[:config.get("max_apps", 10)]
+    auto_ids        = {id(j) for j in auto_slice}
     already_applied = _load_existing_applications()
     applications    = []
     submitter       = PlaywrightSubmitter(profile) if config.get("real_apply") else None
 
-    for i, job in enumerate(to_process, 1):
+    for i, job in enumerate(shortlist, 1):
+        in_auto = id(job) in auto_ids
         console.print(
-            f"\n[bold]({i}/{len(to_process)}) {job['title']} @ {job['company']}[/bold]"
+            f"\n[bold]({i}/{len(shortlist)}) {job['title']} @ {job['company']}[/bold]"
             f"  score={job['score']}"
+            f"  [{'auto' if in_auto else 'manual review'}]"
         )
 
         include_cl = (
@@ -215,19 +225,31 @@ def run_agent(config: dict, provider: BaseProvider) -> None:
                 f"  ⚠️  ATS gaps: [yellow]"
                 f"{', '.join(tailored['ats_keywords_missing'][:4])}[/yellow]"
             )
+        console.print(
+            f"  📈 ATS score: {tailored.get('ats_score_before', 0)} → "
+            f"{tailored.get('ats_score_after', 0)}"
+        )
 
-        resume_file = _save_tailored_resume(job, tailored, config.get("latex_source"))
+        resume_files = _save_tailored_resume(
+            job, tailored, profile, config.get("latex_source"),
+            resume_text=config.get("resume_text", ""),
+        )
+        # Prefer PDF for downstream submitters; fall back to .tex.
+        resume_file = resume_files.get("pdf") or resume_files.get("tex")
         console.print(f"  💾 Resume → output/{resume_file}")
 
-        if submitter:
-            console.print("  🚀 Submitting via Playwright...")
-            result = submitter.submit(job, str(OUTPUT_DIR / resume_file))
+        if in_auto:
+            if submitter:
+                console.print("  🚀 Submitting via Playwright...")
+                result = submitter.submit(job, str(OUTPUT_DIR / resume_file))
+            else:
+                console.print("  🚀 Submitting (demo mode)...")
+                result = phase5_simulate_submission(job, already_applied)
+            icon = "✅" if result["status"] == "Applied" else "⚠️"
+            console.print(f"  {icon} {result['status']}  •  Confirmation: {result['confirmation']}")
         else:
-            console.print("  🚀 Submitting (demo mode)...")
-            result = phase5_simulate_submission(job, already_applied)
-
-        icon = "✅" if result["status"] == "Applied" else "⚠️"
-        console.print(f"  {icon} {result['status']}  •  Confirmation: {result['confirmation']}")
+            console.print("  📝 Resume generated for manual review (below auto-apply threshold).")
+            result = {"status": "Manual Required", "confirmation": "N/A"}
 
         applications.append({
             **job,
@@ -236,14 +258,18 @@ def run_agent(config: dict, provider: BaseProvider) -> None:
             "cover_letter_sent": bool(tailored.get("cover_letter")),
             "status":            result["status"],
             "confirmation":      result["confirmation"],
+            "generation_status": "generated",
+            "submission_status": "applied" if result["status"] == "Applied"
+                                 else ("manual_review" if not in_auto else "error"),
             "notes": (
                 "ATS gaps: " + ", ".join(tailored.get("ats_keywords_missing", [])[:2])
                 if tailored.get("ats_keywords_missing") else ""
             ),
         })
 
+    shortlist_ids = {id(j) for j in shortlist}
     for job in scored:
-        if job not in to_process:
+        if id(job) not in shortlist_ids:
             applications.append({
                 **job,
                 "date_applied":      datetime.now().strftime("%m/%d/%Y"),
@@ -297,8 +323,12 @@ if __name__ == "__main__":
         help="Comma-separated experience levels (default: internship,entry-level)",
     )
     parser.add_argument(
-        "--education", default="bachelors,masters,unknown",
-        help="Comma-separated education levels (default: bachelors,masters,unknown)",
+        "--education", default="bachelors,masters",
+        help="Comma-separated education levels you hold (default: bachelors,masters)",
+    )
+    parser.add_argument(
+        "--include-unknown-education", action="store_true",
+        help="Keep jobs whose required education could not be inferred (default: drop)",
     )
     parser.add_argument(
         "--citizenship", default="all",
@@ -330,5 +360,6 @@ if __name__ == "__main__":
     config["use_simplify"]      = not args.no_simplify
     config["experience_levels"] = [x.strip() for x in args.experience.split(",")]
     config["education_filter"]  = [x.strip() for x in args.education.split(",")]
+    config["include_unknown_education"] = args.include_unknown_education
     config["citizenship_filter"] = args.citizenship
     run_agent(config, provider)

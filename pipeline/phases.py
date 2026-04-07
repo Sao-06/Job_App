@@ -20,7 +20,8 @@ from rich.table import Table
 
 from .config import console, OUTPUT_DIR, RESOURCES_DIR, MAX_SCRAPE_JOBS, _CliSpinner
 from .helpers import (infer_experience_level, infer_education_required,
-                      infer_citizenship_required, deduplicate_jobs)
+                      infer_citizenship_required, deduplicate_jobs,
+                      filter_jobs_by_education, validate_job_urls)
 from .providers import BaseProvider
 from .resume import _build_demo_resume, _save_tailored_resume
 from .scrapers import JobSpyClient, SimplifyJobsScraper
@@ -31,10 +32,22 @@ from .scrapers import JobSpyClient, SimplifyJobsScraper
 def phase1_ingest_resume(resume_text: str, provider: BaseProvider,
                          preferred_titles: list = None) -> dict:
     from .config import OWNER_NAME
+    from .profile_audit import audit_profile
     console.print("\n[bold cyan]Phase 1 — Resume Ingestion & Profile Extraction[/bold cyan]")
     _t0 = time.time()
     with _CliSpinner(interval=20):
         profile = provider.extract_profile(resume_text, preferred_titles=preferred_titles)
+
+    # Post-extraction audit: flatten → quarantine → retention → verify → rerank.
+    if profile:
+        profile = audit_profile(profile, resume_text)
+        # Back-compat: ensure `experience` is populated from research/work split.
+        if not profile.get("experience"):
+            profile["experience"] = (
+                list(profile.get("research_experience") or [])
+                + list(profile.get("work_experience") or [])
+            )
+
     elapsed = time.time() - _t0
     if profile:
         console.print(f"  ✅ Profile extracted: [bold]{profile.get('name', OWNER_NAME)}[/bold]")
@@ -44,6 +57,8 @@ def phase1_ingest_resume(resume_text: str, provider: BaseProvider,
             console.print(f"  🎯 Target titles: {', '.join(titles[:4])}")
         if profile.get("resume_gaps"):
             console.print(f"  ⚠️  Gaps: {', '.join(profile['resume_gaps'])}")
+        for note in profile.get("_audit_log", []):
+            console.print(f"  [dim]🔍 audit: {note}[/dim]")
     console.print(f"  ⏱️  Phase 1 completed in [bold]{elapsed:.1f}s[/bold]")
     return profile
 
@@ -96,7 +111,9 @@ def phase2_discover_jobs(profile: dict, job_titles: list, location: str,
                           provider: BaseProvider,
                           use_simplify: bool = True,
                           max_jobs: int = None,
-                          days_old: int = 30) -> list:
+                          days_old: int = 30,
+                          education_filter=None,
+                          include_unknown_education: bool = False) -> list:
     console.print("\n[bold cyan]Phase 2 — Job Discovery & Search[/bold cyan]")
     console.print(f"  🔍 Searching: {', '.join(job_titles)}")
     console.print(f"  📍 Location: {location}")
@@ -118,10 +135,28 @@ def phase2_discover_jobs(profile: dict, job_titles: list, location: str,
             job["citizenship_required"] = infer_citizenship_required(job)
             job.setdefault("source", "cache")
         jobs = _filter_by_posting_age(jobs, days_old)
+        if education_filter:
+            before_edu = len(jobs)
+            jobs = filter_jobs_by_education(
+                jobs, education_filter, include_unknown=include_unknown_education,
+            )
+            from .helpers import (_last_education_dropped_unknown as _du,
+                                  _last_education_dropped_mismatch as _dm)
+            console.print(
+                f"  🎓 Education filter: {before_edu} → {len(jobs)} "
+                f"(dropped {_dm} mismatches, {_du} unknown)"
+            )
         jobs = _sort_newest_first(jobs)
         if cap and len(jobs) > cap:
             jobs = jobs[:cap]
             console.print(f"  ✂️  Capped cached list to {cap} jobs")
+        validate_job_urls(jobs)
+        from .helpers import (_last_url_broken as _ub,
+                              _last_url_reconstructed as _ur)
+        console.print(
+            f"  🔗 URL validation: {_ur} reconstructed, {_ub} broken "
+            f"(broken kept for manual review)"
+        )
         console.print(f"  ✅ Returning {len(jobs)} cached jobs (newest first)")
         console.print(f"  ⏱️  Phase 2 completed in [bold]{time.time() - _t0:.1f}s[/bold]")
         return jobs
@@ -173,12 +208,31 @@ def phase2_discover_jobs(profile: dict, job_titles: list, location: str,
     )
 
     jobs = _filter_by_posting_age(jobs, days_old)
+    if education_filter:
+        before_edu = len(jobs)
+        jobs = filter_jobs_by_education(
+            jobs, education_filter, include_unknown=include_unknown_education,
+        )
+        from .helpers import (_last_education_dropped_unknown as _du,
+                              _last_education_dropped_mismatch as _dm)
+        console.print(
+            f"  🎓 Education filter: {before_edu} → {len(jobs)} "
+            f"(dropped {_dm} mismatches, {_du} unknown)"
+        )
     jobs = _sort_newest_first(jobs)
     console.print(f"  📅 Newest-first sort applied ({len(jobs)} jobs within {days_old}-day window)")
 
     if cap and len(jobs) > cap:
         jobs = jobs[:cap]
         console.print(f"  ✂️  Final list capped at {cap} jobs")
+
+    validate_job_urls(jobs)
+    from .helpers import (_last_url_broken as _ub2,
+                          _last_url_reconstructed as _ur2)
+    console.print(
+        f"  🔗 URL validation: {_ur2} reconstructed, {_ub2} broken "
+        f"(broken kept for manual review)"
+    )
 
     RESOURCES_DIR.mkdir(exist_ok=True)
     with open(sample_file, "w", encoding="utf-8") as f:
@@ -193,76 +247,146 @@ def phase2_discover_jobs(profile: dict, job_titles: list, location: str,
 def phase3_score_jobs(jobs: list, profile: dict, provider: BaseProvider,
                        min_score: int = 60,
                        experience_levels=None,
-                       education_filter=None,
+                       education_filter=None,  # noqa: ARG001 — moved to phase 2; kept for back-compat
                        citizenship_filter: str = "all",
-                       include_unknown_education: bool = False) -> list:
+                       include_unknown_education: bool = False) -> list:  # noqa: ARG001
+    """Score every job that survived Phase 2's filters.
+
+    Returns the FULL list (not pruned by min_score) so the UI can show why
+    each job was kept or skipped. Each job gets a `filter_status` field:
+      - "passed"               → score >= min_score
+      - "below_threshold"      → scored, but below min_score
+      - "filtered_experience"  → dropped by experience pre-filter (score=0)
+      - "filtered_citizenship" → dropped by citizenship pre-filter (score=0)
+
+    Note: education filtering now happens in Phase 2. The `education_filter`
+    and `include_unknown_education` params are accepted for back-compat but
+    ignored here.
+    """
     console.print("\n[bold cyan]Phase 3 — Relevance Scoring & Shortlisting[/bold cyan]")
 
-    filtered = list(jobs)
+    pre_filtered: list = []  # jobs excluded before scoring (kept in output for visibility)
+    to_score:     list = list(jobs)
 
     if experience_levels and experience_levels != ["all"]:
-        filtered = [j for j in filtered
-                    if j.get("experience_level", "unknown") in experience_levels]
-        console.print(f"  🎯 Experience filter {experience_levels}: {len(filtered)} jobs remain")
-
-    if education_filter and education_filter != ["all"]:
-        allowed = set(education_filter)
-        if include_unknown_education:
-            allowed.add("unknown")
-        filtered = [j for j in filtered
-                    if j.get("education_required", "unknown") in allowed]
-        suffix = "" if include_unknown_education else " (strict — excludes unspecified)"
-        console.print(f"  🎓 Education filter {education_filter}{suffix}: {len(filtered)} jobs remain")
+        kept, dropped = [], []
+        for j in to_score:
+            if j.get("experience_level", "unknown") in experience_levels:
+                kept.append(j)
+            else:
+                dropped.append({**j, "score": 0, "filter_status": "filtered_experience",
+                                "filter_reason": f"experience={j.get('experience_level', 'unknown')}"})
+        to_score = kept
+        pre_filtered.extend(dropped)
+        console.print(f"  🎯 Experience filter {experience_levels}: {len(to_score)} jobs remain")
 
     if citizenship_filter == "exclude_required":
-        filtered = [j for j in filtered if j.get("citizenship_required", "unknown") != "yes"]
-        console.print(f"  🇺🇸 Citizenship filter (exclude required): {len(filtered)} jobs remain")
+        kept, dropped = [], []
+        for j in to_score:
+            if j.get("citizenship_required", "unknown") != "yes":
+                kept.append(j)
+            else:
+                dropped.append({**j, "score": 0, "filter_status": "filtered_citizenship",
+                                "filter_reason": "citizenship required"})
+        to_score = kept
+        pre_filtered.extend(dropped)
+        console.print(f"  🇺🇸 Citizenship filter (exclude required): {len(to_score)} jobs remain")
     elif citizenship_filter == "only_required":
-        filtered = [j for j in filtered if j.get("citizenship_required", "unknown") == "yes"]
-        console.print(f"  🇺🇸 Citizenship filter (only required): {len(filtered)} jobs remain")
+        kept, dropped = [], []
+        for j in to_score:
+            if j.get("citizenship_required", "unknown") == "yes":
+                kept.append(j)
+            else:
+                dropped.append({**j, "score": 0, "filter_status": "filtered_citizenship",
+                                "filter_reason": "citizenship not required"})
+        to_score = kept
+        pre_filtered.extend(dropped)
+        console.print(f"  🇺🇸 Citizenship filter (only required): {len(to_score)} jobs remain")
 
-    console.print(f"  🔢 Scoring {len(filtered)} jobs…")
+    console.print(f"  🔢 Scoring {len(to_score)} jobs…")
     _t0 = time.time()
-    scored = []
-    for i, job in enumerate(filtered, 1):
+    scored: list = []
+    for i, job in enumerate(to_score, 1):
         result = provider.score_job(job, profile)
-        scored.append({**job, **result})
-        if i % 10 == 0 or i == len(filtered):
+        merged = {**job, **result}
+        s = merged.get("score", 0)
+        merged["filter_status"] = "passed" if s >= min_score else "below_threshold"
+        merged["filter_reason"] = "" if s >= min_score else f"score {s} < {min_score}"
+        scored.append(merged)
+        if i % 10 == 0 or i == len(to_score):
             console.print(
-                f"  [dim]📊 Scored {i}/{len(filtered)} jobs  "
+                f"  [dim]📊 Scored {i}/{len(to_score)} jobs  "
                 f"({time.time() - _t0:.0f}s elapsed)[/dim]"
             )
 
-    scored = [j for j in scored if j.get("score", 0) >= min_score]
+    # Combine: scored first (sorted by score), then pre-filtered for visibility.
     scored.sort(key=lambda x: x.get("score", 0), reverse=True)
+    scored = scored + pre_filtered
+    passed_count = sum(1 for j in scored if j.get("filter_status") == "passed")
 
-    table = Table(title=f"Job Match Scores (min: {min_score})")
+    display_n = min(12, len(scored))
+    table = Table(title=f"Job Match Scores (showing top {display_n} of {len(scored)}, min: {min_score})")
     table.add_column("#",       style="dim",   width=4)
     table.add_column("Company", style="cyan",  width=18)
     table.add_column("Title",   style="white", width=28)
     table.add_column("Score",   style="bold",  width=8)
-    table.add_column("Status",  width=20)
+    table.add_column("Status",  width=22)
 
     for i, job in enumerate(scored[:12], 1):
         s = job.get("score", 0)
-        if s >= 75:
+        fs = job.get("filter_status", "passed")
+        if fs.startswith("filtered_"):
+            colour, status = "red", f"❌ {fs.replace('filtered_', '')}"
+        elif s >= 75:
             colour, status = "bold green", "✅ Auto-eligible"
         elif s >= 60:
             colour, status = "yellow", "⚠️  Review needed"
         else:
-            colour, status = "red", "❌ Skipped"
+            colour, status = "red", "❌ Below threshold"
         table.add_row(str(i), job.get("company", ""), job.get("title", ""),
                       f"[{colour}]{s}[/{colour}]", status)
 
     console.print(table)
     console.print(
         f"  ⏱️  Phase 3 completed in [bold]{time.time() - _t0:.1f}s[/bold]  "
-        f"({len(scored)} jobs passed the {min_score} score threshold)"
+        f"({passed_count}/{len(scored)} jobs passed the {min_score} score threshold)"
     )
     return scored
 
 
 # ── Phase 4 ────────────────────────────────────────────────────────────────────
+
+def _ats_score(text: str, requirements: list) -> int:
+    """Return percentage of *requirements* keywords present in *text* (0-100)."""
+    if not requirements:
+        return 0
+    text_l = (text or "").lower()
+    hits = 0
+    for req in requirements:
+        token = str(req or "").strip().lower()
+        if token and token in text_l:
+            hits += 1
+    return int(round(100 * hits / len(requirements)))
+
+
+def _profile_to_text(profile: dict) -> str:
+    """Flatten a structured profile dict into a single searchable string."""
+    parts: list = []
+    parts.extend(profile.get("top_hard_skills") or [])
+    parts.extend(profile.get("top_soft_skills") or [])
+    for role in (profile.get("experience") or []):
+        parts.append(role.get("title", ""))
+        parts.append(role.get("company", ""))
+        parts.extend(role.get("bullets") or [])
+    for proj in (profile.get("projects") or []):
+        parts.append(proj.get("name", ""))
+        parts.append(proj.get("description", ""))
+        parts.extend(proj.get("skills_used") or [])
+    for ed in (profile.get("education") or []):
+        parts.append(ed.get("degree", ""))
+        parts.append(ed.get("institution", ""))
+    return " ".join(p for p in parts if p)
+
 
 def _tailoring_is_empty(tailored: dict) -> bool:
     """True when the LLM returned a tailoring response with no usable content."""
@@ -297,10 +421,19 @@ def phase4_tailor_resume(job: dict, profile: dict, resume_text: str,
             console.print(
                 "  [yellow][!] Retry also empty - falling back to profile defaults.[/yellow]"
             )
+            reqs = [str(r) for r in (job.get("requirements") or []) if r]
+            skills_fb = list(profile.get("top_hard_skills") or [])
+            # Ensure ATS "after" score can improve: surface any job requirements
+            # not already present in the profile's hard-skill list.
+            seen = {s.lower() for s in skills_fb}
+            for r in reqs:
+                if r.lower() not in seen:
+                    skills_fb.append(r)
+                    seen.add(r.lower())
             tailored = {
-                "skills_reordered":     profile.get("top_hard_skills", []),
+                "skills_reordered":     skills_fb,
                 "experience_bullets":   [],
-                "ats_keywords_missing": tailored.get("ats_keywords_missing", []),
+                "ats_keywords_missing": tailored.get("ats_keywords_missing") or reqs,
                 "section_order":        tailored.get("section_order")
                                          or ["Skills", "Projects", "Experience", "Education"],
             }
@@ -309,6 +442,16 @@ def phase4_tailor_resume(job: dict, profile: dict, resume_text: str,
         tailored["section_order"] = section_order
     if include_cover_letter:
         tailored["cover_letter"] = provider.generate_cover_letter(job, profile)
+
+    # ── ATS scoring (before/after) ─────────────────────────────────────────────
+    requirements = job.get("requirements") or []
+    before_text  = (resume_text or "") + " " + _profile_to_text(profile)
+    after_extras = " ".join(tailored.get("skills_reordered") or [])
+    for entry in (tailored.get("experience_bullets") or []):
+        after_extras += " " + " ".join(entry.get("bullets") or [])
+    after_text = before_text + " " + after_extras
+    tailored["ats_score_before"] = _ats_score(before_text, requirements)
+    tailored["ats_score_after"]  = _ats_score(after_text,  requirements)
     return tailored
 
 
@@ -447,7 +590,7 @@ def phase6_update_tracker(applications: list) -> Path:
     headers = [
         "#", "Date Applied", "Job Title", "Company", "Industry",
         "Location", "Job Posting URL", "Company Website", "Application Portal",
-        "Match Score", "Resume Version", "Cover Letter Sent",
+        "Match Score", "Score Reasoning", "Resume Version", "Cover Letter Sent",
         "Status", "Confirmation #", "Notes", "Follow-Up Date", "Response Received",
     ]
 
@@ -479,7 +622,9 @@ def phase6_update_tracker(applications: list) -> Path:
             i, applied_str, app.get("title", ""), app.get("company", ""),
             "Technology / Semiconductor", app.get("location", ""),
             app.get("application_url", ""), f"https://www.{company_slug}.com",
-            app.get("platform", ""), app.get("score", 0), app.get("resume_version", ""),
+            app.get("platform", ""), app.get("score", 0),
+            app.get("reasoning") or app.get("reason", ""),
+            app.get("resume_version", ""),
             "Yes" if app.get("cover_letter_sent") else "No",
             app.get("status", "Applied"), app.get("confirmation", "N/A"),
             app.get("notes", ""), follow_up, "",

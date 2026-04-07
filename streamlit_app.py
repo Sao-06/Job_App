@@ -382,7 +382,7 @@ with st.sidebar:
                 )
 
             if st.button("🔄 Refresh model list",
-                         use_container_width=True, key="refresh_models"):
+                         width='stretch', key="refresh_models"):
                 st.rerun()
 
             st.caption("To add a model: `ollama pull mistral` → Refresh.")
@@ -449,7 +449,7 @@ with st.sidebar:
     else:  # Demo profile
         if _ag and not st.session_state.resume_text:
             st.session_state.resume_text = _ag._build_demo_resume()
-        if st.button("Reload demo profile", use_container_width=True):
+        if st.button("Reload demo profile", width='stretch'):
             if _ag:
                 st.session_state.resume_text = _ag._build_demo_resume()
 
@@ -544,7 +544,7 @@ with st.sidebar:
 
     # ── Reset ─────────────────────────────────────────────────────────────────
     st.divider()
-    if st.button("🔄 Reset Pipeline", use_container_width=True, type="secondary"):
+    if st.button("🔄 Reset Pipeline", width='stretch', type="secondary"):
         _reset_pipeline()
         st.rerun()
 
@@ -578,7 +578,7 @@ with tab_pipeline:
     st.progress(n_done / 7, text=f"Pipeline: {n_done} / 7 phases complete")
 
     col_btn, col_hint = st.columns([1, 5])
-    if col_btn.button("▶ Run Full Pipeline", type="primary", use_container_width=True):
+    if col_btn.button("▶ Run Full Pipeline", type="primary", width='stretch'):
         _reset_pipeline()
         st.session_state.run_all = True
         st.rerun()
@@ -739,6 +739,8 @@ with tab_pipeline:
                         st.session_state.use_simplify,
                         st.session_state.max_scrape_jobs,
                         st.session_state.days_old,
+                        st.session_state.education_filter,
+                        st.session_state.include_unknown_education,
                     )
                     if jobs is not None:
                         st.session_state.jobs = jobs
@@ -746,11 +748,22 @@ with tab_pipeline:
 
             if st.session_state.jobs:
                 jobs = st.session_state.jobs
-                _mc1, _mc2, _mc3 = st.columns(3)
+                _mc1, _mc2, _mc3, _mc4 = st.columns(4)
                 _mc1.metric("Jobs found", len(jobs))
                 _mc2.metric("Duplicates merged", _ag.helpers._last_merge_count)
+                _mc3.metric(
+                    "Dropped: unknown edu",
+                    _ag.helpers._last_education_dropped_unknown,
+                    help=(
+                        "Jobs whose required education could not be inferred "
+                        "and were dropped because 'Include jobs with unspecified "
+                        "education' is OFF. Also dropped "
+                        f"{_ag.helpers._last_education_dropped_mismatch} "
+                        "jobs whose required education exceeded your level."
+                    ),
+                )
                 if st.session_state.phase_times.get(2):
-                    _mc3.metric("Time", f"{st.session_state.phase_times[2]:.0f}s")
+                    _mc4.metric("Time", f"{st.session_state.phase_times[2]:.0f}s")
                 df = pd.DataFrame([{
                     "Company":     j.get("company", ""),
                     "Role":        j.get("title", ""),
@@ -767,7 +780,7 @@ with tab_pipeline:
                 } for j in jobs])
                 st.dataframe(
                     df,
-                    use_container_width=True,
+                    width='stretch',
                     hide_index=True,
                     column_config={
                         "Link": st.column_config.LinkColumn("Link", display_text="Apply"),
@@ -806,9 +819,8 @@ with tab_pipeline:
                         st.session_state.jobs, st.session_state.profile,
                         provider, 60,
                         st.session_state.experience_levels,
-                        st.session_state.education_filter,
+                        None,  # education_filter — moved to Phase 2
                         st.session_state.citizenship_filter,
-                        st.session_state.include_unknown_education,
                     )
                     if scored is not None:
                         st.session_state.scored_jobs = scored
@@ -816,23 +828,39 @@ with tab_pipeline:
 
             if st.session_state.scored_jobs:
                 scored = st.session_state.scored_jobs
-                auto   = [j for j in scored if j.get("score", 0) >= thr]
-                review = [j for j in scored if 60 <= j.get("score", 0) < thr]
+                passed = [j for j in scored if j.get("filter_status") == "passed"]
+                auto   = [j for j in passed if j.get("score", 0) >= thr]
+                review = [j for j in passed if 60 <= j.get("score", 0) < thr]
+                excluded = [j for j in scored if j.get("filter_status") != "passed"]
 
-                m1, m2, m3, m4 = st.columns(4)
+                m1, m2, m3, m4, m5 = st.columns(5)
                 m1.metric("Auto-eligible",    len(auto),   help=f"Score ≥ {thr}")
                 m2.metric("Review needed",    len(review), help="Score 60–74")
-                m3.metric("Total shortlisted", len(scored))
+                m3.metric("Passed total",     len(passed))
+                m4.metric("Excluded",         len(excluded),
+                          help="Jobs filtered or below min_score (still shown below)")
                 if st.session_state.phase_times.get(3):
-                    m4.metric("Time", f"{st.session_state.phase_times[3]:.0f}s")
+                    m5.metric("Time", f"{st.session_state.phase_times[3]:.0f}s")
+
+                def _row_status(j):
+                    fs = j.get("filter_status", "passed")
+                    if fs == "filtered_experience":
+                        return "Filtered: experience"
+                    if fs == "filtered_citizenship":
+                        return "Filtered: citizenship"
+                    if fs == "below_threshold":
+                        return "Below threshold"
+                    if j.get("score", 0) >= thr:
+                        return "Auto-eligible"
+                    return "Review needed"
 
                 df = pd.DataFrame([{
                     "":            _score_dot(j.get("score", 0)),
                     "Company":     j.get("company", ""),
                     "Role":        j.get("title", ""),
                     "Score":       j.get("score", 0),
-                    "Status":      ("Auto-eligible" if j.get("score", 0) >= thr
-                                    else "Review needed"),
+                    "Status":      _row_status(j),
+                    "Reason":      j.get("filter_reason", ""),
                     "Experience":  j.get("experience_level", "unknown"),
                     "Education":   _edu_icon(j.get("education_required", "unknown")),
                     "Citizenship": _cit_icon(j.get("citizenship_required", "unknown")),
@@ -843,7 +871,7 @@ with tab_pipeline:
                 } for j in scored])
                 st.dataframe(
                     df,
-                    use_container_width=True,
+                    width='stretch',
                     hide_index=True,
                     column_config={
                         "Link": st.column_config.LinkColumn("Link", display_text="Apply"),
@@ -864,15 +892,30 @@ with tab_pipeline:
             st.info("Complete Phase 3 first.")
         else:
             thr      = st.session_state.threshold
+            # Tailor resumes for EVERY job that passed Phase 3, not only
+            # auto-eligible ones. Submission in Phase 5 is still gated on the
+            # auto-apply threshold; jobs below it fall through to manual review.
             top_jobs = [j for j in st.session_state.scored_jobs
-                        if j.get("score", 0) >= thr][:st.session_state.max_apps]
+                        if j.get("filter_status", "passed") == "passed"]
 
             btn_p4 = None
             if not _done(4):
-                btn_p4 = st.button("▶ Tailor Resumes", key="btn_p4")
+                btn_p4 = st.button("▶ Tailor Resumes", key="btn_p4",
+                                   disabled=not top_jobs)
+                auto_count = sum(1 for j in top_jobs if j.get("score", 0) >= thr)
                 st.caption(
-                    f"Tailoring for {len(top_jobs)} auto-eligible job(s) "
-                    f"(score ≥ {thr}, max {st.session_state.max_apps})."
+                    f"Tailoring for {len(top_jobs)} shortlisted job(s) "
+                    f"({auto_count} auto-eligible ≥ {thr}, "
+                    f"{len(top_jobs) - auto_count} for manual review)."
+                )
+
+            if not top_jobs:
+                st.info(
+                    "No jobs reached Phase 4 — none of the scored jobs have "
+                    f"`filter_status == 'passed'` AND score ≥ {thr}.  "
+                    "Check Phase 3 results: lower the auto-apply threshold, "
+                    "relax the experience/citizenship filters, or refresh the "
+                    "job cache (delete `resources/sample_jobs.json`)."
                 )
 
             should_run4 = (
@@ -883,11 +926,14 @@ with tab_pipeline:
 
             if should_run4:
                 prog = st.progress(0, text="Tailoring resumes…")
+                per_job_errors: list = []
                 try:
                     provider, ok = _try_provider(4)
                     if not ok:
                         raise RuntimeError(st.session_state.phase_error.get(4, "Provider error"))
-                    tailored_map = {}
+                    # Reset and persist incrementally so a single bad job
+                    # cannot wipe out earlier successes.
+                    st.session_state.tailored_map = {}
                     total = len(top_jobs)
                     for i, job in enumerate(top_jobs, 1):
                         prog.progress(
@@ -895,28 +941,52 @@ with tab_pipeline:
                             text=f"Tailoring ({i}/{total}): "
                                  f"{job.get('company')} — {job.get('title')}",
                         )
-                        result = _ag.phase4_tailor_resume(
-                            job, st.session_state.profile,
-                            st.session_state.resume_text, provider,
-                            include_cover_letter=st.session_state.cover_letter,
-                        )
-                        # Generate the resume file immediately so every job
-                        # has a downloadable artifact after Phase 4 (not
-                        # deferred to Phase 5+6).
-                        _ag.OUTPUT_DIR.mkdir(exist_ok=True)
-                        resume_file = _ag._save_tailored_resume(
-                            job, result, st.session_state.profile,
-                            st.session_state.latex_source,
-                        )
-                        tailored_map[job.get("id", job.get("title", ""))] = {
-                            "job": job,
-                            "tailored": result,
-                            "resume_file": resume_file,
-                        }
-                    st.session_state.tailored_map = tailored_map
-                    st.session_state.phase_done.add(4)
-                    st.session_state.phase_error.pop(4, None)
-                except Exception as exc:
+                        try:
+                            result = _ag.phase4_tailor_resume(
+                                job, st.session_state.profile,
+                                st.session_state.resume_text, provider,
+                                include_cover_letter=st.session_state.cover_letter,
+                            )
+                            resume_files = _ag._save_tailored_resume(
+                                job, result, st.session_state.profile,
+                                st.session_state.latex_source,
+                                resume_text=st.session_state.resume_text,
+                            )
+                            st.session_state.tailored_map[
+                                job.get("id", job.get("title", ""))
+                            ] = {
+                                "job": job,
+                                "tailored": result,
+                                "resume_files": resume_files,
+                                # Back-compat: prefer PDF when present.
+                                "resume_file": (
+                                    resume_files.get("pdf") or resume_files.get("tex")
+                                ),
+                            }
+                        except Exception as _e:
+                            tb = traceback.format_exc()
+                            per_job_errors.append(
+                                f"{job.get('company')} — {job.get('title')}:\n" + tb
+                            )
+                            st.warning(
+                                f"Tailoring failed for {job.get('company')} — "
+                                f"{job.get('title')}: {_e}"
+                            )
+                            with st.expander("Traceback"):
+                                st.code(tb)
+                    if per_job_errors and not st.session_state.tailored_map:
+                        # Total failure — surface the error and do NOT mark
+                        # the phase complete (would mislead Phase 5+).
+                        st.session_state.phase_error[4] = "\n\n".join(per_job_errors)
+                    else:
+                        st.session_state.phase_done.add(4)
+                        st.session_state.phase_error.pop(4, None)
+                        if per_job_errors:
+                            st.warning(
+                                f"{len(per_job_errors)} job(s) failed to tailor; "
+                                f"{len(st.session_state.tailored_map)} succeeded."
+                            )
+                except Exception:
                     st.session_state.phase_error[4] = traceback.format_exc()
                 finally:
                     prog.empty()
@@ -936,64 +1006,55 @@ with tab_pipeline:
                         section_raw = t.get("section_order", [])
                         section_str = [s if isinstance(s, str) else str(s) for s in section_raw]
                         st.markdown("**Section order:** " + " → ".join(section_str))
+
+                        # ── ATS before/after + keyword gap ─────────────────
+                        ats_before = t.get("ats_score_before", 0)
+                        ats_after  = t.get("ats_score_after", 0)
+                        m1, m2 = st.columns(2)
+                        m1.metric("ATS score (before)", f"{ats_before}%")
+                        m2.metric("ATS score (after)",  f"{ats_after}%",
+                                  delta=f"{ats_after - ats_before:+d}")
+
                         ats_raw = t.get("ats_keywords_missing", [])
                         ats_str = [s if isinstance(s, str) else str(s) for s in ats_raw]
                         if ats_str:
-                            st.warning("ATS gaps — consider adding: " + ", ".join(ats_str))
+                            st.warning("Keyword gap — consider adding: "
+                                       + ", ".join(ats_str))
+
                         if t.get("cover_letter"):
                             st.markdown("---")
                             st.markdown("**Cover Letter**")
                             st.text(t["cover_letter"])
 
-                        # ── Download buttons ───────────────────────────────
-                        latex_src    = st.session_state.latex_source
-                        resume_file  = data.get("resume_file")
-                        resume_path  = (_ag.OUTPUT_DIR / resume_file) if (_ag and resume_file) else None
+                        # ── Download buttons (PDF + LaTeX) ─────────────────
+                        files = data.get("resume_files") or {}
+                        tex_name = files.get("tex")
+                        pdf_name = files.get("pdf")
+                        tex_path = (_ag.OUTPUT_DIR / tex_name) if (_ag and tex_name) else None
+                        pdf_path = (_ag.OUTPUT_DIR / pdf_name) if (_ag and pdf_name) else None
 
-                        if latex_src and _ag:
-                            safe = lambda s: __import__("re").sub(
-                                r"[^a-zA-Z0-9_\-]", "_", s)
-                            base = (
-                                f"{safe(_ag.OWNER_NAME)}_Resume"
-                                f"_{safe(job.get('company',''))}"
-                                f"_{safe(job.get('title',''))}"
-                            )
-                            tailored_latex = _ag.apply_tailoring_to_latex(latex_src, t, job)
-                            dl_col1, dl_col2 = st.columns(2)
+                        dl_col1, dl_col2 = st.columns(2)
+                        if pdf_path and pdf_path.exists():
                             dl_col1.download_button(
-                                "⬇ Download .tex",
-                                data=tailored_latex.encode("utf-8"),
-                                file_name=base + ".tex",
+                                "⬇ Download PDF",
+                                data=pdf_path.read_bytes(),
+                                file_name=pdf_path.name,
+                                mime="application/pdf",
+                                key=f"dl_pdf_{jk}",
+                            )
+                        else:
+                            dl_col1.info("PDF unavailable (install reportlab or pdflatex).")
+
+                        if tex_path and tex_path.exists():
+                            dl_col2.download_button(
+                                "⬇ Download LaTeX",
+                                data=tex_path.read_bytes(),
+                                file_name=tex_path.name,
                                 mime="text/plain",
                                 key=f"dl_tex_{jk}",
                             )
-                            # Try to compile PDF on-the-fly
-                            import tempfile as _tmp
-                            pdf_tmp = Path(_tmp.mktemp(suffix=".pdf"))
-                            compiled = _ag.compile_latex_to_pdf(tailored_latex, pdf_tmp)
-                            if compiled and pdf_tmp.exists():
-                                dl_col2.download_button(
-                                    "⬇ Download .pdf",
-                                    data=pdf_tmp.read_bytes(),
-                                    file_name=base + ".pdf",
-                                    mime="application/pdf",
-                                    key=f"dl_pdf_{jk}",
-                                )
-                        elif resume_path and resume_path.exists():
-                            # Plain-text path: serve the .txt file written by Phase 4.
-                            mime = (
-                                "application/pdf" if resume_path.suffix.lower() == ".pdf"
-                                else "text/plain"
-                            )
-                            st.download_button(
-                                f"⬇ Download {resume_path.suffix.lstrip('.').upper()}",
-                                data=resume_path.read_bytes(),
-                                file_name=resume_path.name,
-                                mime=mime,
-                                key=f"dl_resume_{jk}",
-                            )
                         else:
-                            st.info("Resume file not generated — check Phase 4 logs.")
+                            dl_col2.info("LaTeX file not generated.")
 
         if _errored(4):
             with st.expander("Error details"):
@@ -1029,20 +1090,33 @@ with tab_pipeline:
                         applications    = []
                         processed_ids   = set()
 
+                        thr_p5       = st.session_state.threshold
+                        max_apps_p5  = st.session_state.max_apps
+                        submitted_ct = 0
                         for jk, data in st.session_state.tailored_map.items():
-                            job     = data["job"]
+                            job      = data["job"]
                             tailored = data["tailored"]
-                            result  = _ag.phase5_simulate_submission(job, already_applied)
+                            # Only auto-submit jobs at/above the threshold,
+                            # capped at max_apps. Below-threshold jobs still
+                            # get a generated resume but are marked manual.
+                            if (job.get("score", 0) >= thr_p5
+                                    and submitted_ct < max_apps_p5):
+                                result = _ag.phase5_simulate_submission(job, already_applied)
+                                submitted_ct += 1
+                            else:
+                                result = {"status": "Manual Required", "confirmation": "N/A"}
 
                             # Reuse the file generated in Phase 4 if it exists;
                             # only regenerate when missing.
                             _ag.OUTPUT_DIR.mkdir(exist_ok=True)
                             resume_file = data.get("resume_file")
                             if not resume_file or not (_ag.OUTPUT_DIR / resume_file).exists():
-                                resume_file = _ag._save_tailored_resume(
+                                rf = _ag._save_tailored_resume(
                                     job, tailored, st.session_state.profile,
                                     st.session_state.latex_source,
+                                    resume_text=st.session_state.resume_text,
                                 )
+                                resume_file = rf.get("pdf") or rf.get("tex")
                             processed_ids.add(job.get("id"))
 
                             applications.append({
@@ -1110,7 +1184,7 @@ with tab_pipeline:
                 } for a in apps])
                 st.dataframe(
                     df,
-                    use_container_width=True,
+                    width='stretch',
                     hide_index=True,
                     column_config={
                         "Link": st.column_config.LinkColumn("Link", display_text="Apply"),
@@ -1207,7 +1281,7 @@ with tab_tracker:
     tracker_path = output_dir / f"Job_Applications_Tracker_{month}.xlsx"
 
     col_r, col_p = st.columns([1, 5])
-    if col_r.button("🔄 Refresh", use_container_width=True, key="tracker_refresh"):
+    if col_r.button("🔄 Refresh", width='stretch', key="tracker_refresh"):
         st.rerun()
     col_p.caption(f"Reading: `{tracker_path}`")
 
@@ -1242,7 +1316,7 @@ with tab_tracker:
                 df = pd.DataFrame(rows)
                 if "Status" in df.columns:
                     df.insert(0, "", df["Status"].map(_status_dot).fillna("⬜"))
-                st.dataframe(df, use_container_width=True, hide_index=True)
+                st.dataframe(df, width='stretch', hide_index=True)
 
                 # Approve manual-review rows
                 manual = [r for r in rows if r.get("Status") == "Manual Required"]
@@ -1342,7 +1416,7 @@ with tab_files:
                         data=fh.read(),
                         file_name=fp.name,
                         key=f"dl_{fp.name}",
-                        use_container_width=True,
+                        width='stretch',
                     )
 
         _file_section("Trackers",        trackers)

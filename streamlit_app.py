@@ -60,8 +60,10 @@ _DEFAULTS: dict = {
     # Filters
     "experience_levels": ["internship", "entry-level"],
     "education_filter":  ["bachelors"],
+    "include_unknown_education": False,
     "citizenship_filter": "exclude_required",
     "use_simplify":      True,
+    "days_old":          30,
     # Phase results
     "profile":      None,
     "jobs":         None,
@@ -500,10 +502,28 @@ with st.sidebar:
     )
 
     st.checkbox(
+        "Include jobs with unspecified education",
+        value=st.session_state.include_unknown_education,
+        key="include_unknown_education",
+        help="When off, jobs whose education requirement could not be inferred are dropped. "
+             "Turn on if the filter is too aggressive.",
+    )
+
+    st.checkbox(
         "Include SimplifyJobs/GitHub listings",
         value=st.session_state.use_simplify,
         key="use_simplify",
         help="Scrapes real-time internship listings from github.com/SimplifyJobs/Summer2026-Internships",
+    )
+
+    st.number_input(
+        "Only show jobs posted within (days)",
+        min_value=1,
+        max_value=180,
+        value=st.session_state.days_old,
+        step=1,
+        key="days_old",
+        help="Default 30 days. Newest postings are ranked first.",
     )
 
     with st.expander("Advanced filters"):
@@ -718,6 +738,7 @@ with tab_pipeline:
                         st.session_state.location, provider,
                         st.session_state.use_simplify,
                         st.session_state.max_scrape_jobs,
+                        st.session_state.days_old,
                     )
                     if jobs is not None:
                         st.session_state.jobs = jobs
@@ -787,6 +808,7 @@ with tab_pipeline:
                         st.session_state.experience_levels,
                         st.session_state.education_filter,
                         st.session_state.citizenship_filter,
+                        st.session_state.include_unknown_education,
                     )
                     if scored is not None:
                         st.session_state.scored_jobs = scored
@@ -878,8 +900,18 @@ with tab_pipeline:
                             st.session_state.resume_text, provider,
                             include_cover_letter=st.session_state.cover_letter,
                         )
+                        # Generate the resume file immediately so every job
+                        # has a downloadable artifact after Phase 4 (not
+                        # deferred to Phase 5+6).
+                        _ag.OUTPUT_DIR.mkdir(exist_ok=True)
+                        resume_file = _ag._save_tailored_resume(
+                            job, result, st.session_state.profile,
+                            st.session_state.latex_source,
+                        )
                         tailored_map[job.get("id", job.get("title", ""))] = {
-                            "job": job, "tailored": result,
+                            "job": job,
+                            "tailored": result,
+                            "resume_file": resume_file,
                         }
                     st.session_state.tailored_map = tailored_map
                     st.session_state.phase_done.add(4)
@@ -914,7 +946,10 @@ with tab_pipeline:
                             st.text(t["cover_letter"])
 
                         # ── Download buttons ───────────────────────────────
-                        latex_src = st.session_state.latex_source
+                        latex_src    = st.session_state.latex_source
+                        resume_file  = data.get("resume_file")
+                        resume_path  = (_ag.OUTPUT_DIR / resume_file) if (_ag and resume_file) else None
+
                         if latex_src and _ag:
                             safe = lambda s: __import__("re").sub(
                                 r"[^a-zA-Z0-9_\-]", "_", s)
@@ -944,6 +979,21 @@ with tab_pipeline:
                                     mime="application/pdf",
                                     key=f"dl_pdf_{jk}",
                                 )
+                        elif resume_path and resume_path.exists():
+                            # Plain-text path: serve the .txt file written by Phase 4.
+                            mime = (
+                                "application/pdf" if resume_path.suffix.lower() == ".pdf"
+                                else "text/plain"
+                            )
+                            st.download_button(
+                                f"⬇ Download {resume_path.suffix.lstrip('.').upper()}",
+                                data=resume_path.read_bytes(),
+                                file_name=resume_path.name,
+                                mime=mime,
+                                key=f"dl_resume_{jk}",
+                            )
+                        else:
+                            st.info("Resume file not generated — check Phase 4 logs.")
 
         if _errored(4):
             with st.expander("Error details"):
@@ -984,10 +1034,15 @@ with tab_pipeline:
                             tailored = data["tailored"]
                             result  = _ag.phase5_simulate_submission(job, already_applied)
 
+                            # Reuse the file generated in Phase 4 if it exists;
+                            # only regenerate when missing.
                             _ag.OUTPUT_DIR.mkdir(exist_ok=True)
-                            resume_file = _ag._save_tailored_resume(
-                                job, tailored, st.session_state.latex_source
-                            )
+                            resume_file = data.get("resume_file")
+                            if not resume_file or not (_ag.OUTPUT_DIR / resume_file).exists():
+                                resume_file = _ag._save_tailored_resume(
+                                    job, tailored, st.session_state.profile,
+                                    st.session_state.latex_source,
+                                )
                             processed_ids.add(job.get("id"))
 
                             applications.append({

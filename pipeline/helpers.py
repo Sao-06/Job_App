@@ -31,23 +31,66 @@ def infer_experience_level(job: dict) -> str:
 
 
 def infer_education_required(job: dict) -> str:
-    """Infer minimum education requirement from job text."""
+    """Infer the MINIMUM education requirement from job text.
+
+    Returns the lowest degree that appears to be accepted. Phrases like
+    "Bachelor's required, Master's preferred" must resolve to "bachelors",
+    not "masters" — we scan explicit "required" clauses first, then fall
+    back to raw keyword presence for the lowest-seen level.
+    """
     reqs = job.get("requirements", [])
     req_str = " ".join(reqs) if isinstance(reqs, list) else str(reqs)
     text = (job.get("title", "") + " " + job.get("description", "") + " " + req_str).lower()
-    if any(k in text for k in ["ph.d", "phd", "doctorate", "doctoral",
-                                "doctor of philosophy"]):
-        return "phd"
-    if any(k in text for k in ["master's", "masters", "m.s.", "ms degree",
-                                "meng", "m.eng", "graduate degree"]):
-        return "masters"
-    if any(k in text for k in ["bachelor's", "bachelors", "bachelor", "b.s.", "bs degree",
-                                "b.eng", "undergraduate", "pursuing a degree"]):
+
+    phd_kw = [
+        "ph.d", "phd", "doctorate", "doctoral", "doctor of philosophy",
+        "d.sc", "d.phil",
+    ]
+    masters_kw = [
+        "master's", "masters", "m.s.", "ms degree", "m.sc", "msc",
+        "meng", "m.eng", "master of science", "master of engineering",
+        "graduate degree", "graduate-level", "advanced degree",
+        "postgraduate",
+        # Disambiguated short forms — avoid bare "ms" which collides
+        # with words like "systems", "forms", etc.
+        "ms in ", "ms or ", "an ms ", "ms required", "ms preferred",
+        "ms/phd", "ms,",
+    ]
+    bachelors_kw = [
+        "bachelor's", "bachelors", "bachelor", "b.s.", "bs degree",
+        "b.sc", "bsc", "b.eng", "beng", "bachelor of science",
+        "bachelor of engineering", "undergraduate", "pursuing a degree",
+        "four-year degree", "4-year degree",
+        # Disambiguated short forms
+        "bs in ", "bs or ", "a bs ", "bs required", "bs preferred",
+        "bs/ms", "bs,",
+    ]
+    associates_kw = ["associate's", "associates degree", "a.s.", "a.a.s"]
+    hs_kw = ["high school diploma", "ged", "no degree required"]
+
+    def _mentions(keywords: list) -> bool:
+        return any(k in text for k in keywords)
+
+    # Pass 1: explicit "X required" phrasing wins. Lowest level that is
+    # explicitly stated as required becomes the minimum.
+    required_phrases = [
+        "bachelor's required", "bachelors required", "bs required",
+        "b.s. required", "bachelor of", "undergraduate degree required",
+    ]
+    if any(p in text for p in required_phrases) and _mentions(bachelors_kw):
         return "bachelors"
-    if any(k in text for k in ["associate's", "associates degree", "a.s."]):
-        return "associates"
-    if any(k in text for k in ["high school diploma", "ged", "no degree required"]):
+
+    # Pass 2: fall back to lowest-seen mention.
+    if _mentions(hs_kw):
         return "high_school"
+    if _mentions(associates_kw):
+        return "associates"
+    if _mentions(bachelors_kw):
+        return "bachelors"
+    if _mentions(masters_kw):
+        return "masters"
+    if _mentions(phd_kw):
+        return "phd"
     return "unknown"
 
 

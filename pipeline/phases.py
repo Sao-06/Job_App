@@ -50,13 +50,57 @@ def phase1_ingest_resume(resume_text: str, provider: BaseProvider,
 
 # ── Phase 2 ────────────────────────────────────────────────────────────────────
 
+def _parse_posted_date(val) -> datetime | None:
+    """Best-effort parse of the heterogeneous `posted_date` field."""
+    if not val:
+        return None
+    if isinstance(val, datetime):
+        return val
+    s = str(val).strip()
+    if not s:
+        return None
+    for fmt in ("%Y-%m-%d", "%Y-%m-%dT%H:%M:%S", "%m/%d/%Y"):
+        try:
+            return datetime.strptime(s[:len(fmt)], fmt)
+        except ValueError:
+            continue
+    try:
+        return datetime.fromisoformat(s)
+    except ValueError:
+        return None
+
+
+def _filter_by_posting_age(jobs: list, days_old: int) -> list:
+    """Drop jobs posted before (now - days_old). Jobs with no date are kept."""
+    if not days_old or days_old <= 0:
+        return jobs
+    cutoff = datetime.now() - timedelta(days=days_old)
+    kept = []
+    for j in jobs:
+        posted = _parse_posted_date(j.get("posted_date"))
+        if posted is None or posted >= cutoff:
+            kept.append(j)
+    return kept
+
+
+def _sort_newest_first(jobs: list) -> list:
+    """Sort by posted_date descending; undated jobs sort last."""
+    return sorted(
+        jobs,
+        key=lambda j: _parse_posted_date(j.get("posted_date")) or datetime.min,
+        reverse=True,
+    )
+
+
 def phase2_discover_jobs(profile: dict, job_titles: list, location: str,
                           provider: BaseProvider,
                           use_simplify: bool = True,
-                          max_jobs: int = None) -> list:
+                          max_jobs: int = None,
+                          days_old: int = 30) -> list:
     console.print("\n[bold cyan]Phase 2 — Job Discovery & Search[/bold cyan]")
     console.print(f"  🔍 Searching: {', '.join(job_titles)}")
     console.print(f"  📍 Location: {location}")
+    console.print(f"  📅 Posted within last {days_old} days")
     cap = max_jobs or MAX_SCRAPE_JOBS
     console.print(f"  🔢 Max jobs cap: {cap}")
     _t0 = time.time()
@@ -66,15 +110,19 @@ def phase2_discover_jobs(profile: dict, job_titles: list, location: str,
         with open(sample_file, encoding="utf-8") as f:
             jobs = json.load(f)
         console.print(f"  📂 Loaded {len(jobs)} postings from resources/sample_jobs.json")
+        # Always re-infer metadata — stale cache values would otherwise
+        # mask upstream keyword-list improvements.
+        for job in jobs:
+            job["experience_level"]     = infer_experience_level(job)
+            job["education_required"]   = infer_education_required(job)
+            job["citizenship_required"] = infer_citizenship_required(job)
+            job.setdefault("source", "cache")
+        jobs = _filter_by_posting_age(jobs, days_old)
+        jobs = _sort_newest_first(jobs)
         if cap and len(jobs) > cap:
             jobs = jobs[:cap]
             console.print(f"  ✂️  Capped cached list to {cap} jobs")
-        for job in jobs:
-            job.setdefault("experience_level",     infer_experience_level(job))
-            job.setdefault("education_required",   infer_education_required(job))
-            job.setdefault("citizenship_required", infer_citizenship_required(job))
-            job.setdefault("source", "cache")
-        console.print(f"  ✅ Returning {len(jobs)} cached jobs")
+        console.print(f"  ✅ Returning {len(jobs)} cached jobs (newest first)")
         console.print(f"  ⏱️  Phase 2 completed in [bold]{time.time() - _t0:.1f}s[/bold]")
         return jobs
 
@@ -89,7 +137,9 @@ def phase2_discover_jobs(profile: dict, job_titles: list, location: str,
         ],
         interval=20,
     ):
-        jobs = board_client.fetch_jobs(job_titles, location, max_jobs=cap)
+        jobs = board_client.fetch_jobs(
+            job_titles, location, days=days_old, max_jobs=cap,
+        )
 
     if not jobs:
         console.print(
@@ -100,9 +150,9 @@ def phase2_discover_jobs(profile: dict, job_titles: list, location: str,
         jobs = provider.generate_demo_jobs(profile, job_titles, location)
 
     for job in jobs:
-        job.setdefault("experience_level",     infer_experience_level(job))
-        job.setdefault("education_required",   infer_education_required(job))
-        job.setdefault("citizenship_required", infer_citizenship_required(job))
+        job["experience_level"]     = infer_experience_level(job)
+        job["education_required"]   = infer_education_required(job)
+        job["citizenship_required"] = infer_citizenship_required(job)
         job.setdefault("source", "jobspy")
 
     if use_simplify:
@@ -122,6 +172,10 @@ def phase2_discover_jobs(profile: dict, job_titles: list, location: str,
         f"({before - after} duplicates merged)"
     )
 
+    jobs = _filter_by_posting_age(jobs, days_old)
+    jobs = _sort_newest_first(jobs)
+    console.print(f"  📅 Newest-first sort applied ({len(jobs)} jobs within {days_old}-day window)")
+
     if cap and len(jobs) > cap:
         jobs = jobs[:cap]
         console.print(f"  ✂️  Final list capped at {cap} jobs")
@@ -140,7 +194,8 @@ def phase3_score_jobs(jobs: list, profile: dict, provider: BaseProvider,
                        min_score: int = 60,
                        experience_levels=None,
                        education_filter=None,
-                       citizenship_filter: str = "all") -> list:
+                       citizenship_filter: str = "all",
+                       include_unknown_education: bool = False) -> list:
     console.print("\n[bold cyan]Phase 3 — Relevance Scoring & Shortlisting[/bold cyan]")
 
     filtered = list(jobs)
@@ -151,11 +206,13 @@ def phase3_score_jobs(jobs: list, profile: dict, provider: BaseProvider,
         console.print(f"  🎯 Experience filter {experience_levels}: {len(filtered)} jobs remain")
 
     if education_filter and education_filter != ["all"]:
-        filtered = [j for j in filtered if (
-            j.get("education_required", "unknown") in education_filter
-            or j.get("education_required", "unknown") == "unknown"
-        )]
-        console.print(f"  🎓 Education filter {education_filter}: {len(filtered)} jobs remain")
+        allowed = set(education_filter)
+        if include_unknown_education:
+            allowed.add("unknown")
+        filtered = [j for j in filtered
+                    if j.get("education_required", "unknown") in allowed]
+        suffix = "" if include_unknown_education else " (strict — excludes unspecified)"
+        console.print(f"  🎓 Education filter {education_filter}{suffix}: {len(filtered)} jobs remain")
 
     if citizenship_filter == "exclude_required":
         filtered = [j for j in filtered if j.get("citizenship_required", "unknown") != "yes"]
@@ -207,10 +264,47 @@ def phase3_score_jobs(jobs: list, profile: dict, provider: BaseProvider,
 
 # ── Phase 4 ────────────────────────────────────────────────────────────────────
 
+def _tailoring_is_empty(tailored: dict) -> bool:
+    """True when the LLM returned a tailoring response with no usable content."""
+    if not tailored:
+        return True
+    return (
+        not tailored.get("skills_reordered")
+        and not tailored.get("experience_bullets")
+    )
+
+
 def phase4_tailor_resume(job: dict, profile: dict, resume_text: str,
                           provider: BaseProvider, include_cover_letter: bool = False,
                           section_order: list = None) -> dict:
-    tailored = provider.tailor_resume(job, profile, resume_text)
+    tailored = provider.tailor_resume(job, profile, resume_text) or {}
+
+    # Validator: if both skills_reordered and experience_bullets came back empty,
+    # the LLM silently failed.  Retry once, then fall back to profile-derived
+    # defaults so _save_tailored_resume always has something to render.
+    if _tailoring_is_empty(tailored):
+        console.print(
+            "  [yellow][!] Tailoring returned empty - retrying once.[/yellow]"
+        )
+        try:
+            retry = provider.tailor_resume(job, profile, resume_text) or {}
+        except Exception as e:
+            console.print(f"  [yellow]Retry failed: {e}[/yellow]")
+            retry = {}
+        if not _tailoring_is_empty(retry):
+            tailored = retry
+        else:
+            console.print(
+                "  [yellow][!] Retry also empty - falling back to profile defaults.[/yellow]"
+            )
+            tailored = {
+                "skills_reordered":     profile.get("top_hard_skills", []),
+                "experience_bullets":   [],
+                "ats_keywords_missing": tailored.get("ats_keywords_missing", []),
+                "section_order":        tailored.get("section_order")
+                                         or ["Skills", "Projects", "Experience", "Education"],
+            }
+
     if section_order:
         tailored["section_order"] = section_order
     if include_cover_letter:

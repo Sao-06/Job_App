@@ -60,19 +60,39 @@ def serve_output_file(path: str):
 # ── Single-user in-memory state ───────────────────────────────────────────────
 
 _S: dict = {
-    "mode": "demo",
+    # LLM backend
+    "mode": "ollama",
     "api_key": "",
+    "ollama_model": "llama3.2",
+    # Search / apply settings
     "threshold": 75,
     "job_titles": "Engineer",
     "location": "United States",
+    "max_apps": 10,
+    "max_scrape_jobs": 50,
+    "days_old": 30,
+    "cover_letter": False,
+    "blacklist": "",
+    "whitelist": "NVIDIA, Apple, Microsoft, Intel, IBM, Micron, Samsung, TSMC",
+    # Filters
+    "experience_levels": ["internship", "entry-level"],
+    "education_filter": ["bachelors"],
+    "include_unknown_education": False,
+    "citizenship_filter": "exclude_required",
+    "use_simplify": True,
+    # Resume
     "resume_text": None,
     "latex_source": None,
     "resume_filename": None,
+    # Phase results
     "profile": None,
     "jobs": None,
     "scored": None,
+    "tailored_map": {},
     "applications": None,
     "tracker_path": None,
+    "report": None,
+    # Pipeline state
     "done": set(),
     "error": {},
     "elapsed": {},
@@ -86,7 +106,7 @@ def _make_provider():
     if mode == "demo":
         return DemoProvider()
     if mode == "ollama":
-        return OllamaProvider()
+        return OllamaProvider(model=_S.get("ollama_model", "llama3.2"))
     key = _S.get("api_key", "")
     if key:
         os.environ["ANTHROPIC_API_KEY"] = key
@@ -141,17 +161,23 @@ def _run_phase_sse(phase: int, fn):
         })
 
 def _serialize(phase: int, val) -> dict:
-    """Convert a phase result value into a JSON-serialisable summary."""
+    def _title_str(t):
+        return t.get("title", str(t)) if isinstance(t, dict) else str(t)
+    def _skill_str(s):
+        return s.get("skill", str(s)) if isinstance(s, dict) else str(s)
+
     if phase == 1:
         p = val or {}
         return {
-            "name": p.get("name", ""),
-            "email": p.get("email", ""),
-            "location": p.get("location", ""),
-            "target_titles": p.get("target_titles", []),
-            "top_hard_skills": p.get("top_hard_skills", []),
-            "top_soft_skills": p.get("top_soft_skills", []),
-            "resume_gaps": p.get("resume_gaps", []),
+            "name":            p.get("name", ""),
+            "email":           p.get("email", ""),
+            "linkedin":        p.get("linkedin", ""),
+            "location":        p.get("location", ""),
+            "target_titles":   [_title_str(t) for t in (p.get("target_titles") or [])],
+            "top_hard_skills": [_skill_str(s) for s in (p.get("top_hard_skills") or [])],
+            "top_soft_skills": [str(s) for s in (p.get("top_soft_skills") or [])],
+            "education":       p.get("education") or [],
+            "resume_gaps":     p.get("resume_gaps") or [],
         }
     if phase == 2:
         jobs = val or []
@@ -159,58 +185,100 @@ def _serialize(phase: int, val) -> dict:
             "total": len(jobs),
             "jobs": [
                 {
-                    "co": j.get("company", ""),
-                    "role": j.get("title", ""),
-                    "loc": j.get("location", ""),
+                    "co":          j.get("company", ""),
+                    "role":        j.get("title", ""),
+                    "loc":         j.get("location", ""),
+                    "remote":      j.get("remote", False),
+                    "experience":  j.get("experience_level", ""),
+                    "education":   j.get("education_required", ""),
+                    "citizenship": j.get("citizenship_required", ""),
+                    "salary":      j.get("salary_range", ""),
+                    "platform":    j.get("platform", ""),
+                    "source":      j.get("source", ""),
+                    "posted":      j.get("posted_date", ""),
+                    "url":         j.get("application_url", ""),
                 }
-                for j in jobs[:10]
+                for j in jobs[:50]
             ],
         }
     if phase == 3:
         scored = val or []
-        thr = _S.get("threshold", 75)
+        thr      = _S.get("threshold", 75)
         passed   = [j for j in scored if j.get("filter_status") == "passed"]
         auto     = [j for j in passed  if j.get("score", 0) >= thr]
         manual   = [j for j in passed  if j.get("score", 0) <  thr]
         below    = [j for j in scored  if j.get("filter_status") == "below_threshold"]
         filtered = [j for j in scored  if (j.get("filter_status") or "").startswith("filtered_")]
+        all_sorted = sorted(scored, key=lambda x: x.get("score", 0), reverse=True)
         return {
-            "total": len(scored),
-            "auto": len(auto),
-            "manual": len(manual),
-            "below": len(below),
-            "filtered": len(filtered),
+            "total": len(scored), "auto": len(auto), "manual": len(manual),
+            "below": len(below), "filtered": len(filtered),
             "jobs": [
                 {
-                    "co":       j.get("company", ""),
-                    "role":     j.get("title", ""),
-                    "loc":      j.get("location", ""),
-                    "score":    j.get("score", 0),
-                    "skills":   ", ".join(list(j.get("skills_matched") or [])[:4]),
-                    "status":   j.get("filter_status", ""),
-                    "reasoning": j.get("reasoning", ""),
+                    "co":          j.get("company", ""),
+                    "role":        j.get("title", ""),
+                    "loc":         j.get("location", ""),
+                    "score":       j.get("score", 0),
+                    "matching":    list(j.get("matching_skills") or [])[:6],
+                    "missing":     list(j.get("missing_skills") or [])[:6],
+                    "status":      j.get("filter_status", ""),
+                    "reason":      j.get("filter_reason", "") or j.get("reasoning", ""),
+                    "experience":  j.get("experience_level", ""),
+                    "education":   j.get("education_required", ""),
+                    "citizenship": j.get("citizenship_required", ""),
+                    "salary":      j.get("salary_range", ""),
+                    "url":         j.get("application_url", ""),
                 }
-                for j in sorted(passed, key=lambda x: x.get("score", 0), reverse=True)[:20]
+                for j in all_sorted[:30]
             ],
         }
     if phase == 4:
         apps = val or []
-        return {
-            "count": len(apps),
-            "titles": [
-                f"{a.get('company','')} — {a.get('title','')}"
-                for a in apps[:5]
-            ],
-        }
+        tmap = _S.get("tailored_map") or {}
+        items = []
+        for a in apps:
+            jk = a.get("id") or a.get("title", "")
+            td = tmap.get(jk, {})
+            t  = td.get("tailored") or {}
+            skills_raw = t.get("skills_reordered") or []
+            skills = [s.get("skill", str(s)) if isinstance(s, dict) else str(s) for s in skills_raw]
+            items.append({
+                "co":            a.get("company", ""),
+                "role":          a.get("title", ""),
+                "score":         a.get("score", 0),
+                "status":        a.get("status", ""),
+                "resume_file":   a.get("resume_version", ""),
+                "ats_before":    t.get("ats_score_before", 0),
+                "ats_after":     t.get("ats_score_after", 0),
+                "ats_gaps":      [s.get("skill", str(s)) if isinstance(s, dict) else str(s) for s in (t.get("ats_keywords_missing") or [])][:6],
+                "skills":        skills[:8],
+                "has_cl":        bool(t.get("cover_letter")),
+            })
+        return {"count": len(apps), "items": items}
     if phase == 5:
         apps = val or []
         applied = sum(1 for a in apps if a.get("status") == "Applied")
         manual  = sum(1 for a in apps if a.get("status") == "Manual Required")
-        return {"applied": applied, "manual": manual}
+        return {
+            "applied": applied, "manual": manual,
+            "apps": [
+                {
+                    "co":           a.get("company", ""),
+                    "role":         a.get("title", ""),
+                    "score":        a.get("score", 0),
+                    "status":       a.get("status", ""),
+                    "confirmation": a.get("confirmation", ""),
+                    "resume":       a.get("resume_version", ""),
+                    "url":          a.get("application_url", ""),
+                }
+                for a in apps
+            ],
+        }
     if phase == 6:
-        return {"tracker": Path(str(val)).name if val else ""}
+        p = Path(str(val)).name if val else ""
+        return {"tracker": p, "url": f"/output/{p}" if p else ""}
     if phase == 7:
-        return {}
+        return {"report": str(val) if val else ""}
     return {}
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -257,7 +325,15 @@ def load_demo_resume():
 @app.post("/api/config")
 async def update_config(req: Request):
     body = await req.json()
-    for k in ("mode", "api_key", "threshold", "job_titles", "location"):
+    for k in (
+        "mode", "api_key", "ollama_model",
+        "threshold", "job_titles", "location",
+        "max_apps", "max_scrape_jobs", "days_old",
+        "cover_letter", "blacklist", "whitelist",
+        "experience_levels", "education_filter",
+        "include_unknown_education", "citizenship_filter",
+        "use_simplify",
+    ):
         if k in body:
             _S[k] = body[k]
     return {"ok": True}
@@ -290,9 +366,21 @@ def get_state():
         "has_resume": bool(_S.get("resume_text")),
         "resume_filename": _S.get("resume_filename"),
         "mode": _S.get("mode", "demo"),
+        "ollama_model": _S.get("ollama_model", "llama3.2"),
         "threshold": _S.get("threshold", 75),
         "job_titles": _S.get("job_titles", ""),
         "location": _S.get("location", "United States"),
+        "max_apps": _S.get("max_apps", 10),
+        "max_scrape_jobs": _S.get("max_scrape_jobs", 50),
+        "days_old": _S.get("days_old", 30),
+        "cover_letter": _S.get("cover_letter", False),
+        "blacklist": _S.get("blacklist", ""),
+        "whitelist": _S.get("whitelist", ""),
+        "experience_levels": _S.get("experience_levels", ["internship", "entry-level"]),
+        "education_filter": _S.get("education_filter", ["bachelors"]),
+        "include_unknown_education": _S.get("include_unknown_education", False),
+        "citizenship_filter": _S.get("citizenship_filter", "exclude_required"),
+        "use_simplify": _S.get("use_simplify", True),
         "profile": {
             "name": profile.get("name", ""),
             "email": profile.get("email", ""),
@@ -340,6 +428,7 @@ def get_state():
 def reset_state():
     for k in ("profile", "jobs", "scored", "applications", "tracker_path"):
         _S[k] = None
+    _S["tailored_map"] = {}
     _S["done"] = set()
     _S["error"] = {}
     _S["elapsed"] = {}
@@ -387,7 +476,18 @@ def run_phase2():
 
     def _fn():
         prov = _make_provider()
-        result = phase2_discover_jobs(_S["profile"], titles, loc, prov)
+        result = phase2_discover_jobs(
+            _S["profile"], titles, loc, prov,
+            use_simplify=_S.get("use_simplify", True),
+            max_jobs=_S.get("max_scrape_jobs", 50),
+            days_old=_S.get("days_old", 30),
+            education_filter=_S.get("education_filter") or None,
+            include_unknown_education=_S.get("include_unknown_education", False),
+        )
+        # Apply blacklist
+        bl = {c.strip().lower() for c in (_S.get("blacklist") or "").split(",") if c.strip()}
+        if bl:
+            result = [j for j in result if j.get("company", "").lower() not in bl]
         _S["jobs"] = result
         return result
 
@@ -401,12 +501,16 @@ def run_phase2():
 
 @app.get("/api/phase/3/run")
 def run_phase3():
-    if not _S.get("jobs"):
+    if _S.get("jobs") is None:
         raise HTTPException(400, "Run Phase 2 first")
 
     def _fn():
         prov = _make_provider()
-        result = phase3_score_jobs(_S["jobs"], _S["profile"], prov, min_score=60)
+        result = phase3_score_jobs(
+            _S["jobs"], _S["profile"], prov, min_score=60,
+            experience_levels=_S.get("experience_levels") or None,
+            citizenship_filter=_S.get("citizenship_filter", "all"),
+        )
         _S["scored"] = result
         return result
 
@@ -420,28 +524,34 @@ def run_phase3():
 
 @app.get("/api/phase/4/run")
 def run_phase4():
-    if not _S.get("scored"):
+    if _S.get("scored") is None:
         raise HTTPException(400, "Run Phase 3 first")
 
     def _fn():
         prov   = _make_provider()
         scored = _S["scored"] or []
         passed = [j for j in scored if j.get("filter_status") == "passed"]
-        apps   = []
+        tailored_map = {}
+        apps = []
         for job in passed:
+            jk = job.get("id") or job.get("title", "")
             try:
                 tailored = phase4_tailor_resume(
                     job, _S["profile"],
                     _S.get("resume_text", ""), prov,
+                    include_cover_letter=bool(_S.get("cover_letter", False)),
                 )
-                _save_tailored_resume(
+                resume_files = _save_tailored_resume(
                     job, tailored, _S["profile"],
                     _S.get("latex_source"),
                     resume_text=_S.get("resume_text", ""),
                 )
-                apps.append({**job, "tailored": {}, "status": "Tailored"})
+                resume_file = resume_files.get("pdf") or resume_files.get("tex")
+                tailored_map[jk] = {"job": job, "tailored": tailored, "resume_file": resume_file}
+                apps.append({**job, "resume_version": resume_file, "status": "Tailored"})
             except Exception as exc:
                 apps.append({**job, "status": "Error", "notes": str(exc)})
+        _S["tailored_map"] = tailored_map
         _S["applications"] = apps
         return apps
 
@@ -455,24 +565,27 @@ def run_phase4():
 
 @app.get("/api/phase/5/run")
 def run_phase5():
-    if not _S.get("applications"):
+    if _S.get("applications") is None:
         raise HTTPException(400, "Run Phase 4 first")
 
     def _fn():
         apps      = _S["applications"] or []
         thr       = _S.get("threshold", 75)
+        max_apps  = _S.get("max_apps", 10)
         already   = set()
         results   = []
-        auto_apps = [a for a in apps if a.get("score", 0) >= thr]
-        for job in auto_apps:
-            res = phase5_simulate_submission(job, already_applied=already)
-            already.add((
-                job.get("company", "").lower(),
-                job.get("title", "").lower(),
-            ))
-            results.append({**job, **res})
-        for job in (a for a in apps if a.get("score", 0) < thr):
-            results.append({**job, "status": "Manual Required", "confirmation": "N/A"})
+        submitted = 0
+        for job in apps:
+            if job.get("score", 0) >= thr and submitted < max_apps:
+                res = phase5_simulate_submission(job, already_applied=already)
+                already.add((
+                    job.get("company", "").lower(),
+                    job.get("title", "").lower(),
+                ))
+                submitted += 1
+                results.append({**job, **res})
+            else:
+                results.append({**job, "status": "Manual Required", "confirmation": "N/A"})
         _S["applications"] = results
         return results
 
@@ -512,6 +625,7 @@ def run_phase7():
         prov   = _make_provider()
         apps   = _S["applications"] or []
         report = phase7_run_report(apps, _S.get("tracker_path"), prov)
+        _S["report"] = report
         return report
 
     return StreamingResponse(
@@ -519,6 +633,110 @@ def run_phase7():
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+# ── Phase 2 cache ─────────────────────────────────────────────────────────────
+
+@app.get("/api/phase/2/cache")
+def phase2_cache_status():
+    import json as _json
+    cache = RESOURCES_DIR / "sample_jobs.json"
+    if not cache.exists():
+        return {"exists": False}
+    try:
+        data = _json.loads(cache.read_text(encoding="utf-8"))
+        first_url = (data[0].get("application_url", "") if data else "")
+        _demo_domains = [
+            "nvidia.com/careers", "intel.com/jobs", "microsoft.com/careers",
+            "apple.com/jobs", "lumentum.com/careers", "micron.com/careers",
+            "research.ibm.com", "samsung.com/us/careers",
+        ]
+        is_demo = any(d in first_url for d in _demo_domains)
+        age_h = int((time.time() - cache.stat().st_mtime) / 3600)
+        return {"exists": True, "count": len(data), "age_h": age_h, "is_demo": is_demo}
+    except Exception as e:
+        return {"exists": True, "count": 0, "age_h": 0, "is_demo": False, "error": str(e)}
+
+
+@app.delete("/api/phase/2/cache")
+def phase2_cache_clear():
+    cache = RESOURCES_DIR / "sample_jobs.json"
+    cache.unlink(missing_ok=True)
+    for k in ("jobs", "scored", "applications", "tracker_path"):
+        _S[k] = None
+    _S["tailored_map"] = {}
+    for phase in (2, 3, 4, 5, 6, 7):
+        _S["done"].discard(phase)
+        _S["error"].pop(phase, None)
+    return {"ok": True}
+
+
+# ── Ollama helpers ────────────────────────────────────────────────────────────
+
+@app.get("/api/ollama/status")
+def ollama_status():
+    import urllib.request as _ur
+    import json as _json
+    model = _S.get("ollama_model", "llama3.2")
+    try:
+        resp = _ur.urlopen("http://localhost:11434/api/tags", timeout=3)
+        data = _json.loads(resp.read().decode())
+        models = data.get("models", [])
+        local_names = [m.get("name", "") for m in models]
+        local_bases = {n.split(":")[0] for n in local_names}
+        req_base = model.split(":")[0]
+        pulled = (model in local_names) or (req_base in local_bases)
+        # Build rich model list with metadata
+        model_list = [
+            {
+                "name":   m.get("name", ""),
+                "size_gb": round(m.get("size", 0) / 1e9, 1),
+                "family": m.get("details", {}).get("family", ""),
+                "params": m.get("details", {}).get("parameter_size", ""),
+            }
+            for m in models
+        ]
+        return {
+            "running": True, "pulled": pulled, "model": model,
+            "available": sorted(local_bases),
+            "models": model_list,
+        }
+    except Exception as e:
+        return {"running": False, "pulled": False, "model": model, "available": [], "models": [], "error": str(e)}
+
+
+@app.get("/api/ollama/pull")
+def ollama_pull():
+    import subprocess
+    model = _S.get("ollama_model", "llama3.2")
+
+    def _stream():
+        yield _sse({"type": "start", "model": model})
+        try:
+            proc = subprocess.Popen(
+                ["ollama", "pull", model],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, bufsize=1,
+            )
+            for line in proc.stdout:
+                line = line.rstrip()
+                if line:
+                    yield _sse({"type": "log", "line": line})
+            proc.wait()
+            if proc.returncode == 0:
+                yield _sse({"type": "done", "model": model})
+            else:
+                yield _sse({"type": "error", "message": f"ollama pull exited with code {proc.returncode}"})
+        except FileNotFoundError:
+            yield _sse({"type": "error", "message": "ollama not found on PATH — install from ollama.com"})
+        except Exception as exc:
+            yield _sse({"type": "error", "message": str(exc)})
+
+    return StreamingResponse(
+        _stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 

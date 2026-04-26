@@ -1,0 +1,8 @@
+TAILORED RESUME
+Role: Sr. Hardware Engineer - ML Acceleration, Annapurna Labs @ Amazon Web Services
+Score: 78
+============================================================
+
+ATS GAPS
+ML Acceleration, Hardware Design for Machine Learning, Semiconductor Fabrication Optimization, Process Control for AI Hardware, Tensor Processing Unit (TPU) Architecture, High-Performance Computing (HPC) Hardware, Fabrication for AI Inference Chips, Process-Device Interaction, Advanced Etch Techniques, Fabrication for Neural Network Acceleration
+

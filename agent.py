@@ -74,6 +74,7 @@ def startup_checklist() -> dict:
         [t.strip() for t in raw.split(",")]
         if raw else ["IC Design Intern", "Photonics Engineer Intern", "FPGA/Hardware Intern"]
     )
+    cfg["job_titles_user_set"] = bool(raw)
 
     console.print("\n[bold]3. Preferred location[/bold]")
     cfg["location"] = input("   [Remote / United States]: ").strip() or "Remote"
@@ -126,6 +127,21 @@ def run_agent(config: dict, provider: BaseProvider) -> None:
     if not profile:
         console.print("[red]Phase 1 failed — cannot parse resume.[/red]")
         return
+
+    # If the user accepted the hardcoded default at the prompt, prefer
+    # Phase-1's resume-derived titles for the search. Explicit input wins.
+    if not config.get("job_titles_user_set"):
+        phase1_titles = [
+            str(t).strip()
+            for t in (profile.get("target_titles") or [])
+            if t and str(t).strip()
+        ]
+        if phase1_titles:
+            console.print(
+                f"  [cyan]ℹ  Using Phase-1 target titles for search: "
+                f"{', '.join(phase1_titles)}[/cyan]"
+            )
+            config["job_titles"] = phase1_titles
 
     jobs = phase2_discover_jobs(
         profile, config["job_titles"], config["location"], provider,

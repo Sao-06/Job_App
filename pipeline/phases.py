@@ -24,7 +24,7 @@ from .helpers import (infer_experience_level, infer_education_required,
                       filter_jobs_by_education, validate_job_urls)
 from .providers import BaseProvider
 from .resume import _build_demo_resume, _save_tailored_resume
-from .scrapers import JobSpyClient, SimplifyJobsScraper
+from .scrapers import JobSpyClient, SimplifyJobsScraper, sanitize_salary_field
 
 
 # ── Phase 1 ────────────────────────────────────────────────────────────────────
@@ -107,6 +107,78 @@ def _sort_newest_first(jobs: list) -> list:
     )
 
 
+def _load_cached_jobs(sample_file: Path):
+    """Read sample_jobs.json. Returns ``(jobs_list, meta)`` or ``(None, None)``.
+
+    Supports two on-disk formats:
+      - legacy: bare ``[ {...}, ... ]`` job list (no meta)
+      - new:    ``{"_meta": {...}, "jobs": [ {...}, ... ]}``
+    """
+    if not sample_file.exists():
+        return None, None
+    try:
+        with open(sample_file, encoding="utf-8") as f:
+            payload = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None, None
+    if isinstance(payload, dict) and "jobs" in payload:
+        return list(payload.get("jobs") or []), dict(payload.get("_meta") or {})
+    if isinstance(payload, list):
+        return payload, None
+    return None, None
+
+
+def _cache_titles_overlap(meta, current_titles: list) -> bool:
+    """Decide whether the cache may be used given *current_titles*.
+
+    - Missing meta (legacy file)        → bypass (force live scrape so the
+                                          new metadata gets written).
+    - Empty/None current_titles         → permissive: reuse cache.
+    - Otherwise: case-insensitive set intersection of cached vs. current
+      titles. Empty intersection → bypass.
+    """
+    if not meta:
+        return False
+    if not current_titles:
+        return True
+    cached = {str(t).strip().lower() for t in (meta.get("titles") or []) if t}
+    if not cached:
+        return False
+    requested = {str(t).strip().lower() for t in current_titles if t}
+    return bool(cached & requested)
+
+
+def _resolve_effective_titles(job_titles, profile: dict):
+    """Decide which titles will actually drive the scrape.
+
+    Returns ``(titles, source)`` where *source* is one of:
+      - ``"user"``    → caller-supplied titles are kept as-is
+      - ``"phase1"``  → caller passed nothing meaningful; falls back to
+                         ``profile["target_titles"]``
+      - ``"merged"``  → caller's titles plus phase-1 suggestions, deduped
+    """
+    incoming = [t for t in (job_titles or []) if t and str(t).strip()]
+    only_engineer = (
+        len(incoming) == 1 and str(incoming[0]).strip().lower() == "engineer"
+    )
+    phase1 = [str(t).strip() for t in (profile.get("target_titles") or []) if t]
+
+    if (not incoming or only_engineer) and phase1:
+        return phase1, "phase1"
+
+    if incoming and phase1:
+        merged: list = []
+        seen: set = set()
+        for t in (*incoming, *phase1):
+            key = str(t).strip().lower()
+            if key and key not in seen:
+                seen.add(key)
+                merged.append(str(t).strip())
+        return merged, "merged"
+
+    return incoming, "user"
+
+
 def phase2_discover_jobs(profile: dict, job_titles: list, location: str,
                           provider: BaseProvider,
                           use_simplify: bool = True,
@@ -115,7 +187,12 @@ def phase2_discover_jobs(profile: dict, job_titles: list, location: str,
                           education_filter=None,
                           include_unknown_education: bool = False) -> list:
     console.print("\n[bold cyan]Phase 2 — Job Discovery & Search[/bold cyan]")
-    console.print(f"  🔍 Searching: {', '.join(job_titles)}")
+
+    job_titles, _titles_source = _resolve_effective_titles(job_titles, profile)
+    console.print(
+        f"  🔍 Searching: {', '.join(job_titles) if job_titles else '(none)'} "
+        f"(source: {_titles_source})"
+    )
     console.print(f"  📍 Location: {location}")
     console.print(f"  📅 Posted within last {days_old} days")
     cap = max_jobs or MAX_SCRAPE_JOBS
@@ -123,9 +200,19 @@ def phase2_discover_jobs(profile: dict, job_titles: list, location: str,
     _t0 = time.time()
 
     sample_file = RESOURCES_DIR / "sample_jobs.json"
-    if sample_file.exists():
-        with open(sample_file, encoding="utf-8") as f:
-            jobs = json.load(f)
+    cached_jobs, cached_meta = _load_cached_jobs(sample_file)
+    cache_hit = cached_jobs is not None and _cache_titles_overlap(
+        cached_meta, job_titles,
+    )
+    if cached_jobs is not None and not cache_hit:
+        cached_titles = (cached_meta or {}).get("titles") or []
+        console.print(
+            "  [yellow]♻️  Cache bypassed: stored titles "
+            f"{cached_titles or '(none)'} don't overlap with current "
+            f"{job_titles}; scraping live.[/yellow]"
+        )
+    if cache_hit:
+        jobs = cached_jobs
         console.print(f"  📂 Loaded {len(jobs)} postings from resources/sample_jobs.json")
         # Always re-infer metadata — stale cache values would otherwise
         # mask upstream keyword-list improvements.
@@ -133,6 +220,7 @@ def phase2_discover_jobs(profile: dict, job_titles: list, location: str,
             job["experience_level"]     = infer_experience_level(job)
             job["education_required"]   = infer_education_required(job)
             job["citizenship_required"] = infer_citizenship_required(job)
+            job["salary_range"]         = sanitize_salary_field(job.get("salary_range"))
             job.setdefault("source", "cache")
         jobs = _filter_by_posting_age(jobs, days_old)
         if education_filter:
@@ -174,6 +262,7 @@ def phase2_discover_jobs(profile: dict, job_titles: list, location: str,
     ):
         jobs = board_client.fetch_jobs(
             job_titles, location, days=days_old, max_jobs=cap,
+            priority_titles=profile.get("target_titles") or [],
         )
 
     if not jobs:
@@ -188,6 +277,7 @@ def phase2_discover_jobs(profile: dict, job_titles: list, location: str,
         job["experience_level"]     = infer_experience_level(job)
         job["education_required"]   = infer_education_required(job)
         job["citizenship_required"] = infer_citizenship_required(job)
+        job["salary_range"]         = sanitize_salary_field(job.get("salary_range"))
         job.setdefault("source", "jobspy")
 
     if use_simplify:
@@ -235,8 +325,17 @@ def phase2_discover_jobs(profile: dict, job_titles: list, location: str,
     )
 
     RESOURCES_DIR.mkdir(exist_ok=True)
+    payload = {
+        "_meta": {
+            "titles":       list(job_titles),
+            "location":     location,
+            "days_old":     days_old,
+            "generated_at": datetime.now().isoformat(timespec="seconds"),
+        },
+        "jobs": jobs,
+    }
     with open(sample_file, "w", encoding="utf-8") as f:
-        json.dump(jobs, f, indent=2)
+        json.dump(payload, f, indent=2)
     console.print(f"  ✅ {len(jobs)} postings saved to resources/sample_jobs.json")
     console.print(f"  ⏱️  Phase 2 completed in [bold]{time.time() - _t0:.1f}s[/bold]")
     return jobs
@@ -281,16 +380,41 @@ def phase3_score_jobs(jobs: list, profile: dict, provider: BaseProvider,
         console.print(f"  🎯 Experience filter {experience_levels}: {len(to_score)} jobs remain")
 
     if citizenship_filter == "exclude_required":
+        # Hard filter: trust the inferred field, AND regex-scan the raw text
+        # so postings that slipped past inference still get caught.
+        citizenship_re = re.compile(
+            r"\b(?:u\.?s\.?\s*citizen(?:ship)?(?:\s+required)?"
+            r"|must\s+be\s+(?:a\s+)?u\.?s\.?\s*citizen"
+            r"|security\s+clearance"
+            r"|active\s+clearance"
+            r"|secret\s+clearance"
+            r"|top\s+secret"
+            r"|ts/sci"
+            r"|itar"
+            r"|export\s+control"
+            r"|green\s+card\s+holder)\b",
+            re.IGNORECASE,
+        )
         kept, dropped = [], []
         for j in to_score:
-            if j.get("citizenship_required", "unknown") != "yes":
+            haystack = " ".join([
+                str(j.get("description") or ""),
+                " ".join(str(r) for r in (j.get("requirements") or [])),
+            ])
+            text_match = bool(citizenship_re.search(haystack))
+            field_yes  = j.get("citizenship_required", "unknown") == "yes"
+            if not text_match and not field_yes:
                 kept.append(j)
             else:
+                reason = "regex match in description" if text_match else "citizenship required"
                 dropped.append({**j, "score": 0, "filter_status": "filtered_citizenship",
-                                "filter_reason": "citizenship required"})
+                                "filter_reason": reason})
         to_score = kept
         pre_filtered.extend(dropped)
-        console.print(f"  🇺🇸 Citizenship filter (exclude required): {len(to_score)} jobs remain")
+        console.print(
+            f"  🇺🇸 Citizenship filter (exclude required): {len(to_score)} jobs remain "
+            f"({len(dropped)} dropped, regex+field)"
+        )
     elif citizenship_filter == "only_required":
         kept, dropped = [], []
         for j in to_score:

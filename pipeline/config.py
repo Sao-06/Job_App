@@ -14,8 +14,10 @@ from rich.panel import Panel  # noqa: F401 – re-exported for convenience
 
 # ── User-editable constants ────────────────────────────────────────────────────
 OWNER_NAME       = "Your Name"   # TODO: replace with your full name
-OUTPUT_DIR       = Path("output")
-RESOURCES_DIR    = Path("resources")
+_PROJECT_ROOT    = Path(__file__).resolve().parent.parent
+OUTPUT_DIR       = _PROJECT_ROOT / "output"
+RESOURCES_DIR    = _PROJECT_ROOT / "resources"
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 TODAY            = date.today().strftime("%m/%d/%Y")
 MAX_SCRAPE_JOBS  = 50            # cap on jobs collected in Phase 2
 

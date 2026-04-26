@@ -9,7 +9,73 @@ import re
 from datetime import date
 
 from .config import console, MAX_SCRAPE_JOBS
-from .helpers import infer_experience_level, infer_education_required, infer_citizenship_required, deduplicate_jobs
+from .helpers import (infer_experience_level, infer_education_required,
+                      infer_citizenship_required, deduplicate_jobs,
+                      clean_location_for_glassdoor)
+
+
+# ── Query + salary helpers ────────────────────────────────────────────────────
+
+NAN_TOKENS = {"", "nan", "none", "null", "n/a", "0", "0.0", "-"}
+
+
+def normalize_salary(raw_min, raw_max, interval: str = "yr") -> str:
+    """Return ``$lo–$hi/iv`` or ``"Unknown"`` — never emits ``nan`` / ``$0``."""
+    def _bad(v):
+        return v is None or str(v).strip().lower() in NAN_TOKENS
+    if _bad(raw_min) or _bad(raw_max):
+        return "Unknown"
+    try:
+        lo, hi = float(raw_min), float(raw_max)
+    except (TypeError, ValueError):
+        return "Unknown"
+    if lo <= 0 or hi <= 0 or hi < lo:
+        return "Unknown"
+    iv = (interval or "yr").strip().lower()
+    if iv in NAN_TOKENS:
+        iv = "yr"
+    return f"${lo:,.0f}–${hi:,.0f}/{iv}"
+
+
+def sanitize_salary_field(value) -> str:
+    """Coerce any pre-formatted salary string to ``"Unknown"`` if junk."""
+    if value is None:
+        return "Unknown"
+    s = str(value).strip()
+    if not s or s.lower() in NAN_TOKENS or "nan" in s.lower() or "$0" in s:
+        return "Unknown"
+    return s
+
+
+def expand_title_queries(title: str) -> list:
+    """Return up to 3 specific search variants for *any* target title.
+
+    No role-specific tokens are baked in — variants derive from the title
+    itself. The bare token ``"Engineer"`` is rejected as too generic.
+    """
+    base = (title or "").strip()
+    if not base or base.lower() == "engineer":
+        return []
+    variants = [
+        base,
+        f'{base} Engineer' if "engineer" not in base.lower() else f'{base} Intern',
+        f'{base} Intern' if "intern" not in base.lower() else f'{base} Design',
+    ]
+    seen, out = set(), []
+    for v in variants:
+        key = v.lower()
+        if key not in seen:
+            seen.add(key)
+            out.append(v)
+    return out
+
+
+def distribute_quota(total: int, n_buckets: int) -> list:
+    """Split *total* across *n_buckets*; remainder lands in the first buckets."""
+    if n_buckets <= 0:
+        return []
+    base, rem = divmod(max(total, 0), n_buckets)
+    return [base + (1 if i < rem else 0) for i in range(n_buckets)]
 
 
 # ── Base ───────────────────────────────────────────────────────────────────────
@@ -24,10 +90,17 @@ class JobBoardClient:
 # ── JobSpy (multi-board) ───────────────────────────────────────────────────────
 
 class JobSpyClient(JobBoardClient):
-    """Scrapes LinkedIn, Indeed, Glassdoor, and ZipRecruiter via python-jobspy."""
+    """Scrapes LinkedIn, Indeed, and Glassdoor via python-jobspy.
+
+    ZipRecruiter is intentionally excluded — it surfaces aggregator noise that
+    frequently hides citizenship/clearance requirements.
+    """
+
+    SITE_NAMES = ["indeed", "linkedin", "glassdoor"]
+    PRIORITY_WEIGHT = 2  # Phase-1 suggested titles get this many quota shares
 
     def fetch_jobs(self, titles: list, location: str, days: int = 14,
-                   max_jobs: int = None) -> list:
+                   max_jobs: int = None, priority_titles: list = None) -> list:
         try:
             from jobspy import scrape_jobs
         except ImportError:
@@ -38,25 +111,91 @@ class JobSpyClient(JobBoardClient):
             return []
 
         cap = max_jobs or MAX_SCRAPE_JOBS
-        per_title = max(5, cap // max(len(titles), 1))
+
+        # Relevance fix: drop the bare "Engineer" placeholder and expand each
+        # remaining Phase-1 title into specific search variants. Phase-1
+        # suggested titles (priority_titles) are placed first AND get a
+        # heavier quota share so we don't drown in generic listings.
+        priority_set = {
+            (t or "").strip().lower()
+            for t in (priority_titles or [])
+            if t and t.strip().lower() != "engineer"
+        }
+        cleaned_titles = [t for t in titles if t and t.strip().lower() != "engineer"]
+        # Ensure all priority titles are present, in front, dedup-preserving order.
+        ordered: list = []
+        seen_titles: set = set()
+        for src in [list(priority_titles or []), cleaned_titles]:
+            for t in src:
+                key = (t or "").strip().lower()
+                if not key or key == "engineer" or key in seen_titles:
+                    continue
+                seen_titles.add(key)
+                ordered.append(t.strip())
+
+        # Build expanded queries paired with the source title's weight.
+        expanded: list = []   # list[(query, weight)]
+        for t in ordered:
+            weight = self.PRIORITY_WEIGHT if t.lower() in priority_set else 1
+            for q in expand_title_queries(t):
+                expanded.append((q, weight))
+        if not expanded:
+            expanded = [(t, 1) for t in (cleaned_titles or titles)]
+
+        # Weighted quota distribution: each share = cap / total_weight.
+        total_weight = sum(w for _, w in expanded) or 1
+        quotas = [max(1, (cap * w) // total_weight) for _, w in expanded]
         all_raw: list = []
 
-        for title in titles:
+        for (query, _w), quota in zip(expanded, quotas):
             if len(all_raw) >= cap:
                 break
+            if quota <= 0:
+                continue
+            remaining = cap - len(all_raw)
+            results_wanted = max(1, min(quota, remaining))
             try:
                 df = scrape_jobs(
-                    site_name=["linkedin", "indeed", "glassdoor", "zip_recruiter"],
-                    search_term=title,
+                    site_name=self.SITE_NAMES,
+                    search_term=query,
                     location=location,
-                    results_wanted=per_title,
+                    results_wanted=results_wanted,
                     hours_old=days * 24,
                     country_indeed="USA",
                 )
                 all_raw.extend(df.to_dict("records"))
-                console.print(f"  📡 '{title}': {len(df)} results scraped")
+                console.print(f"  📡 '{query}': {len(df)} results scraped (quota {quota})")
             except Exception as e:
-                console.print(f"  [yellow]JobSpy scrape failed for '{title}': {e}[/yellow]")
+                msg = str(e).lower()
+                # Glassdoor "location not parsed" → retry without Glassdoor,
+                # using a normalized location string.
+                if "location not parsed" in msg or "glassdoor" in msg:
+                    fallback_loc = clean_location_for_glassdoor(location)
+                    fallback_sites = [s for s in self.SITE_NAMES if s != "glassdoor"]
+                    console.print(
+                        f"  [yellow]Glassdoor parse failure for '{query}' — "
+                        f"retrying without Glassdoor (loc={fallback_loc!r})[/yellow]"
+                    )
+                    try:
+                        df = scrape_jobs(
+                            site_name=fallback_sites,
+                            search_term=query,
+                            location=fallback_loc,
+                            results_wanted=results_wanted,
+                            hours_old=days * 24,
+                            country_indeed="USA",
+                        )
+                        all_raw.extend(df.to_dict("records"))
+                        console.print(
+                            f"  📡 '{query}' (fallback): {len(df)} results scraped"
+                        )
+                        continue
+                    except Exception as e2:
+                        console.print(
+                            f"  [yellow]Fallback also failed for '{query}': {e2}[/yellow]"
+                        )
+                else:
+                    console.print(f"  [yellow]JobSpy scrape failed for '{query}': {e}[/yellow]")
 
         jobs = [self._map(r) for r in all_raw if r.get("job_url")]
         if max_jobs and len(jobs) > max_jobs:
@@ -73,10 +212,9 @@ class JobSpyClient(JobBoardClient):
         title = str(r.get("title") or "")
         uid   = hashlib.md5(f"{comp}{title}{url}".encode()).hexdigest()[:10]
 
-        mn  = r.get("min_amount")
-        mx  = r.get("max_amount")
-        iv  = r.get("interval") or "yr"
-        sal = f"${mn}–${mx}/{iv}" if (mn or mx) else ""
+        sal = normalize_salary(
+            r.get("min_amount"), r.get("max_amount"), r.get("interval") or "yr",
+        )
 
         loc    = str(r.get("location") or "")
         pd_raw = r.get("date_posted")
@@ -202,7 +340,7 @@ class SimplifyJobsScraper:
                 "posted_date":          date.today().isoformat(),
                 "description":          f"{title} internship at {company}.",
                 "requirements":         [],
-                "salary_range":         "",
+                "salary_range":         "Unknown",
                 "application_url":      url,
                 "platform":             "SimplifyJobs/GitHub",
                 "source":               "simplify",

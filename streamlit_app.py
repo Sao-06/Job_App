@@ -466,6 +466,10 @@ with st.sidebar:
     # ── Search settings ───────────────────────────────────────────────────────
     st.divider()
     st.markdown("### Search Settings")
+    # Apply any pending job-titles update from a prior rerun BEFORE the widget
+    # is instantiated — Streamlit forbids writing to a widget-bound key after.
+    if "_pending_job_titles" in st.session_state:
+        st.session_state.job_titles = st.session_state.pop("_pending_job_titles")
     st.text_input("Job titles (comma-separated)", key="job_titles")
     st.text_input("Location / Region", key="location")
     st.slider("Auto-apply threshold (score)", 50, 100, key="threshold")
@@ -617,6 +621,18 @@ with tab_pipeline:
                     )
                     if profile is not None:
                         st.session_state.profile = profile
+                        # Auto-populate the sidebar with Phase-1 suggestions
+                        # when the user hasn't customized it. Honors the
+                        # _pending_job_titles indirection (sidebar widget
+                        # rejects direct writes to its bound key).
+                        suggested = [
+                            str(t).strip()
+                            for t in (profile.get("target_titles") or [])
+                            if t and str(t).strip()
+                        ]
+                        current = (st.session_state.get("job_titles") or "").strip()
+                        if suggested and current.lower() in ("", "engineer"):
+                            st.session_state["_pending_job_titles"] = ", ".join(suggested)
                 st.rerun()
 
             if st.session_state.profile:
@@ -638,7 +654,7 @@ with tab_pipeline:
                             key="btn_use_titles",
                             help="Replaces your Search Settings job titles with these suggestions",
                         ):
-                            st.session_state.job_titles = ", ".join(titles)
+                            st.session_state["_pending_job_titles"] = ", ".join(titles)
                             st.rerun()
                     else:
                         st.caption("No titles suggested — add preferences in Search Settings.")

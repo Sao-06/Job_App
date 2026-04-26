@@ -1,0 +1,1100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Jobs AI</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,300&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0a0a0b;--bg2:#111114;--bg3:#18181c;--surface:#1c1c21;--surface2:#22222a;
+  --border:rgba(255,255,255,.08);--border2:rgba(255,255,255,.12);
+  --t1:#f0f0f5;--t2:#8e8e9a;--t3:#4a4a58;
+  --accent:oklch(62% 0.22 280);--accent-dim:oklch(62% 0.22 280 / .12);--accent-glow:oklch(62% 0.22 280 / .3);
+  --green:oklch(62% 0.18 145);--green-dim:oklch(62% 0.18 145 / .12);
+  --amber:oklch(72% 0.16 75);--amber-dim:oklch(72% 0.16 75 / .1);
+  --red:oklch(62% 0.18 25);
+  --display:'DM Serif Display',Georgia,serif;--body:'DM Sans',-apple-system,sans-serif;--mono:'JetBrains Mono',monospace;
+  --r:12px;--r2:20px;
+  --lbg:#f5f5f7;--lt1:#1d1d1f;--lt2:#6e6e73;--lt3:#aeaeb2;--lsurface:#fff;--lborder:rgba(0,0,0,.08);
+}
+html{scroll-behavior:smooth}
+body{font-family:var(--body);background:var(--bg);color:var(--t1);-webkit-font-smoothing:antialiased;overflow-x:hidden}
+.nav{position:fixed;top:0;left:0;right:0;z-index:200;height:52px;display:flex;align-items:center;justify-content:space-between;padding:0 32px;background:rgba(10,10,11,.75);backdrop-filter:blur(24px) saturate(180%);border-bottom:1px solid var(--border);transition:all .3s}
+.nav.on-light{background:rgba(245,245,247,.88);border-bottom-color:rgba(0,0,0,.08)}
+.nav-logo{font-family:var(--display);font-size:19px;letter-spacing:-.3px;color:var(--t1);cursor:pointer;transition:color .2s;user-select:none}
+.nav.on-light .nav-logo{color:var(--lt1)}
+.nav-links{display:flex;gap:28px;align-items:center}
+.nav-link{font-size:13px;font-weight:500;color:var(--t2);cursor:pointer;transition:color .15s;letter-spacing:-.01em}
+.nav.on-light .nav-link{color:var(--lt2)}
+.nav-link:hover,.nav.on-light .nav-link:hover{color:var(--accent)}
+.nav-right{display:flex;align-items:center;gap:12px}
+.nav-mode-btn{width:32px;height:18px;border-radius:9px;border:none;cursor:pointer;background:rgba(255,255,255,.14);position:relative;transition:all .3s;flex-shrink:0}
+.nav.on-light .nav-mode-btn{background:rgba(0,0,0,.1)}
+.nav-mode-knob{position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:rgba(255,255,255,.7);transition:all .3s}
+.nav-mode-btn.day .nav-mode-knob{transform:translateX(14px);background:var(--lt1)}
+.nav-mode-btn.day{background:rgba(255,255,255,.9)}
+.nav-pill{padding:6px 18px;border-radius:980px;border:none;cursor:pointer;background:var(--accent);color:#fff;font-family:var(--body);font-size:13px;font-weight:500;transition:all .2s}
+.nav-pill:hover{opacity:.85;transform:scale(.98)}
+.reveal{opacity:0;transform:translateY(28px);transition:opacity .75s cubic-bezier(.16,1,.3,1),transform .75s cubic-bezier(.16,1,.3,1)}
+.reveal.visible{opacity:1;transform:none}
+.d1{transition-delay:.08s}.d2{transition-delay:.16s}.d3{transition-delay:.24s}.d4{transition-delay:.32s}
+.hero{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:120px 2rem 80px;background:var(--bg);position:relative;overflow:hidden}
+.hero::before{content:'';position:absolute;inset:0;background:radial-gradient(ellipse 80% 60% at 50% 40%, oklch(55% 0.3 280 / .28) 0%, transparent 65%);pointer-events:none}
+.hero-eyebrow{font-size:12px;font-weight:500;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);margin-bottom:24px;position:relative}
+.hero h1{font-family:var(--display);font-size:clamp(54px,8vw,100px);line-height:1;letter-spacing:-.05em;color:var(--t1);margin-bottom:24px;position:relative}
+.hero h1 em{font-style:italic;color:oklch(70% 0.2 280)}
+.hero-sub{font-size:clamp(16px,2vw,20px);color:var(--t2);max-width:520px;line-height:1.58;margin:0 auto 44px;font-weight:300;position:relative}
+.hero-btns{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin-bottom:64px;position:relative}
+.btn-fill{padding:13px 30px;border-radius:980px;border:none;cursor:pointer;background:var(--accent);color:#fff;font-family:var(--body);font-size:16px;font-weight:500;transition:all .2s;display:inline-flex;align-items:center;gap:8px}
+.btn-fill:hover{opacity:.85;transform:scale(.98)}
+.btn-ghost{padding:13px 30px;border-radius:980px;border:1px solid var(--border2);background:transparent;color:var(--t1);cursor:pointer;font-family:var(--body);font-size:16px;font-weight:500;transition:all .2s}
+.btn-ghost:hover{background:rgba(255,255,255,.06)}
+.hero-terminal{position:relative;z-index:1;max-width:700px;margin:0 auto;background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r2);overflow:hidden;box-shadow:0 40px 100px rgba(0,0,0,.7),0 0 0 1px var(--border);transform:perspective(1200px) rotateX(3deg)}
+.ht-bar{background:var(--bg3);border-bottom:1px solid var(--border);padding:12px 16px;display:flex;align-items:center;gap:7px}
+.ht-dot{width:10px;height:10px;border-radius:50%}
+.ht-label{margin-left:6px;font-family:var(--mono);font-size:11px;color:var(--t3)}
+.ht-body{padding:20px 22px;font-family:var(--mono);font-size:12.5px;line-height:1.85;text-align:left}
+.c-dim{color:var(--t3)}.c-acc{color:var(--accent)}.c-green{color:var(--green)}.c-amber{color:var(--amber)}.c-t1{color:var(--t1);font-weight:500}
+.cursor{display:inline-block;width:7px;height:13px;background:var(--accent);vertical-align:middle;margin-left:2px;animation:blink 1.1s step-end infinite}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
+.stats-band{background:var(--lbg);padding:72px 2rem}
+.stats-inner{max-width:860px;margin:0 auto;display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--lborder);border-radius:24px;overflow:hidden}
+.stat-cell{background:var(--lbg);padding:52px 36px;text-align:center}
+.stat-n{font-family:var(--display);font-size:clamp(52px,8vw,80px);color:var(--lt1);letter-spacing:-.05em;line-height:1}
+.stat-l{font-size:15px;color:var(--lt2);margin-top:10px}
+.feat-dark{background:var(--bg);padding:110px 2rem}
+.feat-light{background:var(--lbg);padding:110px 2rem}
+.feat-in{max-width:1080px;margin:0 auto;display:grid;grid-template-columns:1fr 1fr;gap:72px;align-items:center}
+.feat-in.flip{direction:rtl}.feat-in.flip>*{direction:ltr}
+.feat-ey{font-size:12px;font-weight:500;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);margin-bottom:16px}
+.feat-dark .feat-ey{color:oklch(68% 0.2 280)}.feat-light .feat-ey{color:oklch(52% 0.2 280)}
+.feat-h{font-family:var(--display);font-size:clamp(34px,4.5vw,50px);line-height:1.06;letter-spacing:-.04em;margin-bottom:18px}
+.feat-dark .feat-h{color:var(--t1)}.feat-light .feat-h{color:var(--lt1)}
+.feat-p{font-size:16px;line-height:1.68;font-weight:300;letter-spacing:-.01em;margin-bottom:24px}
+.feat-dark .feat-p{color:var(--t2)}.feat-light .feat-p{color:var(--lt2)}
+.feat-lnk{font-size:14px;font-weight:500;color:var(--accent);cursor:pointer;display:inline-flex;align-items:center;gap:5px;transition:gap .18s}
+.feat-lnk:hover{gap:10px}
+.fv{border-radius:var(--r2);overflow:hidden;position:relative}
+.fv-dark{background:var(--bg2);border:1px solid var(--border2);box-shadow:0 20px 64px rgba(0,0,0,.5)}
+.fv-light{background:#fff;border:1px solid var(--lborder);box-shadow:0 20px 64px rgba(0,0,0,.09)}
+.fv-p{padding:26px}
+.fv-h{font-family:var(--mono);font-size:10px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;margin-bottom:16px}
+.fv-dark .fv-h{color:var(--t3)}.fv-light .fv-h{color:var(--lt3)}
+.diff-ln{font-family:var(--mono);font-size:12px;padding:5px 10px;border-radius:6px;margin-bottom:4px;line-height:1.4}
+.dl-add{background:oklch(62% 0.22 280 / .12);color:oklch(68% 0.2 280)}
+.dl-mod{background:oklch(62% 0.18 145 / .1);color:oklch(65% 0.18 145)}
+.dl-neu{color:var(--t3)}
+.jd-row{display:flex;align-items:center;justify-content:space-between;padding:11px 0;border-bottom:1px solid var(--lborder)}
+.jd-row:last-child{border:none}
+.jd-co{font-size:14px;font-weight:600;color:var(--lt1)}.jd-role{font-size:12px;color:var(--lt2);margin-top:1px}
+.jd-score{font-family:var(--display);font-size:22px;letter-spacing:-.04em}
+.js-hi{color:oklch(55% 0.22 280)}.js-md{color:oklch(65% 0.18 75)}
+.apply-row{display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--border)}
+.apply-row:last-child{border:none}
+.apply-ic{width:34px;height:34px;border-radius:9px;background:var(--accent-dim);display:flex;align-items:center;justify-content:center;font-size:15px;flex-shrink:0}
+.apply-tx{font-size:13px;font-weight:500;color:var(--t1)}.apply-sub{font-size:11px;color:var(--t3);margin-top:2px}
+.apply-st{margin-left:auto;font-size:11px;padding:3px 9px;border-radius:980px}
+.st-done{background:var(--green-dim);color:var(--green)}.st-run{background:var(--amber-dim);color:var(--amber)}
+.pl-section{background:var(--lbg);padding:110px 2rem}
+.pl-inner{max-width:820px;margin:0 auto}
+.pl-intro{text-align:center;margin-bottom:64px}
+.pl-intro h2{font-family:var(--display);font-size:clamp(40px,5vw,56px);color:var(--lt1);letter-spacing:-.05em;margin-bottom:14px}
+.pl-intro p{font-size:17px;color:var(--lt2);font-weight:300}
+.pl-steps{position:relative;padding-left:0}
+.pl-track{position:absolute;left:26px;top:4px;bottom:4px;width:1px;background:linear-gradient(to bottom,oklch(55% 0.22 280 / .4),transparent)}
+.pl-step{display:flex;gap:24px;padding-bottom:40px;position:relative}
+.pl-step:last-child{padding-bottom:0}
+.pl-num{width:52px;height:52px;border-radius:50%;border:1px solid var(--lborder);background:var(--lbg);display:flex;align-items:center;justify-content:center;font-family:var(--display);font-size:20px;color:oklch(55% 0.22 280);flex-shrink:0;position:relative;z-index:1;box-shadow:0 0 0 8px var(--lbg)}
+.pl-body{padding-top:12px}
+.pl-title{font-size:17px;font-weight:600;color:var(--lt1);letter-spacing:-.02em;margin-bottom:5px}
+.pl-desc{font-size:14px;color:var(--lt2);line-height:1.62;font-weight:300}
+.pl-time{display:inline-block;margin-top:7px;font-family:var(--mono);font-size:11px;color:var(--lt3)}
+.rv-section{background:var(--bg);padding:110px 2rem}
+.rv-inner{max-width:1080px;margin:0 auto}
+.rv-top{text-align:center;margin-bottom:56px}
+.rv-top h2{font-family:var(--display);font-size:clamp(38px,5vw,54px);color:var(--t1);letter-spacing:-.05em;margin-bottom:12px}
+.rv-top p{font-size:17px;color:var(--t2);font-weight:300}
+.rv-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+.rv-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r2);padding:30px}
+.rv-stars{color:var(--amber);font-size:13px;letter-spacing:2px;margin-bottom:18px}
+.rv-quote{font-family:var(--display);font-size:18px;line-height:1.48;color:var(--t1);letter-spacing:-.025em;margin-bottom:22px;font-style:italic}
+.rv-auth{display:flex;align-items:center;gap:11px}
+.rv-av{width:38px;height:38px;border-radius:50%;background:linear-gradient(135deg,oklch(55% 0.22 280),oklch(62% 0.2 200));display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600;color:#fff;flex-shrink:0}
+.rv-name{font-size:13px;font-weight:600;color:var(--t1)}.rv-role{font-size:11px;color:var(--t3);margin-top:2px}
+.cta-section{padding:140px 2rem;text-align:center;background:var(--bg2);position:relative;overflow:hidden}
+.cta-section::before{content:'';position:absolute;inset:0;background:radial-gradient(ellipse 70% 70% at 50% 50%,oklch(52% 0.28 280 / .35) 0%,transparent 70%);pointer-events:none}
+.cta-section h2{font-family:var(--display);font-size:clamp(44px,7vw,76px);color:var(--t1);letter-spacing:-.05em;margin-bottom:18px;position:relative}
+.cta-section p{font-size:18px;color:var(--t2);font-weight:300;margin-bottom:40px;position:relative}
+.cta-section .btn-fill{font-size:17px;padding:15px 40px;position:relative}
+.footer{background:var(--bg);border-top:1px solid var(--border);padding:36px 2rem;text-align:center;font-size:13px;color:var(--t3)}
+.app-root{height:calc(100vh - 52px);display:flex;flex-direction:column;background:var(--bg)}
+.app-topbar{display:flex;align-items:center;justify-content:space-between;padding:0 24px;height:44px;flex-shrink:0;background:var(--bg2);border-bottom:1px solid var(--border)}
+.app-topbar-dots{display:flex;gap:6px;align-items:center}
+.win-dot{width:11px;height:11px;border-radius:50%;cursor:pointer}
+.app-topbar-title{flex:1;text-align:center;font-family:var(--mono);font-size:12px;color:var(--t3);letter-spacing:.01em;margin-right:88px}
+.app-body{display:flex;flex:1;overflow:hidden}
+.app-sb{width:236px;flex-shrink:0;background:var(--bg2);border-right:1px solid var(--border);display:flex;flex-direction:column;overflow-y:auto}
+.sb-logo{padding:18px 18px 14px;border-bottom:1px solid var(--border);font-family:var(--display);font-size:18px;color:var(--t1);cursor:pointer;letter-spacing:-.3px;transition:color .2s;user-select:none}
+.sb-logo:hover{color:var(--accent)}
+.sb-logo small{display:block;font-family:var(--body);font-size:11px;font-weight:400;color:var(--t3);letter-spacing:0;margin-top:2px;font-style:normal}
+.sb-nav{padding:10px 8px}
+.sb-nav-item{display:flex;align-items:center;gap:9px;padding:8px 11px;border-radius:8px;font-size:13px;font-weight:500;color:var(--t2);cursor:pointer;transition:all .15s;user-select:none}
+.sb-nav-item:hover{background:var(--surface);color:var(--t1)}
+.sb-nav-item.active{background:var(--accent-dim);color:var(--accent)}
+.sb-nav-icon{font-size:14px;flex-shrink:0}
+.sb-pip{width:6px;height:6px;border-radius:50%;margin-left:auto}
+.sb-sep{border:none;border-top:1px solid var(--border);margin:8px 16px}
+.sb-section{padding:6px 16px 12px}
+.sb-section-label{font-family:var(--mono);font-size:10px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;color:var(--t3);margin-bottom:8px;padding:8px 0 0}
+.sb-select{width:100%;padding:7px 10px;border-radius:8px;border:1px solid var(--border2);background:var(--bg3);color:var(--t1);font-family:var(--body);font-size:13px;outline:none;cursor:pointer}
+.sb-input{width:100%;padding:7px 10px;border-radius:8px;border:1px solid var(--border2);background:var(--bg3);color:var(--t1);font-family:var(--mono);font-size:12px;outline:none;margin-top:6px;transition:border-color .15s}
+.sb-input:focus{border-color:var(--accent)}
+.sb-info{font-size:11px;color:var(--t3);line-height:1.5;margin-top:6px;padding:8px 10px;background:var(--bg3);border-radius:7px;border:1px solid var(--border)}
+.sb-resume-btn{margin:0 8px;padding:8px 12px;border-radius:8px;border:1px dashed var(--border2);background:transparent;color:var(--t2);font-family:var(--body);font-size:12px;cursor:pointer;transition:all .15s;width:calc(100% - 16px);text-align:left;display:flex;align-items:center;gap:8px}
+.sb-resume-btn:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-dim)}
+.sb-resume-btn.loaded{border-style:solid;border-color:var(--green);color:var(--green);background:var(--green-dim)}
+.sb-range-wrap{padding:0 16px 14px}
+.sb-range-top{display:flex;justify-content:space-between;font-size:12px;color:var(--t2);margin-bottom:6px}
+.sb-range-val{font-family:var(--mono);font-size:14px;color:var(--accent);font-weight:500}
+.sb-range{width:100%;accent-color:var(--accent)}
+.sb-reset-btn{margin:auto 8px 12px;padding:7px 12px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--t3);font-family:var(--body);font-size:12px;cursor:pointer;width:calc(100% - 16px);transition:all .15s}
+.sb-reset-btn:hover{border-color:var(--red);color:var(--red)}
+.app-main{flex:1;overflow-y:auto;display:flex;flex-direction:column}
+.pipeline-page{padding:32px 40px;flex:1}
+.pipeline-top{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:6px}
+.pipeline-title{font-family:var(--display);font-size:28px;letter-spacing:-.04em;color:var(--t1)}
+.pipeline-meta{font-family:var(--mono);font-size:11px;color:var(--t3);margin-top:4px}
+.run-all-btn{padding:9px 22px;border-radius:980px;border:none;cursor:pointer;background:var(--accent);color:#fff;font-family:var(--body);font-size:13px;font-weight:500;transition:all .2s;display:inline-flex;align-items:center;gap:8px;flex-shrink:0}
+.run-all-btn:hover{opacity:.85}.run-all-btn:disabled{opacity:.35;cursor:not-allowed}
+.prog-track{height:3px;background:var(--surface2);border-radius:2px;margin:18px 0 28px;overflow:hidden}
+.prog-fill{height:100%;background:linear-gradient(90deg,oklch(55% 0.24 280),oklch(62% 0.2 200));border-radius:2px;transition:width .7s cubic-bezier(.16,1,.3,1)}
+.phase-acc{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);margin-bottom:8px;overflow:hidden;transition:border-color .2s}
+.phase-acc.is-active{border-color:var(--border2)}
+.phase-acc.is-done{border-color:oklch(62% 0.18 145 / .2)}
+.phase-acc.is-running{border-color:var(--amber);animation:phase-pulse 2s ease-in-out infinite}
+@keyframes phase-pulse{0%,100%{box-shadow:0 0 0 0 var(--amber-dim)}50%{box-shadow:0 0 0 4px var(--amber-dim)}}
+.phase-acc-header{display:flex;align-items:center;gap:12px;padding:14px 18px;cursor:pointer;user-select:none;transition:background .15s}
+.phase-acc-header:hover{background:rgba(255,255,255,.02)}
+.phase-num-badge{width:28px;height:28px;border-radius:7px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:12px;font-weight:500;background:var(--surface);color:var(--t3);border:1px solid var(--border);transition:all .2s}
+.is-done .phase-num-badge{background:var(--green-dim);color:var(--green);border-color:oklch(62% 0.18 145 / .2)}
+.is-running .phase-num-badge{background:var(--amber-dim);color:var(--amber);border-color:oklch(72% 0.16 75 / .3)}
+.is-active .phase-num-badge{background:var(--accent-dim);color:var(--accent);border-color:var(--accent-glow)}
+.phase-acc-title{font-size:14px;font-weight:600;color:var(--t1);flex:1;letter-spacing:-.02em}
+.is-done .phase-acc-title{color:var(--t2)}
+.phase-acc-badge{font-family:var(--mono);font-size:10px;font-weight:500;padding:2px 8px;border-radius:5px;letter-spacing:.02em}
+.pab-done{background:var(--green-dim);color:var(--green)}
+.pab-run{background:var(--amber-dim);color:var(--amber)}
+.pab-ready{background:var(--accent-dim);color:var(--accent)}
+.pab-locked{background:var(--surface);color:var(--t3)}
+.pab-error{background:oklch(62% 0.18 25 / .15);color:var(--red)}
+.phase-acc-time{font-family:var(--mono);font-size:11px;color:var(--t3);margin-left:4px}
+.phase-chevron{font-size:11px;color:var(--t3);transition:transform .2s}
+.phase-chevron.open{transform:rotate(180deg)}
+.phase-acc-body{border-top:1px solid var(--border);overflow:hidden}
+.cli-out{background:var(--bg);padding:16px 18px;font-family:var(--mono);font-size:12.5px;line-height:1.8;min-height:60px}
+.cli-prompt{color:var(--t3);margin-bottom:6px}
+.cli-line{animation:fadein .2s ease}
+@keyframes fadein{from{opacity:0;transform:translateX(-4px)}to{opacity:1;transform:none}}
+.c1{color:var(--t3)}.c2{color:var(--t2)}.cg{color:var(--green)}.ca{color:var(--accent)}.cy{color:var(--amber)}.cr{color:var(--red)}
+.phase-action-area{padding:14px 18px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.phase-run-btn{padding:8px 20px;border-radius:980px;border:none;cursor:pointer;background:var(--accent);color:#fff;font-family:var(--body);font-size:13px;font-weight:500;transition:all .2s;display:inline-flex;align-items:center;gap:8px}
+.phase-run-btn:hover{opacity:.85}.phase-run-btn:disabled{opacity:.35;cursor:not-allowed}
+.phase-locked-msg{font-size:13px;color:var(--t3);font-style:italic}
+.phase-data{padding:16px 18px;border-top:1px solid var(--border)}
+.metrics-strip{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px}
+.metric-chip{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 16px;min-width:100px}
+.mc-val{font-family:var(--display);font-size:26px;letter-spacing:-.04em;color:var(--t1)}
+.mc-label{font-size:11px;color:var(--t3);margin-top:3px}
+.data-tbl{width:100%;border-collapse:collapse;font-size:12.5px}
+.data-tbl th{font-family:var(--mono);font-size:10px;font-weight:500;letter-spacing:.06em;text-transform:uppercase;color:var(--t3);padding:6px 10px;text-align:left;border-bottom:1px solid var(--border)}
+.data-tbl td{padding:9px 10px;border-bottom:1px solid rgba(255,255,255,.04);color:var(--t2)}
+.data-tbl tr:last-child td{border:none}
+.data-tbl tr:hover td{background:rgba(255,255,255,.02)}
+.score-num{font-family:var(--display);font-size:16px;letter-spacing:-.03em}
+.tag{font-size:10px;font-weight:500;padding:2px 8px;border-radius:4px;font-family:var(--mono)}
+.tag-green{background:var(--green-dim);color:var(--green)}
+.tag-amber{background:var(--amber-dim);color:var(--amber)}
+.tag-red{background:oklch(62% 0.18 25 / .12);color:var(--red)}
+.tag-dim{background:var(--surface);color:var(--t3)}
+.done-banner{padding:18px 18px;border-top:1px solid var(--border);display:flex;align-items:flex-start;gap:12px}
+.done-banner-icon{font-size:18px;flex-shrink:0;margin-top:1px}
+.done-banner-text{font-size:13px;color:var(--t2);line-height:1.6}
+.done-banner-text strong{color:var(--green);font-weight:600}
+.info-note{padding:10px 14px;border-radius:8px;background:var(--accent-dim);border:1px solid oklch(62% 0.22 280 / .2);font-size:12px;color:var(--t2);line-height:1.5}
+.error-note{padding:10px 14px;border-radius:8px;background:oklch(62% 0.18 25 / .1);border:1px solid oklch(62% 0.18 25 / .25);font-size:12px;color:var(--red);line-height:1.5}
+.page-pad{padding:36px 40px}
+.page-h{font-family:var(--display);font-size:28px;letter-spacing:-.04em;color:var(--t1);margin-bottom:4px}
+.page-sub{font-family:var(--mono);font-size:11px;color:var(--t3);margin-bottom:28px}
+.empty-state{padding:48px;text-align:center;color:var(--t3);font-size:14px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);font-style:italic}
+.complete-banner{margin:28px 0 0;padding:24px 28px;border-radius:var(--r2);background:linear-gradient(135deg,oklch(55% 0.24 280 / .2),oklch(62% 0.2 200 / .12));border:1px solid oklch(62% 0.22 280 / .3)}
+.cb-title{font-family:var(--display);font-size:24px;letter-spacing:-.04em;color:var(--t1);margin-bottom:8px}
+.cb-desc{font-size:14px;color:var(--t2);line-height:1.6;margin-bottom:18px}
+.cb-reset{padding:8px 20px;border-radius:980px;border:1px solid var(--border2);background:transparent;color:var(--t2);font-family:var(--body);font-size:13px;cursor:pointer;transition:all .15s}
+.cb-reset:hover{border-color:var(--accent);color:var(--accent)}
+.spin{width:13px;height:13px;border:2px solid rgba(255,255,255,.25);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite;display:inline-block}
+@keyframes spin{to{transform:rotate(360deg)}}
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border2);border-radius:3px}
+/* titles chip list */
+.chip-list{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}
+.chip{font-size:11px;padding:3px 9px;border-radius:980px;background:var(--accent-dim);color:var(--accent);font-family:var(--mono)}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback } = React;
+
+/* ─── Static CLI data (animation only — real data comes from API) ─── */
+const PHASE_CLI = {
+  1: ['$ python pipeline.py --phase 1','>> Parsing resume file…','>> Extracting skills with NLP…','>> Found skills & target roles','>> Flagging resume gaps…','>> Profile saved','✓  Phase 1 complete'],
+  2: ['$ python pipeline.py --phase 2','>> Loading job boards: LinkedIn, Indeed, Glassdoor','>> SimplifyJobs GitHub feed: enabled','>> Fetching postings…','>> Deduplication pass…','>> Education + citizenship filters applied','✓  Phase 2 complete — sample_jobs.json updated'],
+  3: ['$ python pipeline.py --phase 3','>> Scoring jobs against profile…','>> Applying threshold filter…','>> Ranking passed jobs by score','✓  Phase 3 complete'],
+  4: ['$ python pipeline.py --phase 4','>> Tailoring resume per job…','>>   Reordering skills to match JD','>>   Rewriting summary to mirror title','>>   ATS gap analysis complete','>> Saving .tex + .pdf to output/','✓  Phase 4 complete'],
+  5: ['$ python pipeline.py --phase 5','>> Navigating to careers portals…','>>   Filling form fields from profile','>>   Uploading tailored resume','>> Flagging manual-review jobs','✓  Phase 5 complete'],
+  6: ['$ python pipeline.py --phase 6','>> Writing Job_Applications_Tracker_YYYY-MM.xlsx…','>>   17 columns | color-coded by status','>>   Summary Dashboard tab added','✓  Phase 6 complete'],
+  7: ['$ python pipeline.py --phase 7','>> Generating run report…','>> Report saved to output/','✓  Phase 7 complete — pipeline finished'],
+};
+
+/* ─── API helpers ─── */
+const api = {
+  get:    url  => fetch(url).then(r => r.json()),
+  post:   (url, body) => fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)}).then(r => r.json()),
+  upload: (url, file) => { const fd = new FormData(); fd.append('file', file); return fetch(url, {method:'POST', body:fd}).then(r => r.json()); },
+};
+
+/* ─── SSE phase runner ─── */
+function runPhaseSSE(n, onLog, onDone, onError) {
+  const es = new EventSource(`/api/phase/${n}/run`);
+  es.onmessage = (e) => {
+    if (!e.data || e.data.startsWith(':')) return;
+    try {
+      const msg = JSON.parse(e.data);
+      if (msg.type === 'start')  onLog('start');
+      if (msg.type === 'done')  { es.close(); onDone(msg); }
+      if (msg.type === 'error') { es.close(); onError(msg.message); }
+    } catch {}
+  };
+  es.onerror = () => { es.close(); onError('Connection error'); };
+  return () => es.close();
+}
+
+/* ─── NAV ─── */
+function Nav({ dark, setDark, view, setView, scrollY }) {
+  const lit = scrollY > 80 && view === 'landing';
+  return (
+    <nav className={`nav${lit ? ' on-light' : ''}`}>
+      <span className="nav-logo" onClick={() => setView('landing')}>Jobs AI</span>
+      <div className="nav-links">
+        {view === 'landing' && <>
+          <span className="nav-link" onClick={() => document.getElementById('features')?.scrollIntoView({behavior:'smooth'})}>Features</span>
+          <span className="nav-link" onClick={() => document.getElementById('pipeline-section')?.scrollIntoView({behavior:'smooth'})}>How it works</span>
+          <span className="nav-link" onClick={() => document.getElementById('reviews')?.scrollIntoView({behavior:'smooth'})}>Reviews</span>
+        </>}
+        {view === 'app' && <span className="nav-link" onClick={() => setView('landing')}>← Home</span>}
+      </div>
+      <div className="nav-right">
+        <button className={`nav-mode-btn${!dark ? ' day' : ''}`} onClick={() => setDark(d => !d)}>
+          <div className="nav-mode-knob" />
+        </button>
+        <button className="nav-pill" onClick={() => setView(view === 'app' ? 'landing' : 'app')}>
+          {view === 'app' ? 'Home' : 'Open App'}
+        </button>
+      </div>
+    </nav>
+  );
+}
+
+/* ─── REVEAL ─── */
+function Reveal({ children, delay = 0, className = '' }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    const el = ref.current; if (!el) return;
+    const obs = new IntersectionObserver(([e]) => { if (e.isIntersecting) el.classList.add('visible'); }, { threshold: 0.1 });
+    obs.observe(el); return () => obs.disconnect();
+  }, []);
+  return <div ref={ref} className={`reveal${delay ? ` d${delay}` : ''} ${className}`}>{children}</div>;
+}
+
+/* ─── HERO terminal card ─── */
+function TerminalCard() {
+  const lines = PHASE_CLI[3].slice(0, 6);
+  const [visible, setVisible] = useState(0);
+  useEffect(() => {
+    if (visible >= lines.length) return;
+    const t = setTimeout(() => setVisible(v => v + 1), 320);
+    return () => clearTimeout(t);
+  }, [visible]);
+  const colorLine = l => {
+    if (l.startsWith('✓')) return <span className="c-green">{l}</span>;
+    if (l.startsWith('$')) return <span className="c-dim">{l}</span>;
+    if (l.includes('NVIDIA') || l.includes('skills') || l.includes('jobs')) return <span className="c-acc">{l}</span>;
+    return <span style={{color:'var(--t2)'}}>{l}</span>;
+  };
+  return (
+    <div className="hero-terminal">
+      <div className="ht-bar">
+        <div className="ht-dot" style={{background:'#ff5f57'}}/><div className="ht-dot" style={{background:'#febc2e'}}/><div className="ht-dot" style={{background:'#28c840'}}/>
+        <span className="ht-label">job-application-agent — pipeline</span>
+      </div>
+      <div className="ht-body">
+        {lines.slice(0, visible).map((l, i) => <div key={i} className="cli-line">{colorLine(l)}</div>)}
+        {visible < lines.length && <div><span className="c1">▌</span></div>}
+        {visible >= lines.length && <div><span className="cg">jobs_ai@agent:~$ </span><span className="cursor"/></div>}
+      </div>
+    </div>
+  );
+}
+
+function Hero({ setView }) {
+  return (
+    <section className="hero">
+      <div className="reveal visible" style={{position:'relative',zIndex:1}}>
+        <div className="hero-eyebrow">Autonomous 7-Phase Pipeline</div>
+        <h1>Your job search,<br /><em>automated.</em></h1>
+        <p className="hero-sub">Upload your resume once. AI discovers jobs, scores them, tailors your materials, and applies — while you focus on what matters.</p>
+        <div className="hero-btns">
+          <button className="btn-fill" onClick={() => setView('app')}>Open App →</button>
+          <button className="btn-ghost" onClick={() => document.getElementById('features')?.scrollIntoView({behavior:'smooth'})}>See how it works</button>
+        </div>
+      </div>
+      <Reveal style={{width:'100%',maxWidth:700,margin:'0 auto',position:'relative',zIndex:1}}>
+        <TerminalCard />
+      </Reveal>
+    </section>
+  );
+}
+
+const DEMO_JOBS_STATIC = [
+  { co:'NVIDIA',  role:'Hardware Eng Intern',    s:92 },
+  { co:'Apple',   role:'Mixed-Signal IC Intern', s:85 },
+  { co:'Intel',   role:'FPGA Design Intern',     s:78 },
+  { co:'Micron',  role:'ML Hardware Intern',     s:70 },
+  { co:'Samsung', role:'EE Design Intern',       s:65 },
+];
+
+function Stats() {
+  return (
+    <section className="stats-band">
+      <Reveal><div className="stats-inner">
+        {[['7','Pipeline phases'],['~89','Avg. jobs found'],['4 min','Full pipeline time']].map(([n,l]) =>
+          <div key={l} className="stat-cell"><div className="stat-n">{n}</div><div className="stat-l">{l}</div></div>
+        )}
+      </div></Reveal>
+    </section>
+  );
+}
+
+function FeatResume() {
+  return (
+    <section className="feat-dark" id="features">
+      <div className="feat-in">
+        <Reveal className="feat-text">
+          <div className="feat-ey">Phase 1 & 4 · Resume AI</div>
+          <h2 className="feat-h">Your resume,<br/>rewritten per job.</h2>
+          <p className="feat-p">The AI extracts every skill from your resume, then surgically rewrites it for each posting — mirroring JD keywords, reordering sections, and closing ATS gaps.</p>
+          <span className="feat-lnk">Learn more <span>→</span></span>
+        </Reveal>
+        <Reveal delay={2}>
+          <div className="fv fv-dark fv-p">
+            <div className="fv-h">Your_Name_Resume_NVIDIA_Hardware_Intern.tex</div>
+            {[['dl-add','+ FPGA · Verilog · Signal Integrity → promoted to top'],['dl-mod','~ Summary rewritten to mirror JD title'],['dl-mod','~ 3 bullets rephrased with JD keywords'],['dl-neu','  ATS match score: 92 / 100 ✓'],['dl-neu','  PDF + LaTeX output saved to output/']].map(([c,t],i) =>
+              <div key={i} className={`diff-ln ${c}`}>{t}</div>
+            )}
+          </div>
+        </Reveal>
+      </div>
+    </section>
+  );
+}
+
+function FeatDiscovery() {
+  return (
+    <section className="feat-light">
+      <div className="feat-in flip">
+        <Reveal>
+          <div className="feat-ey">Phase 2 & 3 · Discovery</div>
+          <h2 className="feat-h" style={{color:'var(--lt1)'}}>Scrapes four<br/>job boards at once.</h2>
+          <p className="feat-p" style={{color:'var(--lt2)'}}>LinkedIn, Indeed, Glassdoor, and SimplifyJobs — deduped, filtered by experience, education, citizenship, and date. Ranked by an AI scoring model.</p>
+          <span className="feat-lnk" style={{color:'oklch(52% 0.2 280)'}}>See the scoring model <span>→</span></span>
+        </Reveal>
+        <Reveal delay={2}>
+          <div className="fv fv-light fv-p">
+            <div className="fv-h" style={{color:'var(--lt3)'}}>Scored results — sorted by relevance</div>
+            {DEMO_JOBS_STATIC.map(j =>
+              <div key={j.co} className="jd-row">
+                <div><div className="jd-co">{j.co}</div><div className="jd-role">{j.role}</div></div>
+                <span className={`jd-score ${j.s >= 75 ? 'js-hi' : 'js-md'}`}>{j.s}</span>
+              </div>
+            )}
+          </div>
+        </Reveal>
+      </div>
+    </section>
+  );
+}
+
+function FeatApply() {
+  return (
+    <section className="feat-dark">
+      <div className="feat-in">
+        <Reveal>
+          <div className="feat-ey">Phases 5–7 · Apply & Track</div>
+          <h2 className="feat-h">Applies while<br/>you sleep.</h2>
+          <p className="feat-p">Jobs above your threshold are submitted automatically. Every run produces a color-coded Excel tracker and a plain-language report.</p>
+          <span className="feat-lnk">View output formats <span>→</span></span>
+        </Reveal>
+        <Reveal delay={2}>
+          <div className="fv fv-dark fv-p">
+            <div className="fv-h">Pipeline run — live</div>
+            {[{ic:'📄',t:'Resume tailored',s:'NVIDIA — Hardware Eng Intern',st:'done'},{ic:'📤',t:'Application submitted',s:'Apple — Mixed-Signal IC Intern',st:'done'},{ic:'📊',t:'Excel tracker updated',s:'6 rows written',st:'done'},{ic:'⏳',t:'Intel — submitting',s:'In progress…',st:'run'},{ic:'📝',t:'Run report',s:'Pending',st:'pend'}].map((a,i) =>
+              <div key={i} className="apply-row">
+                <div className="apply-ic">{a.ic}</div>
+                <div><div className="apply-tx">{a.t}</div><div className="apply-sub">{a.s}</div></div>
+                <span className={`apply-st ${a.st==='done'?'st-done':a.st==='run'?'st-run':''}`}>{a.st==='done'?'Done':a.st==='run'?'Running…':'Pending'}</span>
+              </div>
+            )}
+          </div>
+        </Reveal>
+      </div>
+    </section>
+  );
+}
+
+function PipelineSection() {
+  const steps = [
+    {n:'1',t:'Resume Ingestion',d:'Parses PDF, DOCX, or LaTeX. Extracts skills, education, target roles, and flags resume gaps.',time:'~15s'},
+    {n:'2',t:'Job Discovery',d:'Scrapes LinkedIn, Indeed, Glassdoor + SimplifyJobs. Deduplicates and filters by date, education, and experience level.',time:'~60s'},
+    {n:'3',t:'Relevance Scoring',d:'Scores each job 0–100 against your profile. Mandatory reasoning field on every result.',time:'~45s'},
+    {n:'4',t:'Resume Tailoring',d:'Rewrites your summary, reorders skills, rephrases bullets to mirror JD keywords. ATS gap analysis included.',time:'~2m'},
+    {n:'5',t:'Application Submission',d:'Navigates to the application URL, fills form fields from your profile, and uploads tailored resume.',time:'~1m'},
+    {n:'6',t:'Excel Tracker',d:'Writes a 17-column color-coded tracker to output/ with a Summary Dashboard tab.',time:'~3s'},
+    {n:'7',t:'Run Report',d:'Plain-language summary: stats, top 3 jobs, manual items, and recommended next steps.',time:'~5s'},
+  ];
+  return (
+    <section className="pl-section" id="pipeline-section">
+      <div className="pl-inner">
+        <Reveal className="pl-intro"><h2>The 7-phase pipeline</h2><p>Run them one at a time or cascade all seven automatically.</p></Reveal>
+        <div className="pl-steps">
+          <div className="pl-track" />
+          {steps.map((s, i) =>
+            <Reveal key={s.n} delay={Math.min(i+1,4)} className="pl-step">
+              <div className="pl-num">{s.n}</div>
+              <div className="pl-body"><div className="pl-title">{s.t}</div><div className="pl-desc">{s.d}</div><span className="pl-time">{s.time}</span></div>
+            </Reveal>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ReviewsSection() {
+  const rs = [
+    {q:'"I used to spend 3 hours customising my resume per application. Jobs AI does it in 20 seconds — and the tailoring is genuinely better."',n:'Priya S.',r:'EE PhD Student, MIT',i:'PS',s:5},
+    {q:'"Set it up Sunday night. Monday I had 6 tailored resumes, 3 submitted, and a tracker. Got my first callback by Wednesday."',n:'Marcus T.',r:'Hardware Engineer',i:'MT',s:5},
+    {q:'"The scoring model surfaced companies I\'d never heard of that turned out to be great fits for my FPGA background."',n:'Yuki L.',r:'FPGA Design Intern, Intel',i:'YL',s:5},
+  ];
+  return (
+    <section className="rv-section" id="reviews">
+      <div className="rv-inner">
+        <Reveal className="rv-top"><h2>Engineers who've used it</h2><p>Real feedback from real job hunters.</p></Reveal>
+        <div className="rv-grid">
+          {rs.map((r,i) =>
+            <Reveal key={r.n} delay={i+1} className="rv-card">
+              <div className="rv-stars">{'★'.repeat(r.s)}</div>
+              <div className="rv-quote">{r.q}</div>
+              <div className="rv-auth"><div className="rv-av">{r.i}</div><div><div className="rv-name">{r.n}</div><div className="rv-role">{r.r}</div></div></div>
+            </Reveal>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function CTASection({ setView }) {
+  return (
+    <section className="cta-section">
+      <Reveal>
+        <h2>Start your search today.</h2>
+        <p>Demo · Ollama · Anthropic Claude. Three modes, zero lock-in.</p>
+        <button className="btn-fill" onClick={() => setView('app')}>Open the App →</button>
+      </Reveal>
+    </section>
+  );
+}
+
+/* ════════════════ APP VIEW ════════════════ */
+
+function CLILog({ phaseN, running, done }) {
+  const lines = PHASE_CLI[phaseN] || [];
+  const [shown, setShown] = useState(done ? lines.length : 0);
+  useEffect(() => {
+    if (!running) { if (done) setShown(lines.length); return; }
+    setShown(0);
+    let i = 0;
+    const iv = setInterval(() => { i++; setShown(i); if (i >= lines.length) clearInterval(iv); }, 280);
+    return () => clearInterval(iv);
+  }, [running, done, phaseN]);
+
+  const color = l => {
+    if (l.startsWith('✓')) return 'cg';
+    if (l.startsWith('$')) return 'c1';
+    if (l.startsWith('>>   ')) return 'ca';
+    if (l.includes('Warning') || l.includes('Flagged')) return 'cy';
+    return 'c2';
+  };
+  return (
+    <div className="cli-out">
+      {lines.slice(0, shown).map((l, i) => <div key={i} className={`cli-line ${color(l)}`}>{l}</div>)}
+      {running && shown < lines.length && <div className="c1">▌</div>}
+    </div>
+  );
+}
+
+function PhaseAcc({ n, title, done, running, locked, errored, elapsed, children }) {
+  const [open, setOpen] = useState(!done && !locked);
+  useEffect(() => { if (running || errored) setOpen(true); }, [running, errored]);
+
+  const cls = `phase-acc${done?' is-done':running?' is-running':errored?'':!locked?' is-active':''}`;
+  const badgeTxt = done?'DONE':running?'RUNNING':errored?'ERROR':locked?'LOCKED':'READY';
+  const badgeCls = done?'pab-done':running?'pab-run':errored?'pab-error':locked?'pab-locked':'pab-ready';
+  const numTxt = done?'✓':running?'…':errored?'!':n;
+
+  return (
+    <div className={cls}>
+      <div className="phase-acc-header" onClick={() => setOpen(o => !o)}>
+        <div className="phase-num-badge">{numTxt}</div>
+        <span className="phase-acc-title">{title}</span>
+        {elapsed && <span className="phase-acc-time">{elapsed}s</span>}
+        <span className={`phase-acc-badge ${badgeCls}`}>{badgeTxt}</span>
+        <span className={`phase-chevron${open?' open':''}`}>▾</span>
+      </div>
+      {open && <div className="phase-acc-body">{children}</div>}
+    </div>
+  );
+}
+
+function AppView({ setView }) {
+  const [tab, setTab] = useState('pipeline');
+  const [cfg, setCfg] = useState({ mode:'demo', apiKey:'', threshold:75, jobTitles:'', location:'United States' });
+  const [resumeFile, setResumeFile] = useState(null);     // {name, loaded}
+  const [phaseRunning, setPhaseRunning] = useState(null);
+  const [phaseDone, setPhaseDone] = useState(new Set());
+  const [phaseError, setPhaseError] = useState({});
+  const [phaseElapsed, setPhaseElapsed] = useState({});
+  const [phaseData, setPhaseData] = useState({});         // phase -> API result data
+  const [srvState, setSrvState] = useState(null);         // last /api/state response
+  const fileInputRef = useRef(null);
+
+  /* load state on mount */
+  useEffect(() => {
+    api.get('/api/state').then(s => {
+      setSrvState(s);
+      const done = new Set((s.done || []).map(Number));
+      setPhaseDone(done);
+      setPhaseError(s.error || {});
+      setPhaseElapsed(s.elapsed || {});
+      setCfg(c => ({
+        ...c,
+        mode: s.mode || 'demo',
+        threshold: s.threshold || 75,
+        jobTitles: s.job_titles || '',
+        location: s.location || 'United States',
+      }));
+      if (s.has_resume) setResumeFile({ name: s.resume_filename || 'resume loaded', loaded: true });
+    });
+  }, []);
+
+  /* refresh state after phase completes */
+  const refreshState = useCallback(() => {
+    api.get('/api/state').then(s => { setSrvState(s); });
+  }, []);
+
+  /* sync config to backend (debounced via effect) */
+  const cfgRef = useRef(cfg);
+  cfgRef.current = cfg;
+  useEffect(() => {
+    const t = setTimeout(() => {
+      api.post('/api/config', {
+        mode: cfg.mode,
+        api_key: cfg.apiKey,
+        threshold: cfg.threshold,
+        job_titles: cfg.jobTitles,
+        location: cfg.location,
+      });
+    }, 400);
+    return () => clearTimeout(t);
+  }, [cfg]);
+
+  /* ── phase runner ── */
+  const runPhase = useCallback((n) => {
+    if (phaseRunning !== null) return;
+    setPhaseRunning(n);
+    setPhaseError(e => { const r = {...e}; delete r[n]; return r; });
+    const cancel = runPhaseSSE(n,
+      () => {},
+      (msg) => {
+        setPhaseRunning(null);
+        setPhaseDone(d => new Set([...d, n]));
+        setPhaseElapsed(e => ({ ...e, [n]: msg.elapsed }));
+        setPhaseData(d => ({ ...d, [n]: msg.data }));
+        refreshState();
+      },
+      (err) => {
+        setPhaseRunning(null);
+        setPhaseError(e => ({ ...e, [n]: err }));
+      }
+    );
+    return cancel;
+  }, [phaseRunning, refreshState]);
+
+  /* ── run all ── */
+  const runAll = useCallback(async () => {
+    if (phaseRunning !== null) return;
+    // reset
+    setPhaseDone(new Set()); setPhaseError({}); setPhaseElapsed({}); setPhaseData({});
+    await api.post('/api/reset', {});
+    for (let n = 1; n <= 7; n++) {
+      await new Promise((resolve, reject) => {
+        setPhaseRunning(n);
+        setPhaseError(e => { const r = {...e}; delete r[n]; return r; });
+        runPhaseSSE(n,
+          () => {},
+          (msg) => {
+            setPhaseRunning(null);
+            setPhaseDone(d => new Set([...d, n]));
+            setPhaseElapsed(e => ({ ...e, [n]: msg.elapsed }));
+            setPhaseData(d => ({ ...d, [n]: msg.data }));
+            resolve();
+          },
+          (err) => {
+            setPhaseRunning(null);
+            setPhaseError(e => ({ ...e, [n]: err }));
+            reject(err);
+          }
+        );
+      }).catch(() => { /* stop cascade on error */ return Promise.reject(); });
+    }
+    refreshState();
+  }, [phaseRunning, refreshState]);
+
+  /* ── reset ── */
+  const reset = useCallback(() => {
+    api.post('/api/reset', {}).then(() => {
+      setPhaseDone(new Set()); setPhaseError({}); setPhaseElapsed({}); setPhaseData({});
+      setSrvState(null);
+    });
+  }, []);
+
+  /* ── resume upload ── */
+  const handleFileChange = async (e) => {
+    const file = e.target.files?.[0]; if (!file) return;
+    const res = await api.upload('/api/resume/upload', file);
+    if (res.ok) setResumeFile({ name: res.filename, loaded: true });
+    else alert('Upload failed: ' + (res.detail || 'unknown error'));
+  };
+  const loadDemo = async () => {
+    const res = await api.post('/api/resume/demo', {});
+    if (res.ok) setResumeFile({ name: 'demo_resume.txt', loaded: true });
+  };
+
+  const isDone    = n => phaseDone.has(n);
+  const isRunning = n => phaseRunning === n;
+  const isLocked  = n => n > 1 && !phaseDone.has(n - 1) && phaseRunning !== n;
+  const hasError  = n => !!phaseError[n];
+  const nDone     = phaseDone.size;
+  const thr       = cfg.threshold;
+
+  const tabs = [
+    { id:'pipeline', icon:'⚡', label:'Pipeline' },
+    { id:'tracker',  icon:'📊', label:'Tracker' },
+    { id:'output',   icon:'📁', label:'Output Files' },
+  ];
+
+  /* derived data for display */
+  const p3data = phaseData[3] || srvState?.scored_summary || null;
+  const p1data = phaseData[1] || srvState?.profile || null;
+  const p2data = phaseData[2] || null;
+  const p4data = phaseData[4] || null;
+  const p5data = phaseData[5] || null;
+  const applications = srvState?.applications || [];
+  const outputFiles  = srvState?.output_files  || [];
+
+  return (
+    <div className="app-root">
+      {/* title bar */}
+      <div className="app-topbar">
+        <div className="app-topbar-dots">
+          <div className="win-dot" style={{background:'#ff5f57'}} onClick={() => setView('landing')} title="Home"/>
+          <div className="win-dot" style={{background:'#febc2e'}}/>
+          <div className="win-dot" style={{background:'#28c840'}}/>
+        </div>
+        <div className="app-topbar-title">Job Application Agent · {cfg.mode} mode</div>
+      </div>
+
+      <div className="app-body">
+        {/* ── Sidebar ── */}
+        <div className="app-sb">
+          <div className="sb-logo" onClick={() => setView('landing')}>Jobs AI<small>← back to home</small></div>
+
+          <div className="sb-nav">
+            {tabs.map(t =>
+              <div key={t.id} className={`sb-nav-item${tab===t.id?' active':''}`} onClick={() => setTab(t.id)}>
+                <span className="sb-nav-icon">{t.icon}</span>{t.label}
+                {t.id==='pipeline' && <div className="sb-pip" style={{background: nDone===7?'var(--green)':nDone>0?'var(--amber)':'var(--border2)'}}/>}
+              </div>
+            )}
+          </div>
+
+          <hr className="sb-sep"/>
+
+          <div className="sb-section">
+            <div className="sb-section-label">LLM Backend</div>
+            <select className="sb-select" value={cfg.mode} onChange={e => setCfg(c => ({...c, mode:e.target.value}))}>
+              <option value="demo">Demo (no API key)</option>
+              <option value="anthropic">Anthropic Claude</option>
+              <option value="ollama">Ollama (local)</option>
+            </select>
+            {cfg.mode==='anthropic' && <input className="sb-input" type="password" placeholder="sk-ant-api03-…" value={cfg.apiKey} onChange={e => setCfg(c => ({...c, apiKey:e.target.value}))}/>}
+            {cfg.mode==='demo' && <div className="sb-info">No key needed. Template matching + cached/scraped EE postings.</div>}
+            {cfg.mode==='ollama' && <div className="sb-info">Requires Ollama at localhost:11434<br/><code style={{fontSize:10}}>ollama serve &amp;&amp; ollama pull llama3.2</code></div>}
+          </div>
+
+          <hr className="sb-sep"/>
+
+          <div className="sb-section">
+            <div className="sb-section-label">Resume</div>
+          </div>
+          <button className={`sb-resume-btn${resumeFile?.loaded?' loaded':''}`} onClick={() => fileInputRef.current?.click()}>
+            <span>{resumeFile?.loaded ? '📄' : '⊕'}</span>
+            {resumeFile?.loaded ? resumeFile.name : 'Upload resume (PDF/DOCX/TEX)'}
+          </button>
+          <input ref={fileInputRef} type="file" accept=".pdf,.docx,.txt,.tex,.md" style={{display:'none'}} onChange={handleFileChange}/>
+          {!resumeFile?.loaded && (
+            <button className="sb-resume-btn" style={{marginTop:6}} onClick={loadDemo}>
+              <span>🤖</span>Load demo resume
+            </button>
+          )}
+
+          <hr className="sb-sep"/>
+
+          <div className="sb-section">
+            <div className="sb-section-label">Search Settings</div>
+            <input className="sb-input" placeholder="Job titles (comma-separated)" value={cfg.jobTitles} onChange={e => setCfg(c => ({...c, jobTitles:e.target.value}))}/>
+            <input className="sb-input" style={{marginTop:6}} placeholder="Location / Remote / United States" value={cfg.location} onChange={e => setCfg(c => ({...c, location:e.target.value}))}/>
+          </div>
+
+          <hr className="sb-sep"/>
+
+          <div className="sb-range-wrap">
+            <div className="sb-range-top">
+              <span style={{color:'var(--t3)'}}>Auto-apply ≥</span>
+              <span className="sb-range-val">{thr}</span>
+            </div>
+            <input className="sb-range" type="range" min={50} max={100} value={thr} onChange={e => setCfg(c => ({...c, threshold:+e.target.value}))}/>
+          </div>
+
+          <div style={{flex:1}}/>
+          <button className="sb-reset-btn" onClick={reset}>⟳ Reset pipeline</button>
+        </div>
+
+        {/* ── Main ── */}
+        <div className="app-main">
+
+          {/* ═══ PIPELINE TAB ═══ */}
+          {tab === 'pipeline' && (
+            <div className="pipeline-page">
+              <div className="pipeline-top">
+                <div>
+                  <div className="pipeline-title">Pipeline</div>
+                  <div className="pipeline-meta">{nDone} / 7 phases complete · {cfg.mode} · threshold {thr}</div>
+                </div>
+                <button className="run-all-btn" disabled={phaseRunning!==null || !resumeFile?.loaded} onClick={runAll}>
+                  {phaseRunning ? <><span className="spin"/>Running…</> : '▶ Run all 7 phases'}
+                </button>
+              </div>
+              <div className="prog-track"><div className="prog-fill" style={{width:`${(nDone/7)*100}%`}}/></div>
+
+              {/* Phase 1 */}
+              <PhaseAcc n={1} title="Resume Ingestion & Profile Extraction" done={isDone(1)} running={isRunning(1)} locked={false} errored={hasError(1)} elapsed={phaseElapsed[1]}>
+                {(isDone(1) || isRunning(1)) && <CLILog phaseN={1} running={isRunning(1)} done={isDone(1)}/>}
+                {hasError(1) && <div className="phase-action-area"><div className="error-note">Error: {phaseError[1]}</div></div>}
+                <div className="phase-action-area">
+                  {isDone(1) && p1data && (
+                    <div className="done-banner">
+                      <span className="done-banner-icon">✓</span>
+                      <div className="done-banner-text">
+                        <strong>{p1data.name || 'Profile'}</strong> extracted — {(p1data.top_hard_skills||[]).length} hard skills, {(p1data.top_soft_skills||[]).length} soft skills
+                        {(p1data.resume_gaps||[]).length > 0 && <>, <span style={{color:'var(--amber)'}}>{p1data.resume_gaps.length} gaps flagged</span></>}.<br/>
+                        {(p1data.target_titles||[]).length > 0 && <>
+                          <span style={{color:'var(--t3)'}}>Suggested: </span>
+                          <div className="chip-list">{p1data.target_titles.map(t => <span key={t} className="chip">{t}</span>)}</div>
+                        </>}
+                      </div>
+                    </div>
+                  )}
+                  {!isDone(1) && !isRunning(1) && (
+                    !resumeFile?.loaded
+                      ? <div className="phase-locked-msg">Load a resume from the sidebar first.</div>
+                      : <button className="phase-run-btn" disabled={phaseRunning!==null} onClick={() => runPhase(1)}>
+                          {isRunning(1) ? <><span className="spin"/>Parsing…</> : 'Extract Profile →'}
+                        </button>
+                  )}
+                </div>
+              </PhaseAcc>
+
+              {/* Phase 2 */}
+              <PhaseAcc n={2} title="Job Discovery" done={isDone(2)} running={isRunning(2)} locked={isLocked(2)} errored={hasError(2)} elapsed={phaseElapsed[2]}>
+                {(isDone(2) || isRunning(2)) && <CLILog phaseN={2} running={isRunning(2)} done={isDone(2)}/>}
+                {hasError(2) && <div className="phase-action-area"><div className="error-note">Error: {phaseError[2]}</div></div>}
+                <div className="phase-action-area">
+                  {isDone(2) && p2data && (
+                    <div className="phase-data" style={{borderTop:'none',paddingTop:0}}>
+                      <div className="metrics-strip">
+                        <div className="metric-chip"><div className="mc-val">{p2data.total}</div><div className="mc-label">Jobs found</div></div>
+                      </div>
+                    </div>
+                  )}
+                  {!isDone(2) && !isRunning(2) && (
+                    isLocked(2)
+                      ? <span className="phase-locked-msg">Complete Phase 1 first.</span>
+                      : <button className="phase-run-btn" disabled={phaseRunning!==null} onClick={() => runPhase(2)}>
+                          {isRunning(2) ? <><span className="spin"/>Scraping…</> : 'Discover Jobs →'}
+                        </button>
+                  )}
+                </div>
+              </PhaseAcc>
+
+              {/* Phase 3 */}
+              <PhaseAcc n={3} title="Relevance Scoring & Shortlisting" done={isDone(3)} running={isRunning(3)} locked={isLocked(3)} errored={hasError(3)} elapsed={phaseElapsed[3]}>
+                {(isDone(3) || isRunning(3)) && <CLILog phaseN={3} running={isRunning(3)} done={isDone(3)}/>}
+                {hasError(3) && <div className="phase-action-area"><div className="error-note">Error: {phaseError[3]}</div></div>}
+                <div className="phase-action-area">
+                  {isLocked(3) && <span className="phase-locked-msg">Complete Phase 2 first.</span>}
+                  {!isLocked(3) && !isDone(3) && !isRunning(3) && !hasError(3) &&
+                    <button className="phase-run-btn" disabled={phaseRunning!==null} onClick={() => runPhase(3)}>Score Jobs →</button>
+                  }
+                </div>
+                {isDone(3) && p3data && (
+                  <div className="phase-data">
+                    <div className="metrics-strip">
+                      <div className="metric-chip"><div className="mc-val" style={{color:'var(--accent)'}}>{p3data.auto}</div><div className="mc-label">Auto-eligible ≥{thr}</div></div>
+                      <div className="metric-chip"><div className="mc-val" style={{color:'var(--amber)'}}>{p3data.manual}</div><div className="mc-label">Review needed</div></div>
+                      <div className="metric-chip"><div className="mc-val" style={{color:'var(--t3)'}}>{p3data.below}</div><div className="mc-label">Below threshold</div></div>
+                      {p3data.filtered > 0 && <div className="metric-chip"><div className="mc-val" style={{color:'var(--t3)'}}>{p3data.filtered}</div><div className="mc-label">Filtered out</div></div>}
+                    </div>
+                    {(p3data.jobs||[]).length > 0 && (
+                      <table className="data-tbl">
+                        <thead><tr><th>Company</th><th>Role</th><th>Score</th><th>Skills matched</th><th>Status</th></tr></thead>
+                        <tbody>
+                          {p3data.jobs.map((j,i) =>
+                            <tr key={i}>
+                              <td style={{fontWeight:600,color:'var(--t1)'}}>{j.co}</td>
+                              <td>{j.role}</td>
+                              <td><span className="score-num" style={{color:j.score>=thr?'var(--accent)':'var(--amber)'}}>{j.score}</span></td>
+                              <td style={{fontSize:11,fontFamily:'var(--mono)',color:'var(--t3)'}}>{j.skills}</td>
+                              <td><span className={`tag ${j.score>=thr?'tag-green':'tag-amber'}`}>{j.score>=thr?'auto':'review'}</span></td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                )}
+              </PhaseAcc>
+
+              {/* Phase 4 */}
+              <PhaseAcc n={4} title="Resume Tailoring" done={isDone(4)} running={isRunning(4)} locked={isLocked(4)} errored={hasError(4)} elapsed={phaseElapsed[4]}>
+                {(isDone(4) || isRunning(4)) && <CLILog phaseN={4} running={isRunning(4)} done={isDone(4)}/>}
+                {hasError(4) && <div className="phase-action-area"><div className="error-note">Error: {phaseError[4]}</div></div>}
+                <div className="phase-action-area">
+                  {isLocked(4) && <span className="phase-locked-msg">Complete Phase 3 first.</span>}
+                  {!isLocked(4) && !isDone(4) && !isRunning(4) && !hasError(4) &&
+                    <button className="phase-run-btn" disabled={phaseRunning!==null} onClick={() => runPhase(4)}>Tailor Resumes →</button>
+                  }
+                </div>
+                {isDone(4) && p4data && (
+                  <div className="done-banner">
+                    <span className="done-banner-icon">✓</span>
+                    <div className="done-banner-text"><strong>{p4data.count} tailored resumes</strong> saved to output/ — {(p4data.titles||[]).join(', ')}</div>
+                  </div>
+                )}
+              </PhaseAcc>
+
+              {/* Phase 5 */}
+              <PhaseAcc n={5} title="Application Submission" done={isDone(5)} running={isRunning(5)} locked={isLocked(5)} errored={hasError(5)} elapsed={phaseElapsed[5]}>
+                {(isDone(5) || isRunning(5)) && <CLILog phaseN={5} running={isRunning(5)} done={isDone(5)}/>}
+                {hasError(5) && <div className="phase-action-area"><div className="error-note">Error: {phaseError[5]}</div></div>}
+                <div className="phase-action-area">
+                  {isLocked(5) && <span className="phase-locked-msg">Complete Phase 4 first.</span>}
+                  {!isLocked(5) && !isDone(5) && !isRunning(5) && !hasError(5) &&
+                    <button className="phase-run-btn" disabled={phaseRunning!==null} onClick={() => runPhase(5)}>Submit Applications →</button>
+                  }
+                </div>
+                {isDone(5) && p5data && (
+                  <div className="done-banner">
+                    <span className="done-banner-icon">✓</span>
+                    <div className="done-banner-text">
+                      <strong>{p5data.applied} applied</strong> · {p5data.manual} flagged for manual review
+                    </div>
+                  </div>
+                )}
+              </PhaseAcc>
+
+              {/* Phase 6 */}
+              <PhaseAcc n={6} title="Excel Tracker Update" done={isDone(6)} running={isRunning(6)} locked={isLocked(6)} errored={hasError(6)} elapsed={phaseElapsed[6]}>
+                {(isDone(6) || isRunning(6)) && <CLILog phaseN={6} running={isRunning(6)} done={isDone(6)}/>}
+                {hasError(6) && <div className="phase-action-area"><div className="error-note">Error: {phaseError[6]}</div></div>}
+                <div className="phase-action-area">
+                  {isLocked(6) && <span className="phase-locked-msg">Complete Phase 5 first.</span>}
+                  {!isLocked(6) && !isDone(6) && !isRunning(6) && !hasError(6) &&
+                    <button className="phase-run-btn" disabled={phaseRunning!==null} onClick={() => runPhase(6)}>Write Tracker →</button>
+                  }
+                </div>
+                {isDone(6) && phaseData[6] && (
+                  <div className="done-banner">
+                    <span className="done-banner-icon">✓</span>
+                    <div className="done-banner-text"><strong>{phaseData[6].tracker || 'Tracker'}</strong> written · 17 columns · color-coded</div>
+                  </div>
+                )}
+              </PhaseAcc>
+
+              {/* Phase 7 */}
+              <PhaseAcc n={7} title="Run Report" done={isDone(7)} running={isRunning(7)} locked={isLocked(7)} errored={hasError(7)} elapsed={phaseElapsed[7]}>
+                {(isDone(7) || isRunning(7)) && <CLILog phaseN={7} running={isRunning(7)} done={isDone(7)}/>}
+                {hasError(7) && <div className="phase-action-area"><div className="error-note">Error: {phaseError[7]}</div></div>}
+                <div className="phase-action-area">
+                  {isLocked(7) && <span className="phase-locked-msg">Complete Phase 6 first.</span>}
+                  {!isLocked(7) && !isDone(7) && !isRunning(7) && !hasError(7) &&
+                    <button className="phase-run-btn" disabled={phaseRunning!==null} onClick={() => runPhase(7)}>Generate Report →</button>
+                  }
+                </div>
+                {isDone(7) && (
+                  <div className="done-banner">
+                    <span className="done-banner-icon">✓</span>
+                    <div className="done-banner-text"><strong>Run report saved</strong> to output/</div>
+                  </div>
+                )}
+              </PhaseAcc>
+
+              {/* All done */}
+              {isDone(7) && (
+                <div className="complete-banner">
+                  <div className="cb-title">Pipeline complete ✓</div>
+                  <div className="cb-desc">
+                    {p5data ? `${p5data.applied} applications submitted · ${p5data.manual} flagged for manual review · ` : ''}
+                    tracker and report saved to <code style={{fontFamily:'var(--mono)',fontSize:12}}>output/</code>
+                  </div>
+                  <button className="cb-reset" onClick={reset}>Run again</button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ═══ TRACKER TAB ═══ */}
+          {tab === 'tracker' && (
+            <div className="page-pad">
+              <div className="page-h">Tracker</div>
+              <div className="page-sub">Applications from this run</div>
+              {applications.length === 0
+                ? <div className="empty-state">Run the pipeline through Phase 5 to populate the tracker.</div>
+                : <table className="data-tbl">
+                    <thead><tr><th>Company</th><th>Role</th><th>Location</th><th>Score</th><th>Status</th><th>Date</th></tr></thead>
+                    <tbody>
+                      {applications.map((a, i) =>
+                        <tr key={i}>
+                          <td style={{fontWeight:600,color:'var(--t1)'}}>{a.co}</td>
+                          <td>{a.role}</td>
+                          <td style={{fontFamily:'var(--mono)',fontSize:11,color:'var(--t3)'}}>{a.loc}</td>
+                          <td><span className="score-num" style={{color:a.score>=thr?'var(--accent)':'var(--amber)'}}>{a.score}</span></td>
+                          <td>
+                            <span className={`tag ${a.app_status==='Applied'?'tag-green':a.app_status==='Manual Required'?'tag-amber':'tag-dim'}`}>
+                              {a.app_status}
+                            </span>
+                          </td>
+                          <td style={{fontFamily:'var(--mono)',fontSize:11,color:'var(--t3)'}}>{a.date}</td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+              }
+            </div>
+          )}
+
+          {/* ═══ OUTPUT FILES TAB ═══ */}
+          {tab === 'output' && (
+            <div className="page-pad">
+              <div className="page-h">Output Files</div>
+              <div className="page-sub">output/ directory</div>
+              {outputFiles.length === 0
+                ? <div className="empty-state">Run the pipeline to generate output files.</div>
+                : <table className="data-tbl">
+                    <thead><tr><th>File</th><th>Phase</th><th>Size</th><th></th></tr></thead>
+                    <tbody>
+                      {outputFiles.map((f, i) =>
+                        <tr key={i}>
+                          <td style={{fontFamily:'var(--mono)',fontSize:11,color:'var(--accent)'}}>{f.name}</td>
+                          <td><span className="tag tag-dim">{f.phase ? `Phase ${f.phase}` : '—'}</span></td>
+                          <td style={{fontFamily:'var(--mono)',fontSize:11,color:'var(--t3)'}}>{f.size_kb} KB</td>
+                          <td><a href={`/output/${f.name}`} target="_blank" rel="noreferrer" style={{color:'var(--accent)',fontSize:12}}>↓</a></td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+              }
+            </div>
+          )}
+
+        </div>{/* /app-main */}
+      </div>{/* /app-body */}
+    </div>
+  );
+}
+
+/* ════════ ROOT ════════ */
+function App() {
+  const [dark, setDark] = useState(true);
+  const [view, setView] = useState('landing');
+  const [scrollY, setScrollY] = useState(0);
+
+  useEffect(() => {
+    const fn = () => setScrollY(window.scrollY);
+    window.addEventListener('scroll', fn);
+    return () => window.removeEventListener('scroll', fn);
+  }, []);
+  useEffect(() => { if (view === 'landing') window.scrollTo(0, 0); }, [view]);
+
+  return (
+    <>
+      <Nav dark={dark} setDark={setDark} view={view} setView={setView} scrollY={scrollY} />
+      {view === 'landing'
+        ? <>
+            <Hero setView={setView}/>
+            <Stats/>
+            <FeatResume/>
+            <FeatDiscovery/>
+            <FeatApply/>
+            <PipelineSection/>
+            <ReviewsSection/>
+            <CTASection setView={setView}/>
+            <footer className="footer">Jobs AI · Autonomous 7-Phase Job Application Agent · Built with Python + Claude</footer>
+          </>
+        : <AppView setView={setView}/>
+      }
+    </>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>

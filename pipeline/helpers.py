@@ -130,7 +130,7 @@ def education_matches(required: str, user: str) -> bool:
 
 
 def filter_jobs_by_education(jobs: list, user_education_levels,
-                              include_unknown: bool = False) -> list:
+                              include_unknown: bool = True) -> list:
     """Drop jobs whose required education exceeds the user's highest level.
 
     `user_education_levels` may be a single string or a list of acceptable
@@ -303,24 +303,143 @@ def infer_education_required(job: dict) -> str:
     return "unknown"
 
 
+# ── Citizenship: hard blocks vs. soft mentions ────────────────────────────────
+
+# HARD BLOCKS — these phrases mean the role is genuinely closed to non-citizens
+# / non-cleared candidates. Match → return True from check_citizenship_requirement().
+_HARD_CITIZENSHIP_RE = re.compile(
+    r"\b("
+    r"u\.?\s*s\.?\s*citizenship\s+(?:is\s+)?required"
+    r"|must\s+be\s+(?:a\s+)?u\.?\s*s\.?\s*citizen"
+    r"|us\s+citizens?\s+only"
+    r"|us\s+persons?\s+only"
+    r"|sole\s+u\.?\s*s\.?\s*citizenship"
+    r"|citizenship\s+required"
+    r"|security\s+clearance"
+    r"|active\s+(?:secret|ts/sci|top\s+secret)\s+clearance"
+    r"|secret\s+clearance"
+    r"|top\s+secret"
+    r"|ts/sci"
+    r"|itar"
+    r"|export[-\s]control(?:led)?"
+    r"|no\s+sponsorship"
+    r"|sponsorship\s+(?:is\s+)?not\s+available"
+    r"|unable\s+to\s+sponsor"
+    r"|cannot\s+sponsor"
+    r"|will\s+not\s+sponsor"
+    r")\b",
+    re.IGNORECASE,
+)
+
+# SOFT MENTIONS — neutral / boilerplate language that previously caused false
+# positives. These must NOT cause a hard block.
+_SOFT_CITIZENSHIP_RE = re.compile(
+    r"\b("
+    r"authorized\s+to\s+work\s+in\s+the\s+u\.?\s*s\.?"
+    r"|work\s+authorization"
+    r"|equal\s+opportunity\s+employer"
+    r"|visa\s+sponsorship\s+available"
+    r"|open\s+to\s+all\s+work\s+authorizations"
+    r"|sponsorship\s+available"
+    r"|will\s+sponsor"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def check_citizenship_requirement(description: str) -> bool:
+    """Return True iff *description* contains a HARD citizenship/clearance block.
+
+    Soft mentions like "Authorized to work in the US", "Work Authorization",
+    "Equal Opportunity Employer", or "Visa sponsorship available" are
+    explicitly ignored. Handles None / empty input gracefully.
+    """
+    if not description:
+        return False
+    text = str(description)
+    # Strip soft phrases first so they cannot accidentally match a hard regex.
+    cleaned = _SOFT_CITIZENSHIP_RE.sub(" ", text)
+    return bool(_HARD_CITIZENSHIP_RE.search(cleaned))
+
+
 def infer_citizenship_required(job: dict) -> str:
     """Infer US citizenship / clearance requirement from job text."""
+    if not job:
+        return "unknown"
     reqs = job.get("requirements", [])
     req_str = " ".join(reqs) if isinstance(reqs, list) else str(reqs)
-    text = (job.get("title", "") + " " + job.get("description", "") + " " + req_str).lower()
-    if any(k in text for k in [
-        "us citizen", "u.s. citizen", "united states citizen",
-        "security clearance", "secret clearance", "top secret",
-        "itar", "us persons only", "must be a us citizen",
-        "citizenship required", "due to export control",
-    ]):
+    text = (job.get("title", "") + " " + job.get("description", "") + " " + req_str)
+    if check_citizenship_requirement(text):
         return "yes"
-    if any(k in text for k in [
-        "visa sponsorship available", "open to all work authorizations",
-        "no clearance required",
-    ]):
+    if _SOFT_CITIZENSHIP_RE.search(text):
         return "no"
     return "unknown"
+
+
+# ── Inclusive-by-default per-job education filter ─────────────────────────────
+
+_UNKNOWN_EDU_TOKENS = {"", "unknown", "unspecified", "none", "n/a"}
+
+
+def education_filter(job: dict) -> bool:
+    """Return True if *job* should be passed downstream to Phase 3.
+
+    Inclusive-by-default: jobs with missing / unknown education metadata are
+    KEPT so the LLM can read the full description in Phase 3. Only jobs with
+    an explicit, recognized education level are eligible to be dropped here
+    (and even then this function returns True — caller decides the cutoff).
+    Handles None / missing fields gracefully.
+    """
+    if not job:
+        return True
+    raw = job.get("education_level") or job.get("education_required")
+    if raw is None:
+        return True
+    val = str(raw).strip().lower()
+    if val in _UNKNOWN_EDU_TOKENS:
+        return True
+    return True
+
+
+# ── Glassdoor location normalization ──────────────────────────────────────────
+
+# Glassdoor's API rejects very broad strings ("United States", "USA"). Map
+# them to forms it accepts, and pass remote-style queries through unchanged.
+_GLASSDOOR_LOCATION_OVERRIDES = {
+    "united states":      "United States",
+    "usa":                "United States",
+    "u.s.":               "United States",
+    "us":                 "United States",
+    "america":            "United States",
+    "north america":      "United States",
+    "anywhere":           "Remote",
+    "anywhere in the us": "Remote",
+    "remote":             "Remote",
+    "remote, us":         "Remote",
+    "remote - us":        "Remote",
+}
+
+
+def clean_location_for_glassdoor(location: str) -> str:
+    """Normalize *location* into a string Glassdoor's location parser accepts.
+
+    - None / empty            → "United States"
+    - Broad US synonyms       → "United States"
+    - Remote-style strings    → "Remote"
+    - "City, ST" or specific  → returned unchanged (trimmed)
+    Handles None / non-string input gracefully.
+    """
+    if location is None:
+        return "United States"
+    s = str(location).strip()
+    if not s:
+        return "United States"
+    key = s.lower()
+    if key in _GLASSDOOR_LOCATION_OVERRIDES:
+        return _GLASSDOOR_LOCATION_OVERRIDES[key]
+    if "remote" in key:
+        return "Remote"
+    return s
 
 
 def deduplicate_jobs(jobs: list) -> list:

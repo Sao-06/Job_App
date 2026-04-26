@@ -245,12 +245,234 @@ body{font-family:var(--body);background:var(--bg);color:var(--t1);-webkit-font-s
 /* titles chip list */
 .chip-list{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}
 .chip{font-size:11px;padding:3px 9px;border-radius:980px;background:var(--accent-dim);color:var(--accent);font-family:var(--mono)}
+/* ollama panel */
+.ollama-panel{margin-top:6px;padding:10px;background:var(--bg3);border:1px solid var(--border);border-radius:8px;font-size:11px}
+.ollama-status-row{display:flex;align-items:center;gap:6px;margin-bottom:6px}
+.ollama-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.ollama-dot.ok{background:var(--green)}.ollama-dot.err{background:var(--red)}.ollama-dot.warn{background:var(--amber)}.ollama-dot.dim{background:var(--t3)}
+.ollama-status-txt{color:var(--t2);flex:1;line-height:1.4}
+.ollama-log{max-height:80px;overflow-y:auto;font-family:var(--mono);font-size:10px;color:var(--t3);line-height:1.6;margin-top:6px;word-break:break-all}
+.ollama-btn{margin-top:6px;width:100%;padding:5px 0;border-radius:6px;border:1px solid var(--border2);background:transparent;color:var(--t2);font-family:var(--body);font-size:11px;cursor:pointer;transition:all .15s}
+.ollama-btn:hover:not(:disabled){border-color:var(--accent);color:var(--accent);background:var(--accent-dim)}
+.ollama-btn:disabled{opacity:.4;cursor:not-allowed}
+/* ── Phase running messages ── */
+.phase-msg{padding:10px 18px;font-size:12px;color:var(--amber);font-family:var(--mono);display:flex;align-items:center;gap:8px;border-top:1px solid var(--border)}
+.phase-msg-dot{width:6px;height:6px;border-radius:50%;background:var(--amber);animation:blink 1.1s step-end infinite;flex-shrink:0}
+/* ── Phase data tables ── */
+.pd-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:8px;padding:16px 18px}
+.pd-metric{background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:12px 14px;text-align:center}
+.pd-val{font-family:var(--display);font-size:24px;letter-spacing:-.04em;color:var(--t1);line-height:1}
+.pd-lbl{font-size:10px;color:var(--t3);margin-top:4px;font-family:var(--mono);text-transform:uppercase;letter-spacing:.05em}
+.pd-section{padding:0 18px 16px}
+.pd-sub{font-family:var(--mono);font-size:10px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;color:var(--t3);margin-bottom:8px;padding-top:12px}
+.skill-pill{display:inline-block;font-size:10px;padding:2px 8px;border-radius:980px;background:var(--surface);color:var(--t2);font-family:var(--mono);margin:2px}
+.skill-pill.match{background:oklch(62% 0.18 145 / .12);color:var(--green)}
+.skill-pill.gap{background:oklch(62% 0.18 25 / .1);color:var(--red)}
+.job-row{display:grid;grid-template-columns:1fr 1.4fr auto auto;gap:8px;align-items:center;padding:9px 0;border-bottom:1px solid rgba(255,255,255,.04)}
+.job-row:last-child{border:none}
+.jr-co{font-size:13px;font-weight:600;color:var(--t1)}
+.jr-role{font-size:11px;color:var(--t2)}
+.jr-loc{font-size:10px;color:var(--t3);font-family:var(--mono)}
+.score-bar-wrap{display:flex;align-items:center;gap:6px}
+.score-bar{height:4px;border-radius:2px;background:var(--border2);flex:1;max-width:60px}
+.score-bar-fill{height:100%;border-radius:2px;background:var(--accent);transition:width .5s}
+.report-box{padding:16px 18px;font-family:var(--mono);font-size:11.5px;line-height:1.75;color:var(--t2);white-space:pre-wrap;background:var(--bg);border-top:1px solid var(--border);max-height:400px;overflow-y:auto}
+/* ── Sidebar pill buttons (replaces default HTML buttons) ── */
+.sb-pill{display:flex;align-items:center;gap:8px;width:calc(100% - 16px);margin:0 8px;padding:9px 14px;border-radius:10px;border:1px solid var(--border);background:transparent;color:var(--t2);font-family:var(--body);font-size:12px;font-weight:500;cursor:pointer;transition:all .18s;text-align:left;letter-spacing:-.01em}
+.sb-pill:hover{background:var(--surface);color:var(--t1);border-color:var(--border2)}
+.sb-pill.primary{border-color:oklch(62% 0.22 280/.3);color:var(--accent);background:var(--accent-dim)}
+.sb-pill.primary:hover{background:oklch(62% 0.22 280/.2)}
+.sb-pill.danger:hover{border-color:var(--red);color:var(--red);background:oklch(62% 0.18 25/.08)}
+.sb-pill.loaded{border-color:oklch(62% 0.18 145/.3);color:var(--green);background:var(--green-dim)}
+.sb-pill:disabled{opacity:.35;cursor:not-allowed}
+.sb-pill-icon{font-size:14px;flex-shrink:0}
+.sb-pill-label{flex:1}
+.sb-pill-badge{font-family:var(--mono);font-size:10px;padding:1px 6px;border-radius:4px;background:var(--surface2);color:var(--t3);margin-left:auto}
 </style>
 </head>
 <body>
 <div id="root"></div>
 <script type="text/babel">
 const { useState, useEffect, useRef, useCallback } = React;
+
+/* ─── OllamaPanel component ─── */
+const FAST_MODELS = ['llama3.2','llama3.1','mistral','phi3','phi4','gemma3','qwen2','smollm2','ministral'];
+
+function OllamaPanel({ model, onModelChange }) {
+  const [status, setStatus]     = useState(null);
+  const [pulling, setPulling]   = useState(false);
+  const [pullLog, setPullLog]   = useState([]);
+  const [newModel, setNewModel] = useState('');
+  const logRef = useRef(null);
+
+  const checkStatus = useCallback(() => {
+    setStatus(null);
+    fetch('/api/ollama/status').then(r => r.json()).then(s => {
+      setStatus(s);
+      // Auto-select first available model if current isn't pulled
+      if (s.running && s.models && s.models.length > 0) {
+        const names = s.models.map(m => m.name);
+        if (!names.includes(model) && !names.some(n => n.split(':')[0] === model.split(':')[0])) {
+          onModelChange(s.models[0].name);
+        }
+      }
+    });
+  }, [model, onModelChange]);
+
+  useEffect(() => { checkStatus(); }, []);
+
+  useEffect(() => {
+    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+  }, [pullLog]);
+
+  const doPull = (target) => {
+    setPulling(true);
+    setPullLog([`Pulling ${target}…`]);
+    // Temporarily set model so the pull endpoint uses it
+    fetch('/api/config', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ollama_model: target})});
+    const es = new EventSource('/api/ollama/pull');
+    es.onmessage = (e) => {
+      try {
+        const msg = JSON.parse(e.data);
+        if (msg.type === 'log')   setPullLog(l => [...l, msg.line]);
+        if (msg.type === 'done')  { es.close(); setPulling(false); onModelChange(target); setNewModel(''); checkStatus(); }
+        if (msg.type === 'error') { es.close(); setPulling(false); setPullLog(l => [...l, '✗ ' + msg.message]); }
+      } catch {}
+    };
+    es.onerror = () => { es.close(); setPulling(false); setPullLog(l => [...l, '✗ Connection error']); };
+  };
+
+  const hasModels = status?.models?.length > 0;
+  const selectedMeta = status?.models?.find(m => m.name === model || m.name.split(':')[0] === model.split(':')[0]);
+  const isSlow = selectedMeta && !FAST_MODELS.some(f => selectedMeta.name.toLowerCase().includes(f));
+
+  let dotCls = 'dim', statusTxt = 'Checking…';
+  if (status) {
+    if (!status.running)       { dotCls = 'err';  statusTxt = 'Not running — run: ollama serve'; }
+    else if (!hasModels)       { dotCls = 'warn'; statusTxt = 'Running — no models pulled yet'; }
+    else if (!status.pulled)   { dotCls = 'warn'; statusTxt = `"${model}" not pulled`; }
+    else                       { dotCls = 'ok';   statusTxt = `Ready`; }
+  }
+
+  return (
+    <div className="ollama-panel">
+      <div className="ollama-status-row">
+        <div className={`ollama-dot ${dotCls}`}/>
+        <span className="ollama-status-txt">{statusTxt}</span>
+        <button className="ollama-btn" style={{width:'auto',padding:'2px 8px',margin:0}} onClick={checkStatus} disabled={pulling}>↻</button>
+      </div>
+
+      {/* Model dropdown — shown when Ollama is running and has models */}
+      {status?.running && hasModels && (
+        <>
+          <select className="sb-select" style={{marginTop:6,fontSize:12}} value={model}
+            onChange={e => { onModelChange(e.target.value); }}>
+            {status.models.map(m => (
+              <option key={m.name} value={m.name}>
+                {m.name}{m.params ? ` · ${m.params}` : ''}{m.size_gb > 0 ? ` · ${m.size_gb}GB` : ''}
+              </option>
+            ))}
+          </select>
+          {selectedMeta && (
+            <div style={{fontSize:10,color:'var(--t3)',marginTop:3,lineHeight:1.5}}>
+              {selectedMeta.family && <span>🏷 {selectedMeta.family}  </span>}
+              {selectedMeta.params && <span>⚙ {selectedMeta.params}  </span>}
+              {selectedMeta.size_gb > 0 && <span>💾 {selectedMeta.size_gb} GB</span>}
+            </div>
+          )}
+          {isSlow && (
+            <div style={{fontSize:10,color:'var(--amber)',marginTop:3}}>
+              🐢 May be slow — llama3.2, mistral, or phi3 are faster
+            </div>
+          )}
+        </>
+      )}
+
+      {/* Pull a new model */}
+      {status?.running && (
+        <div style={{display:'flex',gap:4,marginTop:6}}>
+          <input className="sb-input" style={{margin:0,flex:1,fontSize:11}}
+            placeholder="Pull new model (e.g. mistral)"
+            value={newModel}
+            onChange={e => setNewModel(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && newModel.trim() && doPull(newModel.trim())}
+          />
+          <button className="ollama-btn" style={{margin:0,width:'auto',padding:'0 8px',flexShrink:0}}
+            disabled={pulling || !newModel.trim()} onClick={() => doPull(newModel.trim())}>
+            ↓
+          </button>
+        </div>
+      )}
+
+      {/* Not running — show instructions */}
+      {status && !status.running && (
+        <div style={{fontSize:10,color:'var(--t3)',marginTop:4,lineHeight:1.6}}>
+          Start Ollama:<br/>
+          <code style={{fontSize:10}}>ollama serve</code>
+        </div>
+      )}
+
+      {pullLog.length > 0 && (
+        <div className="ollama-log" ref={logRef}>
+          {pullLog.map((l, i) => <div key={i}>{l}</div>)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ─── Phase2CacheStatus component ─── */
+function Phase2CacheStatus() {
+  const [cache, setCache] = useState(null);
+  const load = useCallback(() => {
+    fetch('/api/phase/2/cache').then(r => r.json()).then(setCache);
+  }, []);
+  useEffect(() => { load(); }, []);
+
+  const clear = () => {
+    fetch('/api/phase/2/cache', {method:'DELETE'}).then(() => { setCache(null); load(); });
+  };
+
+  if (!cache) return null;
+  if (!cache.exists) return (
+    <div className="sb-info" style={{marginTop:6}}>No cache — will scrape live boards.</div>
+  );
+  return (
+    <div className="sb-info" style={{marginTop:6}}>
+      {cache.is_demo
+        ? <span style={{color:'var(--amber)'}}>⚠ Cached jobs are demo URLs.</span>
+        : <span style={{color:'var(--green)'}}>✓ {cache.count} cached jobs ({cache.age_h}h old)</span>
+      }
+      <br/>
+      <button className="ollama-btn" style={{marginTop:4}} onClick={clear}>🗑 Clear cache & re-scrape</button>
+    </div>
+  );
+}
+
+/* ─── Phase loading messages ─── */
+const PHASE_MSGS = {
+  1: ['Parsing resume…','Extracting skills with NLP…','Identifying education & experience…','Mapping target roles…','Auditing skill gaps…'],
+  2: ['Scraping LinkedIn, Indeed, Glassdoor…','Fetching live job listings…','Collecting & deduplicating postings…','Merging SimplifyJobs listings…','Applying education & citizenship filters…'],
+  3: ['Scoring jobs against profile…','LLM evaluating each posting…','Matching skills, titles, experience…','Running relevance scoring…','Finalising shortlist…'],
+  4: ['Tailoring resume per job…','Reordering skills to match JD…','Running ATS gap analysis…','Generating LaTeX output…','Saving to output/…'],
+  5: ['Simulating submissions…','Processing auto-eligible jobs…','Flagging manual-review items…'],
+  6: ['Writing Excel tracker…','Building colour-coded rows…','Adding summary dashboard tab…'],
+  7: ['Generating run report…','Summarising outcomes…'],
+};
+function PhaseMsg({ n }) {
+  const msgs = PHASE_MSGS[n] || ['Working…'];
+  const [idx, setIdx] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setIdx(i => (i+1) % msgs.length), 3500);
+    return () => clearInterval(t);
+  }, [msgs.length]);
+  return (
+    <div className="phase-msg">
+      <div className="phase-msg-dot"/>
+      <span>{msgs[idx]}</span>
+    </div>
+  );
+}
 
 /* ─── Static CLI data (animation only — real data comes from API) ─── */
 const PHASE_CLI = {
@@ -585,7 +807,15 @@ function PhaseAcc({ n, title, done, running, locked, errored, elapsed, children 
 
 function AppView({ setView }) {
   const [tab, setTab] = useState('pipeline');
-  const [cfg, setCfg] = useState({ mode:'demo', apiKey:'', threshold:75, jobTitles:'', location:'United States' });
+  const [cfg, setCfg] = useState({
+    mode:'ollama', apiKey:'', ollamaModel:'llama3.2',
+    threshold:75, jobTitles:'', location:'United States',
+    maxApps:10, maxScrapeJobs:50, daysOld:30,
+    coverLetter:false, blacklist:'', whitelist:'NVIDIA, Apple, Microsoft, Intel, IBM, Micron, Samsung, TSMC',
+    experienceLevels:['internship','entry-level'],
+    educationFilter:['bachelors'],
+    includeUnknownEdu:false, citizenshipFilter:'exclude_required', useSimplify:true,
+  });
   const [resumeFile, setResumeFile] = useState(null);     // {name, loaded}
   const [phaseRunning, setPhaseRunning] = useState(null);
   const [phaseDone, setPhaseDone] = useState(new Set());
@@ -606,9 +836,21 @@ function AppView({ setView }) {
       setCfg(c => ({
         ...c,
         mode: s.mode || 'demo',
+        ollamaModel: s.ollama_model || 'llama3.2',
         threshold: s.threshold || 75,
         jobTitles: s.job_titles || '',
         location: s.location || 'United States',
+        maxApps: s.max_apps ?? 10,
+        maxScrapeJobs: s.max_scrape_jobs ?? 50,
+        daysOld: s.days_old ?? 30,
+        coverLetter: s.cover_letter ?? false,
+        blacklist: s.blacklist || '',
+        whitelist: s.whitelist || '',
+        experienceLevels: s.experience_levels || ['internship','entry-level'],
+        educationFilter: s.education_filter || ['bachelors'],
+        includeUnknownEdu: s.include_unknown_education ?? false,
+        citizenshipFilter: s.citizenship_filter || 'exclude_required',
+        useSimplify: s.use_simplify ?? true,
       }));
       if (s.has_resume) setResumeFile({ name: s.resume_filename || 'resume loaded', loaded: true });
     });
@@ -627,9 +869,21 @@ function AppView({ setView }) {
       api.post('/api/config', {
         mode: cfg.mode,
         api_key: cfg.apiKey,
+        ollama_model: cfg.ollamaModel || 'llama3.2',
         threshold: cfg.threshold,
         job_titles: cfg.jobTitles,
         location: cfg.location,
+        max_apps: cfg.maxApps,
+        max_scrape_jobs: cfg.maxScrapeJobs,
+        days_old: cfg.daysOld,
+        cover_letter: cfg.coverLetter,
+        blacklist: cfg.blacklist,
+        whitelist: cfg.whitelist,
+        experience_levels: cfg.experienceLevels,
+        education_filter: cfg.educationFilter,
+        include_unknown_education: cfg.includeUnknownEdu,
+        citizenship_filter: cfg.citizenshipFilter,
+        use_simplify: cfg.useSimplify,
       });
     }, 400);
     return () => clearTimeout(t);
@@ -766,7 +1020,7 @@ function AppView({ setView }) {
             </select>
             {cfg.mode==='anthropic' && <input className="sb-input" type="password" placeholder="sk-ant-api03-…" value={cfg.apiKey} onChange={e => setCfg(c => ({...c, apiKey:e.target.value}))}/>}
             {cfg.mode==='demo' && <div className="sb-info">No key needed. Template matching + cached/scraped EE postings.</div>}
-            {cfg.mode==='ollama' && <div className="sb-info">Requires Ollama at localhost:11434<br/><code style={{fontSize:10}}>ollama serve &amp;&amp; ollama pull llama3.2</code></div>}
+            {cfg.mode==='ollama' && <OllamaPanel model={cfg.ollamaModel||'llama3.2'} onModelChange={v => setCfg(c => ({...c, ollamaModel:v}))}/>}
           </div>
 
           <hr className="sb-sep"/>
@@ -774,14 +1028,16 @@ function AppView({ setView }) {
           <div className="sb-section">
             <div className="sb-section-label">Resume</div>
           </div>
-          <button className={`sb-resume-btn${resumeFile?.loaded?' loaded':''}`} onClick={() => fileInputRef.current?.click()}>
-            <span>{resumeFile?.loaded ? '📄' : '⊕'}</span>
-            {resumeFile?.loaded ? resumeFile.name : 'Upload resume (PDF/DOCX/TEX)'}
+          <button className={`sb-pill${resumeFile?.loaded?' loaded':''}`} onClick={() => fileInputRef.current?.click()}>
+            <span className="sb-pill-icon">{resumeFile?.loaded ? '📄' : '⊕'}</span>
+            <span className="sb-pill-label">{resumeFile?.loaded ? resumeFile.name : 'Upload resume (PDF/DOCX/TEX)'}</span>
+            {resumeFile?.loaded && <span className="sb-pill-badge">loaded</span>}
           </button>
           <input ref={fileInputRef} type="file" accept=".pdf,.docx,.txt,.tex,.md" style={{display:'none'}} onChange={handleFileChange}/>
           {!resumeFile?.loaded && (
-            <button className="sb-resume-btn" style={{marginTop:6}} onClick={loadDemo}>
-              <span>🤖</span>Load demo resume
+            <button className="sb-pill" style={{marginTop:4}} onClick={loadDemo}>
+              <span className="sb-pill-icon">🤖</span>
+              <span className="sb-pill-label">Load demo resume</span>
             </button>
           )}
 
@@ -791,6 +1047,11 @@ function AppView({ setView }) {
             <div className="sb-section-label">Search Settings</div>
             <input className="sb-input" placeholder="Job titles (comma-separated)" value={cfg.jobTitles} onChange={e => setCfg(c => ({...c, jobTitles:e.target.value}))}/>
             <input className="sb-input" style={{marginTop:6}} placeholder="Location / Remote / United States" value={cfg.location} onChange={e => setCfg(c => ({...c, location:e.target.value}))}/>
+            <div style={{display:'flex',gap:6,marginTop:6}}>
+              <input className="sb-input" style={{margin:0,width:'50%'}} type="number" placeholder="Max apps" min={1} max={50} value={cfg.maxApps} onChange={e => setCfg(c => ({...c, maxApps:+e.target.value}))}/>
+              <input className="sb-input" style={{margin:0,width:'50%'}} type="number" placeholder="Max scrape" min={5} max={200} value={cfg.maxScrapeJobs} onChange={e => setCfg(c => ({...c, maxScrapeJobs:+e.target.value}))}/>
+            </div>
+            <input className="sb-input" style={{marginTop:6}} type="number" placeholder="Days old (e.g. 30)" min={1} max={180} value={cfg.daysOld} onChange={e => setCfg(c => ({...c, daysOld:+e.target.value}))}/>
           </div>
 
           <hr className="sb-sep"/>
@@ -803,8 +1064,60 @@ function AppView({ setView }) {
             <input className="sb-range" type="range" min={50} max={100} value={thr} onChange={e => setCfg(c => ({...c, threshold:+e.target.value}))}/>
           </div>
 
+          <hr className="sb-sep"/>
+
+          <div className="sb-section">
+            <div className="sb-section-label">Filters</div>
+            <div style={{fontSize:10,color:'var(--t3)',marginBottom:4}}>Experience levels</div>
+            {['internship','entry-level','mid-level','senior'].map(lvl => (
+              <label key={lvl} style={{display:'flex',alignItems:'center',gap:6,fontSize:11,color:'var(--t2)',marginBottom:3,cursor:'pointer'}}>
+                <input type="checkbox" checked={(cfg.experienceLevels||[]).includes(lvl)}
+                  onChange={e => setCfg(c => ({...c, experienceLevels: e.target.checked
+                    ? [...(c.experienceLevels||[]), lvl]
+                    : (c.experienceLevels||[]).filter(x => x !== lvl)}))}/>{lvl}
+              </label>
+            ))}
+            <div style={{fontSize:10,color:'var(--t3)',marginBottom:4,marginTop:8}}>Education filter</div>
+            {['high_school','associates','bachelors','masters','phd'].map(edu => (
+              <label key={edu} style={{display:'flex',alignItems:'center',gap:6,fontSize:11,color:'var(--t2)',marginBottom:3,cursor:'pointer'}}>
+                <input type="checkbox" checked={(cfg.educationFilter||[]).includes(edu)}
+                  onChange={e => setCfg(c => ({...c, educationFilter: e.target.checked
+                    ? [...(c.educationFilter||[]), edu]
+                    : (c.educationFilter||[]).filter(x => x !== edu)}))}/>{edu}
+              </label>
+            ))}
+            <label style={{display:'flex',alignItems:'center',gap:6,fontSize:11,color:'var(--t2)',marginTop:6,cursor:'pointer'}}>
+              <input type="checkbox" checked={!!cfg.includeUnknownEdu}
+                onChange={e => setCfg(c => ({...c, includeUnknownEdu:e.target.checked}))}/>
+              Include unspecified edu
+            </label>
+            <label style={{display:'flex',alignItems:'center',gap:6,fontSize:11,color:'var(--t2)',marginTop:4,cursor:'pointer'}}>
+              <input type="checkbox" checked={!!cfg.useSimplify}
+                onChange={e => setCfg(c => ({...c, useSimplify:e.target.checked}))}/>
+              SimplifyJobs/GitHub listings
+            </label>
+            <label style={{display:'flex',alignItems:'center',gap:6,fontSize:11,color:'var(--t2)',marginTop:4,cursor:'pointer'}}>
+              <input type="checkbox" checked={!!cfg.coverLetter}
+                onChange={e => setCfg(c => ({...c, coverLetter:e.target.checked}))}/>
+              Generate cover letters
+            </label>
+            <div style={{fontSize:10,color:'var(--t3)',marginBottom:4,marginTop:8}}>Citizenship</div>
+            <select className="sb-select" style={{fontSize:11}} value={cfg.citizenshipFilter||'exclude_required'} onChange={e => setCfg(c => ({...c, citizenshipFilter:e.target.value}))}>
+              <option value="all">Show all jobs</option>
+              <option value="exclude_required">Exclude citizenship-required</option>
+              <option value="only_required">Only citizenship-required</option>
+            </select>
+            <div style={{fontSize:10,color:'var(--t3)',marginBottom:4,marginTop:8}}>Company lists</div>
+            <input className="sb-input" style={{marginTop:0}} placeholder="Blacklist (comma-sep)" value={cfg.blacklist||''} onChange={e => setCfg(c => ({...c, blacklist:e.target.value}))}/>
+            <input className="sb-input" style={{marginTop:4}} placeholder="Priority whitelist (comma-sep)" value={cfg.whitelist||''} onChange={e => setCfg(c => ({...c, whitelist:e.target.value}))}/>
+          </div>
+
           <div style={{flex:1}}/>
-          <button className="sb-reset-btn" onClick={reset}>⟳ Reset pipeline</button>
+          <button className="sb-pill danger" onClick={reset}>
+            <span className="sb-pill-icon">⟳</span>
+            <span className="sb-pill-label">Reset pipeline</span>
+            {nDone > 0 && <span className="sb-pill-badge">{nDone}/7</span>}
+          </button>
         </div>
 
         {/* ── Main ── */}
@@ -819,170 +1132,308 @@ function AppView({ setView }) {
                   <div className="pipeline-meta">{nDone} / 7 phases complete · {cfg.mode} · threshold {thr}</div>
                 </div>
                 <button className="run-all-btn" disabled={phaseRunning!==null || !resumeFile?.loaded} onClick={runAll}>
-                  {phaseRunning ? <><span className="spin"/>Running…</> : '▶ Run all 7 phases'}
+                  {phaseRunning !== null ? <><span className="spin"/>Phase {phaseRunning} running…</> : '▶ Run all 7 phases'}
                 </button>
               </div>
               <div className="prog-track"><div className="prog-fill" style={{width:`${(nDone/7)*100}%`}}/></div>
 
               {/* Phase 1 */}
               <PhaseAcc n={1} title="Resume Ingestion & Profile Extraction" done={isDone(1)} running={isRunning(1)} locked={false} errored={hasError(1)} elapsed={phaseElapsed[1]}>
-                {(isDone(1) || isRunning(1)) && <CLILog phaseN={1} running={isRunning(1)} done={isDone(1)}/>}
+                {isRunning(1) && <PhaseMsg n={1}/>}
                 {hasError(1) && <div className="phase-action-area"><div className="error-note">Error: {phaseError[1]}</div></div>}
-                <div className="phase-action-area">
-                  {isDone(1) && p1data && (
-                    <div className="done-banner">
-                      <span className="done-banner-icon">✓</span>
-                      <div className="done-banner-text">
-                        <strong>{p1data.name || 'Profile'}</strong> extracted — {(p1data.top_hard_skills||[]).length} hard skills, {(p1data.top_soft_skills||[]).length} soft skills
-                        {(p1data.resume_gaps||[]).length > 0 && <>, <span style={{color:'var(--amber)'}}>{p1data.resume_gaps.length} gaps flagged</span></>}.<br/>
-                        {(p1data.target_titles||[]).length > 0 && <>
-                          <span style={{color:'var(--t3)'}}>Suggested: </span>
-                          <div className="chip-list">{p1data.target_titles.map(t => <span key={t} className="chip">{t}</span>)}</div>
-                        </>}
-                      </div>
-                    </div>
-                  )}
-                  {!isDone(1) && !isRunning(1) && (
-                    !resumeFile?.loaded
+                {!isDone(1) && !isRunning(1) && (
+                  <div className="phase-action-area">
+                    {!resumeFile?.loaded
                       ? <div className="phase-locked-msg">Load a resume from the sidebar first.</div>
-                      : <button className="phase-run-btn" disabled={phaseRunning!==null} onClick={() => runPhase(1)}>
-                          {isRunning(1) ? <><span className="spin"/>Parsing…</> : 'Extract Profile →'}
+                      : <button className="phase-run-btn" disabled={phaseRunning!==null} onClick={() => runPhase(1)}>Extract Profile →</button>}
+                  </div>
+                )}
+                {isDone(1) && p1data && (
+                  <>
+                    <div className="pd-grid">
+                      <div className="pd-metric"><div className="pd-val">{p1data.name?.split(' ')[0]||'—'}</div><div className="pd-lbl">First Name</div></div>
+                      <div className="pd-metric"><div className="pd-val" style={{fontSize:14,paddingTop:4}}>{p1data.email||'—'}</div><div className="pd-lbl">Email</div></div>
+                      <div className="pd-metric"><div className="pd-val">{(p1data.top_hard_skills||[]).length}</div><div className="pd-lbl">Hard Skills</div></div>
+                      <div className="pd-metric"><div className="pd-val">{(p1data.top_soft_skills||[]).length}</div><div className="pd-lbl">Soft Skills</div></div>
+                      <div className="pd-metric"><div className="pd-val" style={{color:'var(--amber)'}}>{(p1data.resume_gaps||[]).length}</div><div className="pd-lbl">Gaps Found</div></div>
+                    </div>
+                    {(p1data.target_titles||[]).length > 0 && (
+                      <div className="pd-section">
+                        <div className="pd-sub">Suggested Target Titles</div>
+                        <div className="chip-list">
+                          {p1data.target_titles.map(t => <span key={t} className="chip">{t}</span>)}
+                        </div>
+                        <button className="phase-run-btn" style={{marginTop:10,fontSize:11,padding:'5px 14px'}}
+                          onClick={() => setCfg(c => ({...c, jobTitles: p1data.target_titles.join(', ')}))}>
+                          Use these titles for search
                         </button>
-                  )}
-                </div>
+                      </div>
+                    )}
+                    {(p1data.top_hard_skills||[]).length > 0 && (
+                      <div className="pd-section">
+                        <div className="pd-sub">Hard Skills</div>
+                        {p1data.top_hard_skills.map(s => <span key={s} className="skill-pill">{s}</span>)}
+                      </div>
+                    )}
+                    {(p1data.top_soft_skills||[]).length > 0 && (
+                      <div className="pd-section">
+                        <div className="pd-sub">Soft Skills</div>
+                        {p1data.top_soft_skills.map(s => <span key={s} className="skill-pill">{s}</span>)}
+                      </div>
+                    )}
+                    {(p1data.resume_gaps||[]).length > 0 && (
+                      <div className="pd-section">
+                        <div style={{padding:'8px 12px',borderRadius:8,background:'oklch(72% 0.16 75 / .08)',border:'1px solid oklch(72% 0.16 75 / .2)',fontSize:12,color:'var(--amber)'}}>
+                          ⚠ Gaps: {p1data.resume_gaps.join(' · ')}
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
               </PhaseAcc>
 
               {/* Phase 2 */}
               <PhaseAcc n={2} title="Job Discovery" done={isDone(2)} running={isRunning(2)} locked={isLocked(2)} errored={hasError(2)} elapsed={phaseElapsed[2]}>
-                {(isDone(2) || isRunning(2)) && <CLILog phaseN={2} running={isRunning(2)} done={isDone(2)}/>}
+                {isRunning(2) && <PhaseMsg n={2}/>}
                 {hasError(2) && <div className="phase-action-area"><div className="error-note">Error: {phaseError[2]}</div></div>}
-                <div className="phase-action-area">
-                  {isDone(2) && p2data && (
-                    <div className="phase-data" style={{borderTop:'none',paddingTop:0}}>
-                      <div className="metrics-strip">
-                        <div className="metric-chip"><div className="mc-val">{p2data.total}</div><div className="mc-label">Jobs found</div></div>
-                      </div>
-                    </div>
-                  )}
-                  {!isDone(2) && !isRunning(2) && (
-                    isLocked(2)
+                {!isDone(2) && !isRunning(2) && (
+                  <div className="phase-action-area" style={{flexDirection:'column',alignItems:'flex-start'}}>
+                    {isLocked(2)
                       ? <span className="phase-locked-msg">Complete Phase 1 first.</span>
-                      : <button className="phase-run-btn" disabled={phaseRunning!==null} onClick={() => runPhase(2)}>
-                          {isRunning(2) ? <><span className="spin"/>Scraping…</> : 'Discover Jobs →'}
-                        </button>
-                  )}
-                </div>
+                      : <><Phase2CacheStatus/><button className="phase-run-btn" style={{marginTop:8}} disabled={phaseRunning!==null} onClick={() => runPhase(2)}>Discover Jobs →</button></>}
+                  </div>
+                )}
+                {isDone(2) && p2data && (
+                  <>
+                    <div className="pd-grid">
+                      <div className="pd-metric"><div className="pd-val" style={{color:'var(--accent)'}}>{p2data.total}</div><div className="pd-lbl">Jobs Found</div></div>
+                    </div>
+                    {(p2data.jobs||[]).length > 0 && (
+                      <div className="pd-section">
+                        <div className="pd-sub">Discovered Postings</div>
+                        <table className="data-tbl">
+                          <thead><tr><th>Company</th><th>Role</th><th>Location</th><th>Exp</th><th>Salary</th><th>Link</th></tr></thead>
+                          <tbody>
+                            {p2data.jobs.map((j,i) => (
+                              <tr key={i}>
+                                <td style={{fontWeight:600,color:'var(--t1)'}}>{j.co}</td>
+                                <td>{j.role}</td>
+                                <td style={{fontSize:11,color:'var(--t3)',fontFamily:'var(--mono)'}}>{j.loc}{j.remote?' · Remote':''}</td>
+                                <td style={{fontSize:11,color:'var(--t3)'}}>{j.experience}</td>
+                                <td style={{fontSize:11,color:'var(--t3)'}}>{j.salary}</td>
+                                <td>{j.url && <a href={j.url} target="_blank" style={{color:'var(--accent)',fontSize:11,fontFamily:'var(--mono)'}}>Apply →</a>}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </>
+                )}
               </PhaseAcc>
 
               {/* Phase 3 */}
               <PhaseAcc n={3} title="Relevance Scoring & Shortlisting" done={isDone(3)} running={isRunning(3)} locked={isLocked(3)} errored={hasError(3)} elapsed={phaseElapsed[3]}>
-                {(isDone(3) || isRunning(3)) && <CLILog phaseN={3} running={isRunning(3)} done={isDone(3)}/>}
+                {isRunning(3) && <PhaseMsg n={3}/>}
                 {hasError(3) && <div className="phase-action-area"><div className="error-note">Error: {phaseError[3]}</div></div>}
-                <div className="phase-action-area">
-                  {isLocked(3) && <span className="phase-locked-msg">Complete Phase 2 first.</span>}
-                  {!isLocked(3) && !isDone(3) && !isRunning(3) && !hasError(3) &&
-                    <button className="phase-run-btn" disabled={phaseRunning!==null} onClick={() => runPhase(3)}>Score Jobs →</button>
-                  }
-                </div>
+                {!isDone(3) && !isRunning(3) && (
+                  <div className="phase-action-area">
+                    {isLocked(3) ? <span className="phase-locked-msg">Complete Phase 2 first.</span>
+                      : <button className="phase-run-btn" disabled={phaseRunning!==null} onClick={() => runPhase(3)}>Score Jobs →</button>}
+                  </div>
+                )}
                 {isDone(3) && p3data && (
-                  <div className="phase-data">
-                    <div className="metrics-strip">
-                      <div className="metric-chip"><div className="mc-val" style={{color:'var(--accent)'}}>{p3data.auto}</div><div className="mc-label">Auto-eligible ≥{thr}</div></div>
-                      <div className="metric-chip"><div className="mc-val" style={{color:'var(--amber)'}}>{p3data.manual}</div><div className="mc-label">Review needed</div></div>
-                      <div className="metric-chip"><div className="mc-val" style={{color:'var(--t3)'}}>{p3data.below}</div><div className="mc-label">Below threshold</div></div>
-                      {p3data.filtered > 0 && <div className="metric-chip"><div className="mc-val" style={{color:'var(--t3)'}}>{p3data.filtered}</div><div className="mc-label">Filtered out</div></div>}
+                  <>
+                    <div className="pd-grid">
+                      <div className="pd-metric"><div className="pd-val" style={{color:'var(--green)'}}>{p3data.auto}</div><div className="pd-lbl">Auto ≥{thr}</div></div>
+                      <div className="pd-metric"><div className="pd-val" style={{color:'var(--amber)'}}>{p3data.manual}</div><div className="pd-lbl">Review</div></div>
+                      <div className="pd-metric"><div className="pd-val" style={{color:'var(--t3)'}}>{p3data.below}</div><div className="pd-lbl">Below min</div></div>
+                      <div className="pd-metric"><div className="pd-val" style={{color:'var(--t3)'}}>{p3data.filtered}</div><div className="pd-lbl">Filtered</div></div>
+                      <div className="pd-metric"><div className="pd-val">{p3data.total}</div><div className="pd-lbl">Total</div></div>
                     </div>
                     {(p3data.jobs||[]).length > 0 && (
-                      <table className="data-tbl">
-                        <thead><tr><th>Company</th><th>Role</th><th>Score</th><th>Skills matched</th><th>Status</th></tr></thead>
-                        <tbody>
-                          {p3data.jobs.map((j,i) =>
-                            <tr key={i}>
-                              <td style={{fontWeight:600,color:'var(--t1)'}}>{j.co}</td>
-                              <td>{j.role}</td>
-                              <td><span className="score-num" style={{color:j.score>=thr?'var(--accent)':'var(--amber)'}}>{j.score}</span></td>
-                              <td style={{fontSize:11,fontFamily:'var(--mono)',color:'var(--t3)'}}>{j.skills}</td>
-                              <td><span className={`tag ${j.score>=thr?'tag-green':'tag-amber'}`}>{j.score>=thr?'auto':'review'}</span></td>
-                            </tr>
-                          )}
-                        </tbody>
-                      </table>
+                      <div className="pd-section">
+                        <div className="pd-sub">Scored Jobs</div>
+                        <table className="data-tbl">
+                          <thead><tr><th>Company</th><th>Role</th><th>Score</th><th>Matching Skills</th><th>Missing Skills</th><th>Status</th><th>Link</th></tr></thead>
+                          <tbody>
+                            {p3data.jobs.map((j,i) => (
+                              <tr key={i}>
+                                <td style={{fontWeight:600,color:'var(--t1)'}}>{j.co}</td>
+                                <td>{j.role}<br/><span style={{fontSize:10,color:'var(--t3)',fontFamily:'var(--mono)'}}>{j.loc}</span></td>
+                                <td>
+                                  <div className="score-bar-wrap">
+                                    <span className="score-num" style={{color:j.score>=thr?'var(--green)':j.score>=60?'var(--amber)':'var(--red)',fontSize:15}}>{j.score}</span>
+                                    <div className="score-bar"><div className="score-bar-fill" style={{width:`${j.score}%`,background:j.score>=thr?'var(--green)':j.score>=60?'var(--amber)':'var(--red)'}}/></div>
+                                  </div>
+                                </td>
+                                <td>{(j.matching||[]).map(s=><span key={s} className="skill-pill match">{s}</span>)}</td>
+                                <td>{(j.missing||[]).map(s=><span key={s} className="skill-pill gap">{s}</span>)}</td>
+                                <td>
+                                  <span className={`tag ${j.status==='passed'&&j.score>=thr?'tag-green':j.status==='passed'?'tag-amber':j.status==='below_threshold'?'tag-red':'tag-dim'}`}>
+                                    {j.status==='passed'&&j.score>=thr?'auto':j.status==='passed'?'review':j.status==='below_threshold'?'below':'filtered'}
+                                  </span>
+                                </td>
+                                <td>{j.url&&<a href={j.url} target="_blank" style={{color:'var(--accent)',fontSize:11,fontFamily:'var(--mono)'}}>↗</a>}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
                     )}
-                  </div>
+                  </>
                 )}
               </PhaseAcc>
 
               {/* Phase 4 */}
               <PhaseAcc n={4} title="Resume Tailoring" done={isDone(4)} running={isRunning(4)} locked={isLocked(4)} errored={hasError(4)} elapsed={phaseElapsed[4]}>
-                {(isDone(4) || isRunning(4)) && <CLILog phaseN={4} running={isRunning(4)} done={isDone(4)}/>}
+                {isRunning(4) && <PhaseMsg n={4}/>}
                 {hasError(4) && <div className="phase-action-area"><div className="error-note">Error: {phaseError[4]}</div></div>}
-                <div className="phase-action-area">
-                  {isLocked(4) && <span className="phase-locked-msg">Complete Phase 3 first.</span>}
-                  {!isLocked(4) && !isDone(4) && !isRunning(4) && !hasError(4) &&
-                    <button className="phase-run-btn" disabled={phaseRunning!==null} onClick={() => runPhase(4)}>Tailor Resumes →</button>
-                  }
-                </div>
-                {isDone(4) && p4data && (
-                  <div className="done-banner">
-                    <span className="done-banner-icon">✓</span>
-                    <div className="done-banner-text"><strong>{p4data.count} tailored resumes</strong> saved to output/ — {(p4data.titles||[]).join(', ')}</div>
+                {!isDone(4) && !isRunning(4) && (
+                  <div className="phase-action-area">
+                    {isLocked(4) ? <span className="phase-locked-msg">Complete Phase 3 first.</span>
+                      : <button className="phase-run-btn" disabled={phaseRunning!==null} onClick={() => runPhase(4)}>Tailor Resumes →</button>}
                   </div>
+                )}
+                {isDone(4) && p4data && (
+                  <>
+                    <div className="pd-grid">
+                      <div className="pd-metric"><div className="pd-val" style={{color:'var(--accent)'}}>{p4data.count}</div><div className="pd-lbl">Resumes Tailored</div></div>
+                    </div>
+                    {(p4data.items||[]).length > 0 && (
+                      <div className="pd-section">
+                        <div className="pd-sub">Per-Job Tailoring Details</div>
+                        {p4data.items.map((item,i) => (
+                          <div key={i} style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:10,padding:'12px 14px',marginBottom:8}}>
+                            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:8}}>
+                              <div>
+                                <span style={{fontWeight:600,color:'var(--t1)',fontSize:13}}>{item.co}</span>
+                                <span style={{color:'var(--t3)',margin:'0 6px'}}>—</span>
+                                <span style={{color:'var(--t2)',fontSize:12}}>{item.role}</span>
+                              </div>
+                              <div style={{display:'flex',gap:6,alignItems:'center'}}>
+                                {item.has_cl && <span className="tag tag-amber">CL</span>}
+                                <span className={`tag ${item.status==='Tailored'?'tag-green':'tag-amber'}`}>{item.status}</span>
+                              </div>
+                            </div>
+                            {(item.ats_before > 0 || item.ats_after > 0) && (
+                              <div style={{display:'flex',gap:12,marginBottom:8,fontSize:11,color:'var(--t2)'}}>
+                                <span>ATS: <strong style={{color:'var(--t3)'}}>{item.ats_before}%</strong> → <strong style={{color:'var(--green)'}}>{item.ats_after}%</strong></span>
+                                {item.ats_after > item.ats_before && <span style={{color:'var(--green)'}}>+{item.ats_after-item.ats_before}%</span>}
+                              </div>
+                            )}
+                            {(item.ats_gaps||[]).length > 0 && (
+                              <div style={{marginBottom:6}}>
+                                <span style={{fontSize:10,color:'var(--t3)'}}>ATS gaps: </span>
+                                {item.ats_gaps.map(g=><span key={g} className="skill-pill gap">{g}</span>)}
+                              </div>
+                            )}
+                            {(item.skills||[]).length > 0 && (
+                              <div>
+                                <span style={{fontSize:10,color:'var(--t3)'}}>Skills (reordered): </span>
+                                {item.skills.map(s=><span key={s} className="skill-pill">{s}</span>)}
+                              </div>
+                            )}
+                            {item.resume_file && (
+                              <div style={{marginTop:8}}>
+                                <a href={`/output/${item.resume_file}`} target="_blank" style={{fontSize:11,color:'var(--accent)',fontFamily:'var(--mono)'}}>
+                                  ↓ {item.resume_file}
+                                </a>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </>
                 )}
               </PhaseAcc>
 
               {/* Phase 5 */}
               <PhaseAcc n={5} title="Application Submission" done={isDone(5)} running={isRunning(5)} locked={isLocked(5)} errored={hasError(5)} elapsed={phaseElapsed[5]}>
-                {(isDone(5) || isRunning(5)) && <CLILog phaseN={5} running={isRunning(5)} done={isDone(5)}/>}
+                {isRunning(5) && <PhaseMsg n={5}/>}
                 {hasError(5) && <div className="phase-action-area"><div className="error-note">Error: {phaseError[5]}</div></div>}
-                <div className="phase-action-area">
-                  {isLocked(5) && <span className="phase-locked-msg">Complete Phase 4 first.</span>}
-                  {!isLocked(5) && !isDone(5) && !isRunning(5) && !hasError(5) &&
-                    <button className="phase-run-btn" disabled={phaseRunning!==null} onClick={() => runPhase(5)}>Submit Applications →</button>
-                  }
-                </div>
-                {isDone(5) && p5data && (
-                  <div className="done-banner">
-                    <span className="done-banner-icon">✓</span>
-                    <div className="done-banner-text">
-                      <strong>{p5data.applied} applied</strong> · {p5data.manual} flagged for manual review
-                    </div>
+                {!isDone(5) && !isRunning(5) && (
+                  <div className="phase-action-area">
+                    {isLocked(5) ? <span className="phase-locked-msg">Complete Phase 4 first.</span>
+                      : <button className="phase-run-btn" disabled={phaseRunning!==null} onClick={() => runPhase(5)}>Submit Applications →</button>}
                   </div>
+                )}
+                {isDone(5) && p5data && (
+                  <>
+                    <div className="pd-grid">
+                      <div className="pd-metric"><div className="pd-val" style={{color:'var(--green)'}}>{p5data.applied}</div><div className="pd-lbl">Applied</div></div>
+                      <div className="pd-metric"><div className="pd-val" style={{color:'var(--amber)'}}>{p5data.manual}</div><div className="pd-lbl">Manual Review</div></div>
+                    </div>
+                    {(p5data.apps||[]).length > 0 && (
+                      <div className="pd-section">
+                        <div className="pd-sub">Submission Results</div>
+                        <table className="data-tbl">
+                          <thead><tr><th>Company</th><th>Role</th><th>Score</th><th>Status</th><th>Confirmation</th><th>Resume</th></tr></thead>
+                          <tbody>
+                            {p5data.apps.map((a,i)=>(
+                              <tr key={i}>
+                                <td style={{fontWeight:600,color:'var(--t1)'}}>{a.co}</td>
+                                <td>{a.role}</td>
+                                <td><span style={{fontFamily:'var(--display)',fontSize:15,color:a.score>=thr?'var(--green)':'var(--amber)'}}>{a.score}</span></td>
+                                <td><span className={`tag ${a.status==='Applied'?'tag-green':a.status==='Manual Required'?'tag-amber':'tag-dim'}`}>{a.status}</span></td>
+                                <td style={{fontSize:11,fontFamily:'var(--mono)',color:'var(--t3)'}}>{a.confirmation}</td>
+                                <td>{a.resume&&<a href={`/output/${a.resume}`} target="_blank" style={{fontSize:11,color:'var(--accent)',fontFamily:'var(--mono)'}}>↓</a>}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </>
                 )}
               </PhaseAcc>
 
               {/* Phase 6 */}
               <PhaseAcc n={6} title="Excel Tracker Update" done={isDone(6)} running={isRunning(6)} locked={isLocked(6)} errored={hasError(6)} elapsed={phaseElapsed[6]}>
-                {(isDone(6) || isRunning(6)) && <CLILog phaseN={6} running={isRunning(6)} done={isDone(6)}/>}
+                {isRunning(6) && <PhaseMsg n={6}/>}
                 {hasError(6) && <div className="phase-action-area"><div className="error-note">Error: {phaseError[6]}</div></div>}
-                <div className="phase-action-area">
-                  {isLocked(6) && <span className="phase-locked-msg">Complete Phase 5 first.</span>}
-                  {!isLocked(6) && !isDone(6) && !isRunning(6) && !hasError(6) &&
-                    <button className="phase-run-btn" disabled={phaseRunning!==null} onClick={() => runPhase(6)}>Write Tracker →</button>
-                  }
-                </div>
+                {!isDone(6) && !isRunning(6) && (
+                  <div className="phase-action-area">
+                    {isLocked(6) ? <span className="phase-locked-msg">Complete Phase 5 first.</span>
+                      : <button className="phase-run-btn" disabled={phaseRunning!==null} onClick={() => runPhase(6)}>Write Tracker →</button>}
+                  </div>
+                )}
                 {isDone(6) && phaseData[6] && (
-                  <div className="done-banner">
-                    <span className="done-banner-icon">✓</span>
-                    <div className="done-banner-text"><strong>{phaseData[6].tracker || 'Tracker'}</strong> written · 17 columns · color-coded</div>
+                  <div className="pd-section" style={{paddingTop:16}}>
+                    <div style={{display:'flex',alignItems:'center',gap:12}}>
+                      <span style={{fontSize:18}}>✓</span>
+                      <div>
+                        <div style={{fontWeight:600,color:'var(--t1)',fontSize:13}}>{phaseData[6].tracker||'Tracker'}</div>
+                        <div style={{fontSize:11,color:'var(--t3)'}}>17 columns · color-coded by status · summary dashboard tab</div>
+                      </div>
+                      {phaseData[6].url && <a href={phaseData[6].url} target="_blank" style={{marginLeft:'auto',fontSize:12,color:'var(--accent)',fontFamily:'var(--mono)',flexShrink:0}}>↓ Download</a>}
+                    </div>
                   </div>
                 )}
               </PhaseAcc>
 
               {/* Phase 7 */}
               <PhaseAcc n={7} title="Run Report" done={isDone(7)} running={isRunning(7)} locked={isLocked(7)} errored={hasError(7)} elapsed={phaseElapsed[7]}>
-                {(isDone(7) || isRunning(7)) && <CLILog phaseN={7} running={isRunning(7)} done={isDone(7)}/>}
+                {isRunning(7) && <PhaseMsg n={7}/>}
                 {hasError(7) && <div className="phase-action-area"><div className="error-note">Error: {phaseError[7]}</div></div>}
-                <div className="phase-action-area">
-                  {isLocked(7) && <span className="phase-locked-msg">Complete Phase 6 first.</span>}
-                  {!isLocked(7) && !isDone(7) && !isRunning(7) && !hasError(7) &&
-                    <button className="phase-run-btn" disabled={phaseRunning!==null} onClick={() => runPhase(7)}>Generate Report →</button>
-                  }
-                </div>
-                {isDone(7) && (
-                  <div className="done-banner">
-                    <span className="done-banner-icon">✓</span>
-                    <div className="done-banner-text"><strong>Run report saved</strong> to output/</div>
+                {!isDone(7) && !isRunning(7) && (
+                  <div className="phase-action-area">
+                    {isLocked(7) ? <span className="phase-locked-msg">Complete Phase 6 first.</span>
+                      : <button className="phase-run-btn" disabled={phaseRunning!==null} onClick={() => runPhase(7)}>Generate Report →</button>}
                   </div>
+                )}
+                {isDone(7) && phaseData[7] && (
+                  <>
+                    {phaseData[7].report && (
+                      <div className="report-box">{phaseData[7].report}</div>
+                    )}
+                    {!phaseData[7].report && (
+                      <div className="pd-section" style={{paddingTop:16}}>
+                        <span style={{color:'var(--green)',fontSize:13}}>✓ Run report saved to output/</span>
+                      </div>
+                    )}
+                  </>
                 )}
               </PhaseAcc>
 

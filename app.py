@@ -44,11 +44,13 @@ from pipeline.resume import _build_demo_resume, _read_resume, _save_tailored_res
 
 app = FastAPI(title="Jobs AI")
 
+_BASE_DIR = Path(__file__).parent
+
 # ── Serve frontend ─────────────────────────────────────────────────────────────
 
 @app.get("/")
 def root():
-    return FileResponse("frontend/index.html")
+    return FileResponse(_BASE_DIR / "frontend" / "index.html")
 
 @app.get("/output/{path:path}")
 def serve_output_file(path: str):

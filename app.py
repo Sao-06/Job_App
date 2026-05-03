@@ -209,7 +209,7 @@ def _serialize(phase: int, val) -> dict:
                     "posted":      j.get("posted_date", ""),
                     "url":         j.get("application_url", ""),
                 }
-                for j in jobs[:50]
+                for j in jobs[:200]
             ],
         }
     if phase == 3:

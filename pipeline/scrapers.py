@@ -252,46 +252,115 @@ class IndeedClient(JobBoardClient):
         return []
 
 
-# ── SimplifyJobs (GitHub README) ──────────────────────────────────────────────
+# ── Shared GitHub README helpers ──────────────────────────────────────────────
+
+def _fetch_url(url: str, timeout: int = 15) -> str | None:
+    """Fetch a URL and return the decoded text, or None on failure."""
+    import urllib.request as _ur
+    try:
+        with _ur.urlopen(url, timeout=timeout) as resp:
+            return resp.read().decode("utf-8", errors="replace")
+    except Exception:
+        return None
+
+
+def _strip_html(text: str) -> str:
+    text = re.sub(r'<br\s*/?>', ', ', text, flags=re.I)
+    text = re.sub(r'<[^>]+>', '', text)
+    text = text.replace("&amp;", "&").replace("&lt;", "<").replace(
+        "&gt;", ">").replace("&nbsp;", " ")
+    return re.sub(r',\s*,', ',', text).strip(", ").strip()
+
+
+def _make_job(*, company, title, location, url, platform, source,
+              posted=None) -> dict:
+    job_stub = {"title": title, "description": "", "requirements": []}
+    return {
+        "id":                   f"{source}_{abs(hash(company + title + url)) % 100000}",
+        "title":                title,
+        "company":              company,
+        "location":             location,
+        "remote":               "remote" in location.lower(),
+        "posted_date":          posted or date.today().isoformat(),
+        "description":          f"{title} at {company}.",
+        "requirements":         [],
+        "salary_range":         "Unknown",
+        "application_url":      url,
+        "platform":             platform,
+        "source":               source,
+        "experience_level":     "internship",
+        "education_required":   "unknown",
+        "citizenship_required": infer_citizenship_required(job_stub),
+    }
+
+
+# ── SimplifyJobs (GitHub README HTML table) ────────────────────────────────────
 
 class SimplifyJobsScraper:
-    """Scrapes the SimplifyJobs Summer 2026 internship board from GitHub."""
+    """Scrapes the SimplifyJobs Summer 2026 internship board from GitHub.
+
+    Falls back gracefully if the expected section header is renamed:
+    tries several keyword variants, then falls back to scanning the
+    entire README for any <tr> rows.
+    """
 
     README_URL = (
         "https://raw.githubusercontent.com/SimplifyJobs/"
         "Summer2026-Internships/dev/README.md"
     )
 
-    def fetch_jobs(self, section: str = "hardware") -> list:  # noqa: ARG002
-        import urllib.request as _ur
+    # Ordered list of section-header keywords to try.  First match wins.
+    SECTION_KEYWORDS = [
+        "hardware engineering",
+        "hardware",
+        "electrical engineering",
+        "embedded",
+        "semiconductor",
+        "engineering",
+    ]
 
-        try:
-            with _ur.urlopen(self.README_URL, timeout=15) as resp:
-                raw = resp.read().decode("utf-8", errors="replace")
-        except Exception as e:
-            console.print(f"  [yellow]SimplifyJobs fetch failed: {e}[/yellow]")
+    def fetch_jobs(self) -> list:
+        raw = _fetch_url(self.README_URL)
+        if not raw:
+            console.print("  [yellow]SimplifyJobs fetch failed[/yellow]")
             return []
 
         lines = raw.splitlines()
 
+        # Locate the best matching section header.
         section_start = -1
-        for i, line in enumerate(lines):
-            if "hardware engineering" in line.lower() and line.strip().startswith("#"):
-                section_start = i
+        matched_kw = ""
+        for kw in self.SECTION_KEYWORDS:
+            for i, line in enumerate(lines):
+                stripped = line.strip()
+                if stripped.startswith("#") and kw in stripped.lower():
+                    section_start = i
+                    matched_kw = kw
+                    break
+            if section_start != -1:
                 break
-        if section_start == -1:
-            console.print("  [yellow]SimplifyJobs: Hardware Engineering section not found[/yellow]")
-            return []
 
-        section_lines = []
-        for line in lines[section_start + 1:]:
-            if line.strip().startswith("##"):
-                break
-            section_lines.append(line)
+        if section_start != -1:
+            console.print(
+                f"  SimplifyJobs: found section '{matched_kw}' at line {section_start}"
+            )
+            section_lines = []
+            for line in lines[section_start + 1:]:
+                if line.strip().startswith("##"):
+                    break
+                section_lines.append(line)
+            search_text = "\n".join(section_lines)
+        else:
+            # No section found — scan the entire README.
+            console.print(
+                "  [yellow]SimplifyJobs: no matching section — scanning full README[/yellow]"
+            )
+            search_text = raw
 
-        section_text = "\n".join(section_lines)
-        row_blocks   = re.findall(r'<tr>(.*?)</tr>', section_text, re.DOTALL | re.I)
+        return deduplicate_jobs(self._parse_html_table(search_text))
 
+    def _parse_html_table(self, text: str) -> list:
+        row_blocks = re.findall(r'<tr>(.*?)</tr>', text, re.DOTALL | re.I)
         jobs: list = []
         last_company = ""
 
@@ -304,50 +373,258 @@ class SimplifyJobsScraper:
             if company_raw in ("↳", ""):
                 company = last_company
             else:
-                company = re.sub(r'<[^>]+>', '', company_raw).strip()
-                company = company.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+                company = _strip_html(company_raw)
                 last_company = company
 
-            title = re.sub(r'<[^>]+>', '', cells[1]).strip()
-            title = re.sub(r'[\U00010000-\U0010ffff]', '', title).strip()
-
-            location_raw = cells[2].strip()
-            location = re.sub(r'<br\s*/?>', ', ', location_raw, flags=re.I)
-            location = re.sub(r'<[^>]+>', '', location).strip()
-            location = re.sub(r',\s*,', ',', location).strip(", ")
+            title = re.sub(r'[\U00010000-\U0010ffff]', '', _strip_html(cells[1])).strip()
+            location = _strip_html(cells[2])
 
             link_cell = cells[3].strip()
             if "\U0001f512" in link_cell or "closed" in link_cell.lower():
                 continue
 
-            url_match = re.search(r'href="(https?://[^"]+)"', link_cell)
-            if not url_match:
+            urls = re.findall(r'href="(https?://[^"]+)"', link_cell)
+            if not urls:
                 continue
-            direct = re.findall(r'href="(https?://[^"]+)"', link_cell)
-            non_simplify = [u for u in direct if "simplify.jobs" not in u]
-            url = non_simplify[0] if non_simplify else direct[0]
+            non_simplify = [u for u in urls if "simplify.jobs" not in u]
+            url = non_simplify[0] if non_simplify else urls[0]
 
             if not company or not title:
                 continue
 
-            job_stub = {"title": title, "description": "", "requirements": []}
-            job = {
-                "id":                   f"simplify_{abs(hash(company + title + url)) % 100000}",
-                "title":                title,
-                "company":              company,
-                "location":             location,
-                "remote":               "remote" in location.lower(),
-                "posted_date":          date.today().isoformat(),
-                "description":          f"{title} internship at {company}.",
-                "requirements":         [],
-                "salary_range":         "Unknown",
-                "application_url":      url,
-                "platform":             "SimplifyJobs/GitHub",
-                "source":               "simplify",
-                "experience_level":     "internship",
-                "education_required":   "unknown",
-                "citizenship_required": infer_citizenship_required(job_stub),
-            }
-            jobs.append(job)
+            jobs.append(_make_job(
+                company=company, title=title, location=location,
+                url=url, platform="SimplifyJobs/GitHub", source="simplify",
+            ))
 
+        return jobs
+
+
+# ── Jobright-AI (GitHub README Markdown tables) ────────────────────────────────
+
+class JobrightScraper:
+    """Scrapes jobright-ai's GitHub internship/new-grad repos.
+
+    Tries several repo names in priority order; collects all that respond.
+    Parses Markdown pipe tables: | Company | Title | Location | Work Model | Date |
+    """
+
+    BASE = "https://raw.githubusercontent.com/jobright-ai"
+
+    # Repos to try, in priority order.  Year prefix tried for current + prior year.
+    REPO_SLUGS = [
+        "2026-Tech-Internship",
+        "2025-Tech-Internship",
+        "2026-Engineer-Internship",
+        "2025-Engineer-Internship",
+        "2026-Hardware-Engineer-Internship",
+        "2025-Hardware-Engineer-Internship",
+        "2026-Software-Engineer-New-Grad",
+    ]
+    BRANCHES = ["main", "master", "dev"]
+
+    def fetch_jobs(self) -> list:
+        jobs: list = []
+        tried = 0
+        for slug in self.REPO_SLUGS:
+            raw = None
+            for branch in self.BRANCHES:
+                url = f"{self.BASE}/{slug}/{branch}/README.md"
+                raw = _fetch_url(url, timeout=10)
+                if raw:
+                    break
+            tried += 1
+            if not raw:
+                continue
+            parsed = self._parse_md_table(raw, slug)
+            jobs.extend(parsed)
+            console.print(
+                f"  Jobright [{slug}]: {len(parsed)} listings"
+            )
+            if len(jobs) >= 200:  # cap total before dedup
+                break
+
+        if not jobs and tried:
+            console.print(
+                "  [yellow]Jobright: no repos responded — check repo names[/yellow]"
+            )
         return deduplicate_jobs(jobs)
+
+    def _parse_md_table(self, text: str, repo_slug: str) -> list:
+        """Parse Markdown pipe tables from a jobright-ai README.
+
+        Expected column order: Company | Job Title | Location | Work Model | Date
+        Column positions are detected dynamically from the header row.
+        """
+        jobs: list = []
+        lines = text.splitlines()
+
+        # Find table header row to detect column positions.
+        header_idx = -1
+        col_company = col_title = col_location = col_date = -1
+        for i, line in enumerate(lines):
+            if "|" not in line:
+                continue
+            cols = [c.strip().lower() for c in line.split("|") if c.strip()]
+            if any(k in " ".join(cols) for k in ("company", "job title", "title")):
+                header_idx = i
+                for j, c in enumerate(cols):
+                    if "company" in c:    col_company  = j
+                    if "title" in c:      col_title    = j
+                    if "location" in c:   col_location = j
+                    if "date" in c:       col_date     = j
+                break
+
+        if header_idx == -1:
+            return []
+
+        for line in lines[header_idx + 2:]:  # skip separator row
+            if not line.strip() or not line.strip().startswith("|"):
+                continue
+            parts = [p.strip() for p in line.split("|")]
+            parts = [p for p in parts if p or p == ""]  # keep structure
+
+            def _get(idx):
+                return parts[idx] if 0 <= idx < len(parts) else ""
+
+            company_raw = _get(col_company if col_company >= 0 else 1)
+            title_raw   = _get(col_title   if col_title   >= 0 else 2)
+            loc_raw     = _get(col_location if col_location >= 0 else 3)
+            date_raw    = _get(col_date    if col_date    >= 0 else 5)
+
+            # Extract display text and URL from Markdown link [text](url)
+            def _md_link(cell):
+                m = re.search(r'\[([^\]]+)\]\((https?://[^)]+)\)', cell)
+                if m:
+                    return m.group(1).strip(), m.group(2).strip()
+                return re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', cell).strip(), ""
+
+            company, _ = _md_link(company_raw)
+            title, apply_url = _md_link(title_raw)
+            if not apply_url:
+                # Try finding any URL in the row
+                m = re.search(r'https?://\S+', line)
+                apply_url = m.group(0).rstrip(')') if m else ""
+
+            location = re.sub(r'\s+', ' ', loc_raw).strip()
+            posted   = date_raw.strip()[:10] if date_raw else date.today().isoformat()
+
+            if not company or not title or not apply_url:
+                continue
+
+            # Skip rows that are headers/separators
+            if company.lower() in ("company", "---", ""):
+                continue
+
+            jobs.append(_make_job(
+                company=company, title=title, location=location,
+                url=apply_url, platform="Jobright/GitHub",
+                source="jobright", posted=posted,
+            ))
+
+        return jobs
+
+
+# ── InternList.com ─────────────────────────────────────────────────────────────
+
+class InternListScraper:
+    """Scrapes intern-list.com engineering internship listings.
+
+    The site is a JS-rendered SPA; we try the static HTML and
+    extract any visible job-card data using regex patterns.
+    Falls back gracefully to empty list if the site structure changes.
+    """
+
+    URLS = [
+        "https://www.intern-list.com/?selectedKey=%F0%9F%9B%A0%EF%B8%8F%20Engineering%20and%20Development",
+        "https://www.intern-list.com/",
+    ]
+
+    def fetch_jobs(self) -> list:
+        import urllib.request as _ur
+
+        for url in self.URLS:
+            raw = None
+            req = _ur.Request(
+                url,
+                headers={
+                    "User-Agent": (
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/120.0.0.0 Safari/537.36"
+                    )
+                },
+            )
+            try:
+                with _ur.urlopen(req, timeout=12) as resp:
+                    raw = resp.read().decode("utf-8", errors="replace")
+                break
+            except Exception:
+                continue
+
+        if not raw:
+            console.print("  [yellow]InternList: could not reach site[/yellow]")
+            return []
+
+        jobs: list = []
+
+        # Pattern 1: JSON-LD / embedded JSON data blobs
+        json_blobs = re.findall(
+            r'type="application/json"[^>]*>(.*?)</script>',
+            raw, re.DOTALL | re.I,
+        )
+        for blob in json_blobs:
+            try:
+                import json as _json
+                data = _json.loads(blob.strip())
+                extracted = self._extract_from_json(data)
+                jobs.extend(extracted)
+            except Exception:
+                pass
+
+        # Pattern 2: HTML job card rows — common patterns
+        if not jobs:
+            # Try anchor tags with company + role text
+            card_pattern = re.compile(
+                r'<a[^>]+href="(https?://[^"]+)"[^>]*>.*?'
+                r'<[^>]*class="[^"]*(?:company|employer)[^"]*"[^>]*>(.*?)</[^>]+>.*?'
+                r'<[^>]*class="[^"]*(?:role|title|position)[^"]*"[^>]*>(.*?)</[^>]+>',
+                re.DOTALL | re.I,
+            )
+            for m in card_pattern.finditer(raw):
+                apply_url = m.group(1)
+                company   = _strip_html(m.group(2))
+                title     = _strip_html(m.group(3))
+                if company and title and apply_url:
+                    jobs.append(_make_job(
+                        company=company, title=title, location="United States",
+                        url=apply_url, platform="InternList",
+                        source="internlist",
+                    ))
+
+        console.print(f"  InternList: {len(jobs)} listings parsed")
+        return deduplicate_jobs(jobs)
+
+    def _extract_from_json(self, data) -> list:
+        """Recursively dig into a JSON blob for job-like objects."""
+        jobs = []
+        if isinstance(data, list):
+            for item in data:
+                jobs.extend(self._extract_from_json(item))
+        elif isinstance(data, dict):
+            company = data.get("company") or data.get("employer") or ""
+            title   = data.get("title") or data.get("role") or data.get("position") or ""
+            url     = (data.get("apply_url") or data.get("url") or
+                       data.get("link") or data.get("applicationUrl") or "")
+            loc     = data.get("location") or data.get("city") or "United States"
+            if company and title and url and url.startswith("http"):
+                jobs.append(_make_job(
+                    company=str(company), title=str(title),
+                    location=str(loc), url=str(url),
+                    platform="InternList", source="internlist",
+                ))
+            else:
+                for v in data.values():
+                    if isinstance(v, (dict, list)):
+                        jobs.extend(self._extract_from_json(v))
+        return jobs

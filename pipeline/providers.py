@@ -995,17 +995,47 @@ class OllamaProvider(BaseProvider):
         raise RuntimeError("Ollama rate limit: exceeded 5 retry attempts")
 
     def _parse_json(self, text: str, fallback: dict) -> dict:
-        for candidate in [text, re.sub(r'^```(?:json)?\s*|\s*```$', '', text, flags=re.M)]:
+        def _try(s: str) -> dict | None:
             try:
-                return json.loads(candidate.strip())
+                obj = json.loads(s.strip())
+                if isinstance(obj, dict):
+                    return obj
             except json.JSONDecodeError:
                 pass
-        m = re.search(r'\{.*\}', text, re.DOTALL)
-        if m:
-            try:
-                return json.loads(m.group())
-            except json.JSONDecodeError:
-                pass
+            return None
+
+        def _fix_and_try(s: str) -> dict | None:
+            # Fix trailing commas before ] or } — extremely common Ollama mistake.
+            fixed = re.sub(r',\s*([}\]])', r'\1', s)
+            return _try(fixed)
+
+        candidates = [
+            text,
+            re.sub(r'^```(?:json)?\s*|\s*```$', '', text, flags=re.M),
+            # strip everything before the first { and after the last }
+            text[text.find('{'):text.rfind('}')+1] if '{' in text else '',
+        ]
+        for c in candidates:
+            if not c:
+                continue
+            result = _try(c) or _fix_and_try(c)
+            if result:
+                return result
+
+        # Last-resort: find the largest {...} block
+        for m in re.finditer(r'\{', text):
+            depth, i = 0, m.start()
+            for j, ch in enumerate(text[i:], i):
+                if ch == '{':
+                    depth += 1
+                elif ch == '}':
+                    depth -= 1
+                    if depth == 0:
+                        blob = text[i:j+1]
+                        result = _try(blob) or _fix_and_try(blob)
+                        if result:
+                            return result
+                        break
         return fallback
 
     def extract_profile(self, resume_text: str, preferred_titles: list = None) -> dict:
@@ -1048,14 +1078,13 @@ class OllamaProvider(BaseProvider):
             f"Resume:\n{resume_text[:4000]}"
         )
         raw = self._chat(prompt)
-        return self._parse_json(raw, {
-            "name": OWNER_NAME, "email": "", "linkedin": "", "location": "",
-            "target_titles": preferred_titles or [],
-            "top_hard_skills": [],
-            "top_soft_skills": [],
-            "education": [], "research_experience": [], "work_experience": [],
-            "experience": [], "projects": [], "resume_gaps": [],
-        })
+        result = self._parse_json(raw, {})
+        if not result:
+            # Ollama returned unparse-able output — fall back to regex extraction
+            # so the user's real resume data is never silently replaced with defaults.
+            console.print("  [yellow]⚠  Ollama JSON parse failed — using regex extractor as fallback[/yellow]")
+            return DemoProvider().extract_profile(resume_text, preferred_titles=preferred_titles)
+        return result
 
     def score_job(self, job: dict, profile: dict) -> dict:
         prompt = (

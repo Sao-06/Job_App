@@ -272,11 +272,13 @@ def verify_evidence(profile: dict, resume_text: str) -> dict:
         if needle and needle in text_l:
             verified.append(entry)
             continue
-        # Fallback: if the skill name itself appears in the resume, keep it
-        # even if the LLM's evidence quote was imperfect.
-        if skill_l and len(skill_l) >= 2 and skill_l in text_l:
-            verified.append(entry)
-            continue
+        # Fallback: if the skill name (or any meaningful word in it) appears
+        # in the resume, keep it — LLMs often paraphrase evidence strings.
+        if skill_l and len(skill_l) >= 2:
+            words = [w for w in skill_l.split() if len(w) >= 3]
+            if skill_l in text_l or (words and any(w in text_l for w in words)):
+                verified.append(entry)
+                continue
         rejected.append(skill or "?")
 
     profile["top_hard_skills_detailed"] = verified
@@ -328,11 +330,18 @@ def rerank_titles(profile: dict) -> dict:
             dropped.append(title)
             continue
 
-        # Rule 2: require evidence grounding when evidence is provided.
+        # Rule 2: soft evidence check — if evidence is provided but doesn't
+        # match the anchor corpus, keep the title anyway (LLMs paraphrase).
+        # Only drop if the title itself is completely absent from the resume
+        # AND evidence is actively contradictory (non-empty but zero overlap).
         ev = (t.get("evidence") or "").strip().lower()
         if ev:
             tokens = [tok for tok in ev.split() if len(tok) > 3]
-            if tokens and not any(tok in anchor for tok in tokens):
+            title_in_anchor = any(
+                tok in anchor for tok in title_l.split() if len(tok) > 3
+            )
+            ev_in_anchor = tokens and any(tok in anchor for tok in tokens)
+            if not ev_in_anchor and not title_in_anchor and anchor:
                 dropped.append(title)
                 continue
         kept.append(t)

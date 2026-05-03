@@ -915,24 +915,6 @@ function ChipSelect({ options, value, onChange, disabled }) {
 }
 
 /* ── MARKDOWN RENDERER ── */
-function MdRender({ text }) {
-  const lines = text.split('\n');
-  const els = [];
-  let buf = [];
-  const flush = () => { if (buf.length) { els.push(<p key={els.length}>{buf.join(' ')}</p>); buf = []; } };
-  lines.forEach((l, i) => {
-    if (l.startsWith('## '))      { flush(); els.push(<h2 key={i}>{l.slice(3)}</h2>); }
-    else if (l.startsWith('### ')) { flush(); els.push(<h3 key={i}>{l.slice(4)}</h3>); }
-    else if (l.startsWith('- '))   { flush(); els.push(<ul key={i}><li dangerouslySetInnerHTML={{__html:l.slice(2).replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>').replace(/`(.*?)`/g,'<code>$1</code>')}}/></ul>); }
-    else if (/^\d+\. /.test(l))    { flush(); els.push(<ul key={i}><li dangerouslySetInnerHTML={{__html:l.replace(/^\d+\. /,'').replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>')}}/></ul>); }
-    else if (l.trim() === '')      { flush(); }
-    else { buf.push(l); }
-  });
-  flush();
-  return <div className="md-render">{els}</div>;
-}
-
-
 function PhaseResults({ n, threshold, setJobTitles, data }) {
   if (n === 1) return <Phase1Results data={data} setJobTitles={setJobTitles}/>;
   if (n === 2) return <Phase2Results data={data}/>;

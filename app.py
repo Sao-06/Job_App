@@ -48,7 +48,18 @@ app = FastAPI(title="Jobs AI")
 
 @app.get("/")
 def root():
+    return FileResponse("frontend/landing.html")
+
+@app.get("/app")
+def dashboard():
     return FileResponse("frontend/index.html")
+
+@app.get("/frontend/{filename}")
+def frontend_static(filename: str):
+    p = Path("frontend") / filename
+    if not p.exists() or not p.is_file():
+        raise HTTPException(404, "Not found")
+    return FileResponse(p)
 
 @app.get("/output/{path:path}")
 def serve_output_file(path: str):

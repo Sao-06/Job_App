@@ -24,7 +24,8 @@ from .helpers import (infer_experience_level, infer_education_required,
                       filter_jobs_by_education, validate_job_urls)
 from .providers import BaseProvider
 from .resume import _build_demo_resume, _save_tailored_resume
-from .scrapers import JobSpyClient, SimplifyJobsScraper, sanitize_salary_field
+from .scrapers import (JobSpyClient, SimplifyJobsScraper, JobrightScraper,
+                       InternListScraper, sanitize_salary_field)
 
 
 # ── Phase 1 ────────────────────────────────────────────────────────────────────
@@ -281,13 +282,30 @@ def phase2_discover_jobs(profile: dict, job_titles: list, location: str,
         job.setdefault("source", "jobspy")
 
     if use_simplify:
+        existing_urls = {j.get("application_url") for j in jobs if j.get("application_url")}
+
         simplify_jobs = SimplifyJobsScraper().fetch_jobs()
         console.print(f"  📋 SimplifyJobs: {len(simplify_jobs)} listings")
-        if simplify_jobs:
-            simplify_urls = {j["application_url"] for j in simplify_jobs
-                             if j.get("application_url")}
-            jobs = [j for j in jobs if j.get("application_url") not in simplify_urls]
-            jobs = jobs + simplify_jobs
+        new_simplify = [j for j in simplify_jobs
+                        if j.get("application_url") not in existing_urls]
+        jobs = jobs + new_simplify
+        existing_urls |= {j["application_url"] for j in new_simplify
+                          if j.get("application_url")}
+
+        jobright_jobs = JobrightScraper().fetch_jobs()
+        console.print(f"  📋 Jobright: {len(jobright_jobs)} listings")
+        new_jr = [j for j in jobright_jobs
+                  if j.get("application_url") not in existing_urls]
+        jobs = jobs + new_jr
+        existing_urls |= {j["application_url"] for j in new_jr
+                          if j.get("application_url")}
+
+        internlist_jobs = InternListScraper().fetch_jobs()
+        if internlist_jobs:
+            console.print(f"  📋 InternList: {len(internlist_jobs)} listings")
+            new_il = [j for j in internlist_jobs
+                      if j.get("application_url") not in existing_urls]
+            jobs = jobs + new_il
 
     before = len(jobs)
     jobs   = deduplicate_jobs(jobs)

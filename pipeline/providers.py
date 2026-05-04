@@ -1039,43 +1039,25 @@ class OllamaProvider(BaseProvider):
         return fallback
 
     def extract_profile(self, resume_text: str, preferred_titles: list = None) -> dict:
-        from .profile_audit import DOMAIN_TITLE_FAMILIES, FORBIDDEN_GENERIC_TITLES
+        from .profile_audit import DOMAIN_TITLE_FAMILIES
 
         pref_hint = ""
         if preferred_titles:
-            pref_hint = (
-                f"\nCandidate stated preferences: {', '.join(preferred_titles)} "
-                "(tiebreaker only; do NOT override the domain whitelist)."
-            )
+            pref_hint = f"\nPreferences: {', '.join(preferred_titles)}"
         prompt = (
-            "Parse this resume in THREE ORDERED PASSES and return ONLY a JSON object.\n\n"
-            "PASS 1 — Section map: identify Education, Research Experience, Work "
-            "Experience, Projects, Skills.\n"
-            "PASS 2 — Hard skills (TECHNICAL NOUNS ONLY: tools, software, languages, "
-            "lab equipment, fab processes, measurement techniques). NEVER place "
-            "interpersonal traits under top_hard_skills. Soft skills are behavioral "
-            "only (teamwork, communication, technical writing). Scan EVERY section — "
-            "every bullet in Research Experience, Projects, and Coursework.\n"
-            "PASS 3 — Target titles: DRAWN ONLY from this whitelist:\n"
-            f"  {', '.join(DOMAIN_TITLE_FAMILIES)}\n"
-            "Forbidden (unless the candidate is CS-only with no lab experience): "
-            f"{', '.join(sorted(FORBIDDEN_GENERIC_TITLES))}\n"
-            "Weight Education and Research Experience much more heavily than Work "
-            "Experience when choosing titles.\n\n"
-            "JSON shape:\n"
-            "{\n"
-            '  "name": str, "email": str, "linkedin": str, "location": str,\n'
-            '  "target_titles": [{"title": str, "family": str, "evidence": str}],\n'
-            '  "top_hard_skills": [{"skill": str, "category": str, "evidence": str}],\n'
-            '  "top_soft_skills": [str],\n'
-            '  "education": [{"degree": str, "institution": str, "year": str, "gpa": str}],\n'
-            '  "research_experience": [{"title": str, "company": str, "dates": str, "bullets": [str]}],\n'
-            '  "work_experience":     [{"title": str, "company": str, "dates": str, "bullets": [str]}],\n'
-            '  "projects": [{"name": str, "description": str, "skills_used": [str]}],\n'
-            '  "resume_gaps": [str]\n'
-            "}\n"
+            "Extract resume info. Return ONLY a JSON object with these fields:\n"
+            '{"name": str, "email": str, "linkedin": str, "location": str,\n'
+            '"target_titles": [str], "top_hard_skills": [str], "top_soft_skills": [str],\n'
+            '"education": [{"degree": str, "institution": str}],\n'
+            '"research_experience": [{"title": str, "company": str, "bullets": [str]}],\n'
+            '"work_experience": [{"title": str, "company": str, "bullets": [str]}],\n'
+            '"projects": [{"name": str, "description": str, "skills_used": [str]}],\n'
+            '"resume_gaps": [str]}\n\n'
+            f"Target title families (extract titles matching these): {', '.join(DOMAIN_TITLE_FAMILIES)}\n"
+            "Hard skills: ONLY technical tools, languages, equipment. No soft skills here.\n"
+            "Soft skills: ONLY behavioral (communication, teamwork, etc.).\n"
             f"{pref_hint}\n\n"
-            f"Resume:\n{resume_text[:4000]}"
+            f"Resume:\n{resume_text[:3000]}"
         )
         raw = self._chat(prompt)
         result = self._parse_json(raw, {})

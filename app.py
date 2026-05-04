@@ -80,7 +80,7 @@ _S: dict = {
     "job_titles": "Engineer",
     "location": "United States",
     "max_apps": 10,
-    "max_scrape_jobs": 50,
+    "max_scrape_jobs": 20,
     "days_old": 30,
     "cover_letter": False,
     "blacklist": "",
@@ -88,9 +88,10 @@ _S: dict = {
     # Filters
     "experience_levels": ["internship", "entry-level"],
     "education_filter": ["bachelors"],
-    "include_unknown_education": False,
+    "include_unknown_education": True,
     "citizenship_filter": "exclude_required",
     "use_simplify": True,
+    "llm_score_limit": 10,
     # Resume
     "resume_text": None,
     "latex_source": None,
@@ -128,16 +129,51 @@ def _make_provider():
 def _sse(data: dict) -> str:
     return f"data: {json.dumps(data)}\n\n"
 
+_phase_logs: dict = {}
+
+class _LogCapture:
+    """Wraps a file object to both write normally and capture to queue."""
+    def __init__(self, original, queue):
+        self.original = original
+        self.queue = queue
+
+    def write(self, text):
+        if text and text.strip():
+            # Send to queue for streaming
+            try:
+                self.queue.put_nowait(text)
+            except:
+                pass
+        # Also write normally so console still works
+        return self.original.write(text)
+
+    def flush(self):
+        return self.original.flush()
+
+    def isatty(self):
+        return self.original.isatty()
+
+    def __getattr__(self, name):
+        return getattr(self.original, name)
+
 def _run_phase_sse(phase: int, fn):
-    """Generator: run *fn* in a thread, stream SSE heartbeats, emit done/error."""
+    """Generator: run *fn* in a thread, stream SSE + console output."""
     result_q: "queue.Queue[tuple]" = queue.Queue()
+    log_q: "queue.Queue[str]" = queue.Queue()
+    _phase_logs[phase] = log_q
 
     def _worker():
+        import sys
+        old_stdout = sys.stdout
         try:
+            # Wrap stdout to capture while keeping normal output
+            sys.stdout = _LogCapture(old_stdout, log_q)
             val = fn()
             result_q.put(("ok", val))
         except Exception as exc:
             result_q.put(("err", str(exc)))
+        finally:
+            sys.stdout = old_stdout
 
     t = threading.Thread(target=_worker, daemon=True)
     t.start()
@@ -146,8 +182,16 @@ def _run_phase_sse(phase: int, fn):
     yield _sse({"type": "start", "phase": phase})
 
     while t.is_alive():
+        # Stream captured logs
+        try:
+            while True:
+                text = log_q.get_nowait()
+                yield _sse({"type": "log", "phase": phase, "text": text})
+        except queue.Empty:
+            pass
+
         yield ": keep-alive\n\n"
-        t.join(timeout=1.0)
+        t.join(timeout=0.2)
 
     try:
         status, val = result_q.get_nowait()
@@ -343,11 +387,12 @@ async def update_config(req: Request):
         "cover_letter", "blacklist", "whitelist",
         "experience_levels", "education_filter",
         "include_unknown_education", "citizenship_filter",
-        "use_simplify",
+        "use_simplify", "llm_score_limit",
     ):
         if k in body:
             _S[k] = body[k]
     return {"ok": True}
+
 
 # ── State ─────────────────────────────────────────────────────────────────────
 
@@ -382,16 +427,17 @@ def get_state():
         "job_titles": _S.get("job_titles", ""),
         "location": _S.get("location", "United States"),
         "max_apps": _S.get("max_apps", 10),
-        "max_scrape_jobs": _S.get("max_scrape_jobs", 50),
+        "max_scrape_jobs": _S.get("max_scrape_jobs", 20),
         "days_old": _S.get("days_old", 30),
         "cover_letter": _S.get("cover_letter", False),
         "blacklist": _S.get("blacklist", ""),
         "whitelist": _S.get("whitelist", ""),
         "experience_levels": _S.get("experience_levels", ["internship", "entry-level"]),
         "education_filter": _S.get("education_filter", ["bachelors"]),
-        "include_unknown_education": _S.get("include_unknown_education", False),
+        "include_unknown_education": _S.get("include_unknown_education", True),
         "citizenship_filter": _S.get("citizenship_filter", "exclude_required"),
         "use_simplify": _S.get("use_simplify", True),
+        "llm_score_limit": _S.get("llm_score_limit", 10),
         "profile": {
             "name": profile.get("name", ""),
             "email": profile.get("email", ""),
@@ -445,6 +491,27 @@ def reset_state():
     _S["elapsed"] = {}
     return {"ok": True}
 
+def _clear_phases_after(phase: int):
+    """Clear results and state from phase+1 onwards."""
+    if phase < 1:
+        _clear_phases_after(1)
+        return
+    clear_map = {
+        1: ("jobs", "scored", "applications", "tracker_path"),
+        2: ("scored", "applications", "tracker_path"),
+        3: ("applications", "tracker_path"),
+        4: ("applications", "tracker_path"),
+        5: ("tracker_path",),
+    }
+    for k in clear_map.get(phase, []):
+        _S[k] = None
+    if phase <= 4:
+        _S["tailored_map"] = {}
+    for p in range(phase + 1, 8):
+        _S["done"].discard(p)
+        _S["error"].pop(p, None)
+        _S["elapsed"].pop(p, None)
+
 # ── Phase 1 ───────────────────────────────────────────────────────────────────
 
 @app.get("/api/phase/1/run")
@@ -472,6 +539,11 @@ def run_phase1():
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
+@app.get("/api/phase/1/rerun")
+def rerun_phase1():
+    _clear_phases_after(1)
+    return run_phase1()
+
 # ── Phase 2 ───────────────────────────────────────────────────────────────────
 
 @app.get("/api/phase/2/run")
@@ -490,10 +562,10 @@ def run_phase2():
         result = phase2_discover_jobs(
             _S["profile"], titles, loc, prov,
             use_simplify=_S.get("use_simplify", True),
-            max_jobs=_S.get("max_scrape_jobs", 50),
+            max_jobs=_S.get("max_scrape_jobs", 20),
             days_old=_S.get("days_old", 30),
             education_filter=_S.get("education_filter") or None,
-            include_unknown_education=_S.get("include_unknown_education", False),
+            include_unknown_education=_S.get("include_unknown_education", True),
         )
         # Apply blacklist
         bl = {c.strip().lower() for c in (_S.get("blacklist") or "").split(",") if c.strip()}
@@ -508,6 +580,11 @@ def run_phase2():
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
+@app.get("/api/phase/2/rerun")
+def rerun_phase2():
+    _clear_phases_after(2)
+    return run_phase2()
+
 # ── Phase 3 ───────────────────────────────────────────────────────────────────
 
 @app.get("/api/phase/3/run")
@@ -521,6 +598,7 @@ def run_phase3():
             _S["jobs"], _S["profile"], prov, min_score=60,
             experience_levels=_S.get("experience_levels") or None,
             citizenship_filter=_S.get("citizenship_filter", "all"),
+            llm_score_limit=_S.get("llm_score_limit", 10),
         )
         _S["scored"] = result
         return result
@@ -530,6 +608,11 @@ def run_phase3():
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+@app.get("/api/phase/3/rerun")
+def rerun_phase3():
+    _clear_phases_after(3)
+    return run_phase3()
 
 # ── Phase 4 ───────────────────────────────────────────────────────────────────
 
@@ -572,6 +655,11 @@ def run_phase4():
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
+@app.get("/api/phase/4/rerun")
+def rerun_phase4():
+    _clear_phases_after(4)
+    return run_phase4()
+
 # ── Phase 5 ───────────────────────────────────────────────────────────────────
 
 @app.get("/api/phase/5/run")
@@ -606,6 +694,11 @@ def run_phase5():
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
+@app.get("/api/phase/5/rerun")
+def rerun_phase5():
+    _clear_phases_after(5)
+    return run_phase5()
+
 # ── Phase 6 ───────────────────────────────────────────────────────────────────
 
 @app.get("/api/phase/6/run")
@@ -624,6 +717,11 @@ def run_phase6():
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+@app.get("/api/phase/6/rerun")
+def rerun_phase6():
+    _clear_phases_after(6)
+    return run_phase6()
 
 # ── Phase 7 ───────────────────────────────────────────────────────────────────
 

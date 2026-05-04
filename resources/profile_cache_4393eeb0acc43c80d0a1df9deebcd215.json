@@ -1,0 +1,366 @@
+{
+  "name": "Jonathan Liu",
+  "email": "jliu1401@uw.edu",
+  "linkedin": "linkedin.com/in/jonathan-liu-202081252",
+  "location": "Washington",
+  "target_titles": [
+    "FPGA / Digital Design",
+    "Embedded Systems / Firmware",
+    "Research Assistant (semiconductor / photonics / device)",
+    "IC Design Engineering Intern",
+    "Hardware Engineering Intern"
+  ],
+  "top_hard_skills": [
+    "Verilog",
+    "PCB Design",
+    "Python",
+    "Java",
+    "C++",
+    "Linux",
+    "SEM",
+    "OnShape",
+    "Fusion360",
+    "CAD",
+    "STM",
+    "SOC",
+    "MBE",
+    "RIE",
+    "GIT",
+    "Stm32",
+    "Arduino",
+    "Altium",
+    "PL",
+    "Microcontroller",
+    "TEM"
+  ],
+  "top_soft_skills": [
+    "Teamwork",
+    "Problem-solving",
+    "Communication",
+    "Attention to detail",
+    "Time management"
+  ],
+  "education": [
+    {
+      "degree": "UNIVERSITY OF WASHINGTON",
+      "institution": "SEATTLE, WA EXPECTED GRADUATION: JUNE 2028",
+      "year": "2028",
+      "gpa": ""
+    },
+    {
+      "degree": "- Bachelor of Science in Electrical and Computer Engineering, Junior standing",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    },
+    {
+      "degree": "- Cumulative GPA: 3.93 - Annual Dean's List",
+      "institution": "",
+      "year": "",
+      "gpa": "3.93"
+    },
+    {
+      "degree": "- Cumulative Major GPA: 4.0",
+      "institution": "",
+      "year": "",
+      "gpa": "4.0"
+    },
+    {
+      "degree": "- Relavent coursework through Spring 2026: Computer Architecture, VLSI, Digital Circuit Design (SystemVerilog)",
+      "institution": "",
+      "year": "2026",
+      "gpa": ""
+    },
+    {
+      "degree": "- Tohoku University STEM Summer Program Study Abroad",
+      "institution": "SENDAI, JAPAN JUNE - JULY 2025",
+      "year": "2025",
+      "gpa": ""
+    },
+    {
+      "degree": "- Immersed in a four-week intensive program blending cutting-edge robotics, disaster resilience, and nanoelectronics fabrication",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    },
+    {
+      "degree": "Member of Husky Robotics Drone Subteam - Electronic Systems Integration October 2024 - Present",
+      "institution": "",
+      "year": "2024",
+      "gpa": ""
+    },
+    {
+      "degree": "- Developed and implemented diverse drone communication protocols using firmware such as Betaflight, PX4, and",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    },
+    {
+      "degree": "QGroundControl.",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    },
+    {
+      "degree": "- Designed hardware solutions for flight controllers through Altium PCB design, aiding qualification for both the",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    },
+    {
+      "degree": "University Rover Challenge and the Student Unmanned Aerial Systems competition.",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    },
+    {
+      "degree": "- Executed precision soldering of UART and signal/power pads on flight controllers and electronic speed controllers,",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    },
+    {
+      "degree": "respectively. Wired both analog and DJI digital video modules to flight controller UART ports.",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    },
+    {
+      "degree": "LI PO CHUN UNITED WORLD COLLEGE",
+      "institution": "HONG KONG JUNE 2024",
+      "year": "2024",
+      "gpa": ""
+    },
+    {
+      "degree": "- IB Score: 42 (Global Top 5%)",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    },
+    {
+      "degree": "- Related coursework: Physics, English, Economics at Higher Level",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    },
+    {
+      "degree": "- Activities and societies: Leader/Co-founder of Philippines Service and Cultural Immersion, Leader of Tennis Club,",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    },
+    {
+      "degree": "Member of Programming Club, Member of Beach Clean Up Club, Volunteer at the Sino-Japanese Youth Conference",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    },
+    {
+      "degree": "INTERNATIONAL CHRISTIAN SCHOOL",
+      "institution": "HONG KONG JUNE 2022",
+      "year": "2022",
+      "gpa": ""
+    },
+    {
+      "degree": "- GPA: 3.98 - Principal's Role",
+      "institution": "",
+      "year": "",
+      "gpa": "3.98"
+    },
+    {
+      "degree": "- Volunteered at school IT and refurbished 300+ laptops/desktops/tablets: replaced HDDs with SSDs, upgraded RAM,",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    },
+    {
+      "degree": "swapped faulty components, imaged OS, ran diagnostics, and documented assets before donation.",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    }
+  ],
+  "experience": [
+    {
+      "title": "Autonomous Systems Engineering Intern @ XPeng AeroHT",
+      "company": "GUANGZHOU, CHINA JULY - SEPTEMBER 2025",
+      "dates": "",
+      "bullets": [
+        "Developed autonomous flight and landing systems for XPeng HT Aero X3 flying car.",
+        "Validated LiDAR and imagery data for sensor fusion, ensuring data integrity.",
+        "Trained AI models for object detection and landing zone confirmation.",
+        "Managed data logging and communicated technical updates across teams."
+      ]
+    },
+    {
+      "title": "Founder of Philippines Service and Cultural Immersion NOVEMBER 2024",
+      "company": "",
+      "dates": "",
+      "bullets": [
+        "Founded an annual overseas outreach project trip to tackle inequality and immerse a group of 20 students in the lives of different cultures in a one-week trip to the cities of Bacolod and La Carlota.",
+        "Technical Projects",
+        "Designed, PCB-etched, and hand-soldered a minimalist 2 % macro keypad powered by an STM32 microcontroller."
+      ]
+    },
+    {
+      "title": "Wrote custom firmware to support layered keymaps, user-definable macros, and USB HID communication.",
+      "company": "May",
+      "dates": "",
+      "bullets": []
+    },
+    {
+      "title": "2025",
+      "company": "",
+      "dates": "",
+      "bullets": [
+        "Built a real-time distance-measurement module using an Arduino Uno and a LIDAR sensor. Implemented I\u00b2C communication, data filtering, and calibration routines to achieve \u00b12 cm accuracy out to 40 m. | April 2025",
+        "Researched, selected, and assembled compatible hardware components to build a custom desktop PC from the ground up. Gained hands-on experience in system architecture, component integration, and troubleshooting. |"
+      ]
+    },
+    {
+      "title": "December 2020 - January 2021",
+      "company": "",
+      "dates": "",
+      "bullets": []
+    }
+  ],
+  "projects": [],
+  "resume_gaps": [],
+  "top_hard_skills_detailed": [
+    {
+      "skill": "Verilog",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "PCB Design",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Python",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Java",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "C++",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Linux",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "SEM",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "OnShape",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Fusion360",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "CAD",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "STM",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "SOC",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "MBE",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "RIE",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "GIT",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Stm32",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Arduino",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Altium",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "PL",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Microcontroller",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "TEM",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    }
+  ],
+  "target_titles_detailed": [
+    {
+      "title": "FPGA / Digital Design",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "Embedded Systems / Firmware",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "Research Assistant (semiconductor / photonics / device)",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "IC Design Engineering Intern",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "Hardware Engineering Intern",
+      "family": "",
+      "evidence": ""
+    }
+  ],
+  "_audit_log": [
+    "retention_audit recovered 11 missing skills: ['STM', 'SOC', 'MBE', 'RIE', 'GIT', 'Stm32', 'Arduino', 'Altium', 'PL', 'Microcontroller', 'TEM']"
+  ]
+}

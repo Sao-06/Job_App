@@ -1,0 +1,330 @@
+{
+  "name": "Jonathan Liu",
+  "email": "jliu1401@uw.edu",
+  "linkedin": "linkedin.com/in/jonathan-liu-202081252",
+  "location": "Seattle, WA",
+  "target_titles": [
+    "FPGA / Digital Design",
+    "Embedded Systems / Firmware",
+    "Research Assistant (semiconductor / photonics / device)"
+  ],
+  "top_hard_skills": [
+    "Altium Designer",
+    "KiCad",
+    "STM32",
+    "Arduino",
+    "FPGA (SystemVerilog)",
+    "Intel Quartus",
+    "ModelSim",
+    "Soldering",
+    "BLDC Motor Control",
+    "LDOs",
+    "Oscilloscopes",
+    "C/C++",
+    "Python (NumPy/SciPy)",
+    "Java",
+    "MATLAB",
+    "SPICE",
+    "Fusion360",
+    "OpenSCAD",
+    "Linux/Bash",
+    "Jetson Orin Nano",
+    "Pixhawk 6C",
+    "MAVLink",
+    "UART",
+    "I2C",
+    "SPI",
+    "CAN",
+    "LiDAR",
+    "Computer Vision (OpenCV/CV models)",
+    "GO",
+    "SOC",
+    "RIE",
+    "Pcb Design",
+    "RUST",
+    "MBE",
+    "GIT",
+    "PL"
+  ],
+  "top_soft_skills": [
+    "Leadership",
+    "Project Management",
+    "Cross-functional Communication",
+    "Collaborative Teamwork",
+    "Event Planning"
+  ],
+  "education": [
+    {
+      "degree": "Bachelor of Science in Electrical and Computer Engineering",
+      "institution": "University of Washington, Seattle, WA"
+    },
+    {
+      "degree": "Nanoelectronics Fabrication & Robotics Immersion",
+      "institution": "Tohoku University STEM Summer Program, Sendai, Japan"
+    }
+  ],
+  "research_experience": [
+    {
+      "title": "Undergraduate Research Assistant (Embedded Systems)",
+      "company": "Sensors, Energy, and Automation Laboratory (SEAL), Seattle, WA",
+      "bullets": [
+        "Developed random forest classification models to analyze PPG biosignals and detect fatigue levels from heart biometrics in safety-critical environments.",
+        "Designed custom 3D-printed PCB mounts using OpenSCAD for wearable body sensor placement and integration."
+      ]
+    }
+  ],
+  "work_experience": [
+    {
+      "title": "Lead (Drone Hardware Engineer)",
+      "company": "Husky Robotics Drone Subteam, Seattle, WA",
+      "bullets": [
+        "Technical Lead: Spearheaded recruitment and technical onboarding for 20+ members; managed full development lifecycle of three custom PCBs (Flight Controller, ESC, PDB), BOM selection, and Professional Design Reviews.",
+        "Flight Controller PCB Design: Piloted design of a custom PCB (STM32H743, Altium) with DSHOT600, redundant power sensing, and telemetry broadcasting; achieved full compatibility with PX4 firmware standards.",
+        "System Integration: Architected companion computer system using Jetson Orin Nano and Pixhawk 6C via MAVLink over a redundant 5GHz bridge for computer vision and autonomous navigation.",
+        "Firmware & Communications: Implemented serial protocols (UART, I2C, SPI, CAN) to interface external peripherals, bridging hardware sensors with firmware logic for real-time state estimation.",
+        "Testing: Developed automated thrust stand using Arduino with hardware-in-the-loop (HIL) test fixtures to characterize motor performance using oscilloscopes, optimizing propulsion power efficiency by 25%."
+      ]
+    },
+    {
+      "title": "Autonomous Systems Engineering Intern",
+      "company": "ARIDGE, Guangzhou, China",
+      "bullets": [
+        "Wrote Python scripts to train computer vision models for autonomous landing zone classification and document categorization.",
+        "Validated LiDAR point cloud and imagery data."
+      ]
+    }
+  ],
+  "projects": [],
+  "resume_gaps": [],
+  "top_hard_skills_detailed": [
+    {
+      "skill": "Altium Designer",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "KiCad",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "STM32",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Arduino",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "FPGA (SystemVerilog)",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Intel Quartus",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "ModelSim",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Soldering",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "BLDC Motor Control",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "LDOs",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Oscilloscopes",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "C/C++",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Python (NumPy/SciPy)",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Java",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "MATLAB",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "SPICE",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Fusion360",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "OpenSCAD",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Linux/Bash",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Jetson Orin Nano",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Pixhawk 6C",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "MAVLink",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "UART",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "I2C",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "SPI",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "CAN",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "LiDAR",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Computer Vision (OpenCV/CV models)",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "GO",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "SOC",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "RIE",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Pcb Design",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "RUST",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "MBE",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "GIT",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "PL",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    }
+  ],
+  "target_titles_detailed": [
+    {
+      "title": "FPGA / Digital Design",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "Embedded Systems / Firmware",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "Research Assistant (semiconductor / photonics / device)",
+      "family": "",
+      "evidence": ""
+    }
+  ],
+  "_audit_log": [
+    "retention_audit recovered 8 missing skills: ['GO', 'SOC', 'RIE', 'Pcb Design', 'RUST', 'MBE', 'GIT', 'PL']"
+  ],
+  "experience": [
+    {
+      "title": "Undergraduate Research Assistant (Embedded Systems)",
+      "company": "Sensors, Energy, and Automation Laboratory (SEAL), Seattle, WA",
+      "bullets": [
+        "Developed random forest classification models to analyze PPG biosignals and detect fatigue levels from heart biometrics in safety-critical environments.",
+        "Designed custom 3D-printed PCB mounts using OpenSCAD for wearable body sensor placement and integration."
+      ]
+    },
+    {
+      "title": "Lead (Drone Hardware Engineer)",
+      "company": "Husky Robotics Drone Subteam, Seattle, WA",
+      "bullets": [
+        "Technical Lead: Spearheaded recruitment and technical onboarding for 20+ members; managed full development lifecycle of three custom PCBs (Flight Controller, ESC, PDB), BOM selection, and Professional Design Reviews.",
+        "Flight Controller PCB Design: Piloted design of a custom PCB (STM32H743, Altium) with DSHOT600, redundant power sensing, and telemetry broadcasting; achieved full compatibility with PX4 firmware standards.",
+        "System Integration: Architected companion computer system using Jetson Orin Nano and Pixhawk 6C via MAVLink over a redundant 5GHz bridge for computer vision and autonomous navigation.",
+        "Firmware & Communications: Implemented serial protocols (UART, I2C, SPI, CAN) to interface external peripherals, bridging hardware sensors with firmware logic for real-time state estimation.",
+        "Testing: Developed automated thrust stand using Arduino with hardware-in-the-loop (HIL) test fixtures to characterize motor performance using oscilloscopes, optimizing propulsion power efficiency by 25%."
+      ]
+    },
+    {
+      "title": "Autonomous Systems Engineering Intern",
+      "company": "ARIDGE, Guangzhou, China",
+      "bullets": [
+        "Wrote Python scripts to train computer vision models for autonomous landing zone classification and document categorization.",
+        "Validated LiDAR point cloud and imagery data."
+      ]
+    }
+  ]
+}

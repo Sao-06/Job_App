@@ -32,10 +32,26 @@ from .scrapers import (JobSpyClient, SimplifyJobsScraper, JobrightScraper,
 
 def phase1_ingest_resume(resume_text: str, provider: BaseProvider,
                          preferred_titles: list = None) -> dict:
+    import hashlib
     from .config import OWNER_NAME
     from .profile_audit import audit_profile
     console.print("\n[bold cyan]Phase 1 — Resume Ingestion & Profile Extraction[/bold cyan]")
     _t0 = time.time()
+
+    resume_hash = hashlib.md5(resume_text.encode()).hexdigest()
+    cache_file = RESOURCES_DIR / f"profile_cache_{resume_hash}.json"
+
+    if cache_file.exists():
+        try:
+            with open(cache_file, encoding="utf-8") as f:
+                profile = json.load(f)
+            console.print(f"  ⚡ Loaded cached profile (resume unchanged)")
+            elapsed = time.time() - _t0
+            console.print(f"  ⏱️  Phase 1 completed in [bold]{elapsed:.1f}s[/bold]")
+            return profile
+        except Exception:
+            pass
+
     with _CliSpinner(interval=20):
         profile = provider.extract_profile(resume_text, preferred_titles=preferred_titles)
 
@@ -60,6 +76,11 @@ def phase1_ingest_resume(resume_text: str, provider: BaseProvider,
             console.print(f"  ⚠️  Gaps: {', '.join(profile['resume_gaps'])}")
         for note in profile.get("_audit_log", []):
             console.print(f"  [dim]🔍 audit: {note}[/dim]")
+
+    RESOURCES_DIR.mkdir(exist_ok=True)
+    with open(cache_file, "w", encoding="utf-8") as f:
+        json.dump(profile, f, indent=2)
+
     console.print(f"  ⏱️  Phase 1 completed in [bold]{elapsed:.1f}s[/bold]")
     return profile
 
@@ -201,6 +222,9 @@ def phase2_discover_jobs(profile: dict, job_titles: list, location: str,
     _t0 = time.time()
 
     sample_file = RESOURCES_DIR / "sample_jobs.json"
+    if sample_file.exists():
+        sample_file.unlink()
+        console.print("  🗑️  Cleared cached jobs — fresh scrape starting")
     cached_jobs, cached_meta = _load_cached_jobs(sample_file)
     cache_hit = cached_jobs is not None and _cache_titles_overlap(
         cached_meta, job_titles,
@@ -342,19 +366,6 @@ def phase2_discover_jobs(profile: dict, job_titles: list, location: str,
         f"(broken kept for manual review)"
     )
 
-    RESOURCES_DIR.mkdir(exist_ok=True)
-    payload = {
-        "_meta": {
-            "titles":       list(job_titles),
-            "location":     location,
-            "days_old":     days_old,
-            "generated_at": datetime.now().isoformat(timespec="seconds"),
-        },
-        "jobs": jobs,
-    }
-    with open(sample_file, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2)
-    console.print(f"  ✅ {len(jobs)} postings saved to resources/sample_jobs.json")
     console.print(f"  ⏱️  Phase 2 completed in [bold]{time.time() - _t0:.1f}s[/bold]")
     return jobs
 
@@ -366,7 +377,8 @@ def phase3_score_jobs(jobs: list, profile: dict, provider: BaseProvider,
                        experience_levels=None,
                        education_filter=None,  # noqa: ARG001 — moved to phase 2; kept for back-compat
                        citizenship_filter: str = "all",
-                       include_unknown_education: bool = False) -> list:  # noqa: ARG001
+                       include_unknown_education: bool = False,  # noqa: ARG001
+                       llm_score_limit: int = 10) -> list:
     """Score every job that survived Phase 2's filters.
 
     Returns the FULL list (not pruned by min_score) so the UI can show why
@@ -445,21 +457,54 @@ def phase3_score_jobs(jobs: list, profile: dict, provider: BaseProvider,
         pre_filtered.extend(dropped)
         console.print(f"  🇺🇸 Citizenship filter (only required): {len(to_score)} jobs remain")
 
-    console.print(f"  🔢 Scoring {len(to_score)} jobs…")
+    def _fast_score(job: dict, profile: dict) -> int:
+        """Fast heuristic scoring (0-100) based on keyword matching."""
+        reqs = set(str(r).lower() for r in (job.get("requirements") or []) if r)
+        skills = set(str(s).lower() for s in (profile.get("top_hard_skills") or []))
+        titles = set(str(t).lower() for t in (profile.get("target_titles") or []))
+
+        skill_match = len(reqs & skills) / len(reqs) * 50 if reqs else 25
+        title_match = 25 if any(t in job.get("title", "").lower() for t in titles) else 5
+        exp_match = 15 if job.get("experience_level") in ["internship", "entry-level"] else 5
+        return int(skill_match + title_match + exp_match)
+
+    console.print(f"  🔢 Fast-scoring {len(to_score)} jobs…")
+    for job in to_score:
+        job["_fast_score"] = _fast_score(job, profile)
+
+    to_score.sort(key=lambda j: j["_fast_score"], reverse=True)
+    llm_score_count = min(llm_score_limit, len(to_score))
+    to_llm_score = to_score[:llm_score_count]
+    to_skip = to_score[llm_score_count:]
+
+    if to_skip:
+        console.print(
+            f"  ⚡ Fast-scoring all {len(to_score)} jobs; "
+            f"LLM-scoring top {llm_score_count} only"
+        )
+
     _t0 = time.time()
     scored: list = []
-    for i, job in enumerate(to_score, 1):
+    for i, job in enumerate(to_llm_score, 1):
         result = provider.score_job(job, profile)
         merged = {**job, **result}
         s = merged.get("score", 0)
         merged["filter_status"] = "passed" if s >= min_score else "below_threshold"
         merged["filter_reason"] = "" if s >= min_score else f"score {s} < {min_score}"
         scored.append(merged)
-        if i % 10 == 0 or i == len(to_score):
+        if i % 5 == 0 or i == len(to_llm_score):
             console.print(
-                f"  [dim]📊 Scored {i}/{len(to_score)} jobs  "
+                f"  [dim]🧠 LLM-scored {i}/{len(to_llm_score)} jobs  "
                 f"({time.time() - _t0:.0f}s elapsed)[/dim]"
             )
+
+    for job in to_skip:
+        merged = {**job}
+        s = merged.get("_fast_score", 0)
+        merged["score"] = s
+        merged["filter_status"] = "below_threshold"
+        merged["filter_reason"] = f"heuristic score {s}, skipped LLM (top {llm_score_count} only)"
+        scored.append(merged)
 
     # Combine: scored first (sorted by score), then pre-filtered for visibility.
     scored.sort(key=lambda x: x.get("score", 0), reverse=True)

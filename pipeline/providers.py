@@ -37,6 +37,50 @@ class BaseProvider:
         raise NotImplementedError
 
 
+# ── Shared rubric scorer (Phase 3) ─────────────────────────────────────────────
+# Weighted categories: Required Skills 50 / Industry 30 / Location+Seniority 20.
+
+RUBRIC_WEIGHTS = {"required_skills": 50, "industry": 30, "location_seniority": 20}
+
+
+def _build_rubric_result(job: dict, req_raw: float, industry_raw: float,
+                          loc_seniority_raw: float, *,
+                          matched: list = None, missing: list = None,
+                          reasoning: str = "") -> dict:
+    """Clamp sub-scores, compute weighted total, and assemble the standard
+    rubric result dict consumed by Phase 3 and the tracker."""
+    def _clamp(x: float) -> float:
+        try:
+            return max(0.0, min(1.0, float(x)))
+        except (TypeError, ValueError):
+            return 0.0
+    req_raw = _clamp(req_raw)
+    industry_raw = _clamp(industry_raw)
+    loc_seniority_raw = _clamp(loc_seniority_raw)
+    pts_skills = round(req_raw * RUBRIC_WEIGHTS["required_skills"])
+    pts_ind    = round(industry_raw * RUBRIC_WEIGHTS["industry"])
+    pts_loc    = round(loc_seniority_raw * RUBRIC_WEIGHTS["location_seniority"])
+    total = max(0, min(100, pts_skills + pts_ind + pts_loc))
+    if not reasoning:
+        reasoning = (
+            f"Skills {int(req_raw*100)}%, industry {int(industry_raw*100)}%, "
+            f"location/seniority {int(loc_seniority_raw*100)}%."
+        )
+    return {
+        "job_id": job.get("id", ""),
+        "score": total,
+        "score_breakdown": {
+            "required_skills":    {"raw": req_raw,          "weight": 50, "points": pts_skills},
+            "industry":           {"raw": industry_raw,     "weight": 30, "points": pts_ind},
+            "location_seniority": {"raw": loc_seniority_raw,"weight": 20, "points": pts_loc},
+        },
+        "reasoning": reasoning,
+        "matching_skills": (matched or [])[:6],
+        "missing_skills":  (missing or [])[:6],
+        "reason": reasoning,  # back-compat
+    }
+
+
 # ── 1. Anthropic (Claude) ──────────────────────────────────────────────────────
 
 class AnthropicProvider(BaseProvider):
@@ -64,28 +108,84 @@ class AnthropicProvider(BaseProvider):
         return {}
 
     def extract_profile(self, resume_text: str, preferred_titles: list = None) -> dict:
+        from .profile_audit import DOMAIN_TITLE_FAMILIES, FORBIDDEN_GENERIC_TITLES
+
         tool = {
             "name": "save_profile",
             "description": "Save the extracted resume profile as structured data.",
             "input_schema": {
                 "type": "object",
                 "properties": {
-                    "name":            {"type": "string"},
-                    "email":           {"type": "string"},
-                    "linkedin":        {"type": "string"},
-                    "location":        {"type": "string"},
-                    "target_titles":   {
-                        "type": "array", "items": {"type": "string"},
+                    "name":     {"type": "string"},
+                    "email":    {"type": "string"},
+                    "linkedin": {"type": "string"},
+                    "location": {"type": "string"},
+                    "target_titles": {
+                        "type": "array",
                         "description": (
-                            "5–8 specific job titles this candidate is best suited for, "
-                            "based on their skills, experience, and education. "
-                            "Use industry-standard title variants (e.g. 'IC Design Intern', "
-                            "'VLSI Design Engineer', 'Photonics Engineer Intern'). "
-                            "Weight heavily toward the candidate's stated preferences."
+                            "5–8 domain-specific job titles drawn ONLY from the "
+                            "hardware / semiconductor / photonics / embedded title "
+                            "families listed in the prompt. Every title MUST include "
+                            "an 'evidence' line quoted from the resume's Education or "
+                            "Research Experience section justifying it."
+                        ),
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "title":    {"type": "string"},
+                                "family":   {"type": "string",
+                                             "description": "Which title family from the whitelist"},
+                                "evidence": {"type": "string",
+                                             "description": "Exact line from Education or Research Experience that justifies this title"},
+                            },
+                            "required": ["title", "family", "evidence"],
+                        },
+                    },
+                    "top_hard_skills": {
+                        "type": "array",
+                        "description": (
+                            "TECHNICAL NOUNS ONLY: programming languages, software "
+                            "tools, simulation environments, lab equipment, "
+                            "fabrication processes, measurement techniques, hardware "
+                            "platforms, named methodologies. NEVER include "
+                            "interpersonal traits. Scan EVERY section — coursework, "
+                            "research bullets, projects, skills list — and extract "
+                            "every technical noun you see. Completeness over brevity."
+                        ),
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "skill":    {"type": "string"},
+                                "category": {
+                                    "type": "string",
+                                    "enum": [
+                                        "programming_language",
+                                        "software_tool",
+                                        "simulation_environment",
+                                        "fab_process",
+                                        "lab_instrument",
+                                        "measurement_technique",
+                                        "hardware_platform",
+                                        "methodology",
+                                    ],
+                                },
+                                "evidence": {
+                                    "type": "string",
+                                    "description": "Exact substring from the resume where this skill appears.",
+                                },
+                            },
+                            "required": ["skill", "category", "evidence"],
+                        },
+                    },
+                    "top_soft_skills": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "Behavioral/interpersonal traits ONLY (e.g. Teamwork, "
+                            "Technical Writing, Project Management). NEVER include "
+                            "lab techniques, instruments, software, or languages."
                         ),
                     },
-                    "top_hard_skills": {"type": "array", "items": {"type": "string"}},
-                    "top_soft_skills": {"type": "array", "items": {"type": "string"}},
                     "education": {
                         "type": "array",
                         "items": {"type": "object", "properties": {
@@ -93,8 +193,27 @@ class AnthropicProvider(BaseProvider):
                             "year":   {"type": "string"}, "gpa":         {"type": "string"},
                         }},
                     },
+                    "research_experience": {
+                        "type": "array",
+                        "description": "Academic / lab / research roles — anything with a PI, lab, or research group. Keep SEPARATE from work_experience.",
+                        "items": {"type": "object", "properties": {
+                            "title":   {"type": "string"}, "company": {"type": "string"},
+                            "dates":   {"type": "string"},
+                            "bullets": {"type": "array", "items": {"type": "string"}},
+                        }},
+                    },
+                    "work_experience": {
+                        "type": "array",
+                        "description": "Industry / internship / part-time jobs (non-research).",
+                        "items": {"type": "object", "properties": {
+                            "title":   {"type": "string"}, "company": {"type": "string"},
+                            "dates":   {"type": "string"},
+                            "bullets": {"type": "array", "items": {"type": "string"}},
+                        }},
+                    },
                     "experience": {
                         "type": "array",
+                        "description": "Back-compat: union of research_experience + work_experience.",
                         "items": {"type": "object", "properties": {
                             "title":   {"type": "string"}, "company": {"type": "string"},
                             "dates":   {"type": "string"},
@@ -114,20 +233,42 @@ class AnthropicProvider(BaseProvider):
                 "required": ["name", "top_hard_skills", "top_soft_skills", "target_titles"],
             },
         }
+
         pref_hint = ""
         if preferred_titles:
             pref_hint = (
-                f"\n\nThe candidate's preferred job titles are: {', '.join(preferred_titles)}. "
-                "Use these as a strong signal when generating target_titles — include these "
-                "and closely related industry-standard variants that match their background."
+                f"\nThe candidate's stated preferences are: {', '.join(preferred_titles)}. "
+                "Use these as a TIEBREAKER only — they do NOT override the domain whitelist."
             )
+
         prompt = (
-            "Parse this resume. Extract a complete structured profile. "
-            "Build a Master Skills Profile: top 10 hard skills and top 5 soft skills "
-            "ranked by frequency and recency. Flag any resume gaps.\n"
-            "For target_titles: suggest 5–8 specific job titles this candidate is realistically "
-            "suited for based on their skills, projects, and experience level. "
-            "Use concrete, searchable titles (not generic ones like 'Engineer')."
+            "Parse this resume in THREE ORDERED PASSES. Do not skip passes.\n\n"
+            "PASS 1 — Section map:\n"
+            "Identify and label Education, Research Experience, Work Experience, "
+            "Projects, Skills, and Publications. Separate research roles (lab / PI / "
+            "research group) from industry roles.\n\n"
+            "PASS 2 — Hard-skill extraction (STRICT taxonomy):\n"
+            "Hard skills = TECHNICAL NOUNS ONLY: tools, software, programming "
+            "languages, lab equipment, fabrication processes, measurement techniques, "
+            "simulation environments, named methodologies.\n"
+            "Soft skills = BEHAVIORAL / INTERPERSONAL traits ONLY (teamwork, "
+            "communication, project management). NEVER place lab techniques, "
+            "instruments, or software packages under soft skills.\n"
+            "Scan the ENTIRE resume — every bullet under Research Experience, "
+            "Projects, Coursework, and the Skills list. List EVERY technical noun. "
+            "Completeness > brevity. For each hard skill, include the exact "
+            "substring from the resume as `evidence`.\n\n"
+            "PASS 3 — Target titles:\n"
+            "Suggest 5–8 titles DRAWN ONLY from this whitelist of "
+            "hardware / semiconductor / photonics / embedded role families:\n"
+            f"  {chr(10).join('  - ' + f for f in DOMAIN_TITLE_FAMILIES)}\n\n"
+            "FORBIDDEN titles (do NOT suggest unless the candidate's primary Education "
+            "is Computer Science AND there is ZERO lab/fab/device research experience):\n"
+            f"  {', '.join(sorted(FORBIDDEN_GENERIC_TITLES))}\n\n"
+            "Every suggested title MUST be justified by a specific line from the "
+            "Education or Research Experience section — put that line in the "
+            "`evidence` field. Weight Education and Research Experience much more "
+            "heavily than Work Experience when choosing titles."
             f"{pref_hint}\n\n"
             f"Resume:\n{resume_text}"
         )
@@ -136,17 +277,22 @@ class AnthropicProvider(BaseProvider):
     def score_job(self, job: dict, profile: dict) -> dict:
         tool = {
             "name": "score_job",
-            "description": "Score a job posting against the candidate profile.",
+            "description": "Rubric-score a job vs. the candidate using three weighted categories.",
             "input_schema": {
                 "type": "object",
                 "properties": {
-                    "job_id":          {"type": "string"},
-                    "score":           {"type": "integer", "minimum": 0, "maximum": 100},
-                    "matching_skills": {"type": "array", "items": {"type": "string"}},
-                    "missing_skills":  {"type": "array", "items": {"type": "string"}},
-                    "reason":          {"type": "string"},
+                    "required_skills":    {"type": "number", "minimum": 0, "maximum": 1,
+                                           "description": "Fraction of job requirements covered by the candidate's skills (0-1)."},
+                    "industry":           {"type": "number", "minimum": 0, "maximum": 1,
+                                           "description": "Alignment of job's industry/domain with candidate's target field (0-1)."},
+                    "location_seniority": {"type": "number", "minimum": 0, "maximum": 1,
+                                           "description": "Combined fit of location and seniority level (0-1)."},
+                    "reasoning":          {"type": "string",
+                                           "description": "EXACTLY one sentence explaining the overall score."},
+                    "matching_skills":    {"type": "array", "items": {"type": "string"}},
+                    "missing_skills":     {"type": "array", "items": {"type": "string"}},
                 },
-                "required": ["job_id", "score", "matching_skills", "missing_skills", "reason"],
+                "required": ["required_skills", "industry", "location_seniority", "reasoning"],
             },
         }
         profile_summary = json.dumps({
@@ -155,15 +301,27 @@ class AnthropicProvider(BaseProvider):
             "targets":   profile.get("target_titles", []),
         })
         prompt = (
-            "Score this job (0-100) using: title alignment 25%, skills match 30%, "
-            "experience 15%, industry 10%, education 10%, location 10%.\n\n"
+            "Score this job vs. the candidate using EXACTLY three categories, each 0.0-1.0:\n"
+            "  - required_skills (weight 50%): fraction of job requirements the candidate covers.\n"
+            "  - industry (weight 30%): alignment of job's domain with candidate's target field.\n"
+            "  - location_seniority (weight 20%): combined location + seniority fit.\n"
+            "Also provide a ONE-sentence 'reasoning' string explaining the overall score.\n\n"
             f"Candidate:\n{profile_summary}\n\n"
             f"Job Title: {job.get('title')}\nCompany: {job.get('company')}\n"
             f"Requirements: {', '.join(job.get('requirements', []))}\n"
             f"Description: {job.get('description', '')}\n"
             f"Location: {job.get('location')} (Remote: {job.get('remote', False)})"
         )
-        return self._tool_call(tool, prompt, max_tokens=1024)
+        raw = self._tool_call(tool, prompt, max_tokens=1024)
+        return _build_rubric_result(
+            job,
+            raw.get("required_skills", 0),
+            raw.get("industry", 0),
+            raw.get("location_seniority", 0),
+            matched=raw.get("matching_skills") or [],
+            missing=raw.get("missing_skills") or [],
+            reasoning=raw.get("reasoning", ""),
+        )
 
     def tailor_resume(self, job: dict, profile: dict, resume_text: str) -> dict:
         tool = {
@@ -200,14 +358,19 @@ class AnthropicProvider(BaseProvider):
         return self._tool_call(tool, prompt, max_tokens=4096, thinking=True)
 
     def generate_cover_letter(self, job: dict, profile: dict) -> str:
+        name = profile.get("name") or OWNER_NAME
         resp = self.client.messages.create(
             model=self.model, max_tokens=1024,
             messages=[{"role": "user", "content": (
-                f"Write a 3-paragraph cover letter for {OWNER_NAME} applying to "
+                f"Write a 3-paragraph cover letter for {name} applying to "
                 f"{job['title']} at {job['company']}.\n"
                 "Para 1: Hook + role name. Para 2: Top 2-3 achievements mapped to JD. "
                 "Para 3: Enthusiasm + call to action.\n"
+                f"Candidate name: {name}\n"
                 f"Candidate skills: {', '.join(profile.get('top_hard_skills', [])[:5])}\n"
+                f"Candidate education: "
+                f"{(profile.get('education') or [{}])[0].get('degree', '')} at "
+                f"{(profile.get('education') or [{}])[0].get('institution', '')}\n"
                 f"JD requirements: {', '.join(job.get('requirements', [])[:5])}"
             )}],
         )
@@ -249,6 +412,199 @@ class AnthropicProvider(BaseProvider):
 
 # ── 2. Demo (regex / template, no API) ────────────────────────────────────────
 
+# ── PDF / text extraction helpers (shared by all providers) ──────────────────
+
+def _extract_name_from_text(text: str) -> str:
+    """Three-tier name extraction from raw resume text.
+
+    Tier 1 — spaCy NER (highest accuracy, optional):
+        Uses the 'en_core_web_sm' model to find PERSON entities in the first
+        200 characters. Skipped gracefully if spaCy is not installed.
+
+    Tier 2 — First-line heuristic:
+        The very first non-empty, non-contact line of a well-structured resume
+        is almost always the candidate's name.  Applies strict sanity guards
+        (no @, no digits, no URLs, no section-header words, 2–4 tokens).
+
+    Tier 3 — Scored window scan:
+        Scans the first 30 lines with a confidence model:
+        - higher score for lines appearing earlier
+        - bonus for title-case or ALL-CAPS formatting (common in PDF headers)
+        - must match a name-safe character pattern
+        Best-scoring candidate wins.
+
+    Falls back to OWNER_NAME placeholder if all three tiers fail.
+    """
+    from .config import OWNER_NAME as _placeholder
+
+    _SECTION_HEADERS = {
+        "education", "experience", "skills", "projects", "objective",
+        "summary", "profile", "about", "interests", "certifications",
+        "publications", "awards", "references", "contact",
+        "technical skills", "core competencies", "work experience",
+        "professional experience", "research experience",
+        "volunteer", "activities", "languages", "coursework",
+    }
+    _BAD_RE = re.compile(
+        r'[@/\\]|https?://|www\.|\.com|\.edu|\.org|\.io|\.net|'
+        r'\d{3}[\s.\-]\d{3,4}|'          # phone fragments
+        r'\b(?:university|college|institute|school|department|'
+        r'gpa|grade|phone|tel|fax|email)\b',
+        re.I,
+    )
+    # Name-safe: each word must match one of:
+    #   Title-case word          — Jane, Smith, Van
+    #   Irish/hyphenated         — O'Brien, D'Angelo, Jean-Paul
+    #   ALL-CAPS word            — JOHN, WILLIAMS
+    #   Single initial (± dot)   — A, J, M.
+    _WORD_RE = re.compile(
+        r"^(?:"
+        r"[A-Z][a-z\-]+"                   # plain title-case: Jane, Smith
+        r"|[A-Z]['\u2019][A-Z][a-z]+"      # O'Brien / O\u2019Brien
+        r"|[A-Z][a-z]*\-[A-Z][a-z]+"       # hyphenated: Jean-Paul
+        r"|[A-Z]{2,}"                       # ALL-CAPS: JOHN, WILLIAMS
+        r"|[A-Z]\.?"                        # single initial: A or A.
+        r")$"
+    )
+
+    def _name_re_match(line: str) -> bool:
+        words = line.split()
+        if not (2 <= len(words) <= 4):
+            return False
+        return all(_WORD_RE.match(w) for w in words)
+
+    _NAME_RE = _name_re_match  # callable, same interface as re.match
+
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    if not lines:
+        return _placeholder
+
+    # ── Tier 1: spaCy NER ────────────────────────────────────────────────────
+    try:
+        import spacy  # noqa: PLC0415
+        try:
+            nlp = spacy.load("en_core_web_sm")
+        except OSError:
+            nlp = None
+        if nlp is not None:
+            # Only run NER on the first ~300 chars; the name is always near the top.
+            snippet = " ".join(lines[:10])[:300]
+            doc = nlp(snippet)
+            for ent in doc.ents:
+                if ent.label_ == "PERSON" and len(ent.text.split()) >= 2:
+                    # Confirm the token passes basic sanity (no @, no digits).
+                    candidate = ent.text.strip()
+                    if not _BAD_RE.search(candidate) and _NAME_RE(candidate):
+                        return candidate
+    except ImportError:
+        pass  # spaCy optional — move to next tier
+
+    # ── Tier 2: first-line heuristic ─────────────────────────────────────────
+    # The first non-empty line of a resume is the name ~80% of the time.
+    first = lines[0]
+    if (
+        not _BAD_RE.search(first)
+        and first.lower().rstrip(":.") not in _SECTION_HEADERS
+        and _NAME_RE(first)
+    ):
+        return first
+
+    # ── Tier 3: scored window scan ────────────────────────────────────────────
+    candidates: list[tuple[int, str]] = []
+
+    for i, line in enumerate(lines[:30]):
+        if len(line) > 55:          # long lines are addresses / bullets
+            continue
+        if _BAD_RE.search(line):
+            continue
+        low = line.lower().rstrip(":,.")
+        if low in _SECTION_HEADERS:
+            continue
+        words = line.split()
+        if not (2 <= len(words) <= 4):
+            continue
+        if not _NAME_RE(line):
+            continue
+
+        score = max(0, 15 - i)                              # earlier → higher
+        if line == line.title():
+            score += 6                                       # Title Case bonus
+        elif line == line.upper():
+            score += 4                                       # ALL CAPS bonus
+        if len(words) == 3:
+            score += 2                                       # first middle last
+        candidates.append((score, line))
+
+    if candidates:
+        candidates.sort(key=lambda x: -x[0])
+        return candidates[0][1]
+
+    return _placeholder
+
+
+def _extract_location_from_text(text: str) -> str:
+    """Best-effort location extraction from raw resume text.
+
+    Detects locations in order of confidence:
+      1. Inline contact separator — "City, ST  |  email  |  phone"
+      2. US "City, ST" / "City, State" pattern (2- and 3-word cities).
+      3. International "City, Country" pattern.
+      4. Standalone US state name in the first 20 lines.
+      5. Empty string — never injects a hardcoded location.
+    """
+    _US_STATES = {
+        "Alabama","Alaska","Arizona","Arkansas","California","Colorado",
+        "Connecticut","Delaware","Florida","Georgia","Hawaii","Idaho",
+        "Illinois","Indiana","Iowa","Kansas","Kentucky","Louisiana","Maine",
+        "Maryland","Massachusetts","Michigan","Minnesota","Mississippi",
+        "Missouri","Montana","Nebraska","Nevada","New Hampshire",
+        "New Jersey","New Mexico","New York","North Carolina","North Dakota",
+        "Ohio","Oklahoma","Oregon","Pennsylvania","Rhode Island",
+        "South Carolina","South Dakota","Tennessee","Texas","Utah","Vermont",
+        "Virginia","Washington","West Virginia","Wisconsin","Wyoming",
+        "District of Columbia",
+    }
+    _US_STATE_RE = (
+        r'(?:' + '|'.join(re.escape(s) for s in _US_STATES) + r'|[A-Z]{2})'
+    )
+    # Pattern 1: inline separator bar — grab first segment that looks like a location.
+    # e.g. "Austin, TX  |  john@email.com  |  (512) 555-1234"
+    bar_line_re = re.compile(
+        r'\b([A-Z][a-z]+(?:[\s-][A-Z][a-z]+){0,2}),\s*' + _US_STATE_RE + r'\b'
+    )
+    # Pattern 2: International — "City, Country" where country is title-case.
+    intl_re = re.compile(
+        r'\b([A-Z][a-z]+(?:[\s-][A-Z][a-z]+){0,2}),\s*'
+        r'([A-Z][a-z]+(?:\s[A-Z][a-z]+)?)\b'
+    )
+
+    header = "\n".join(text.splitlines()[:25])   # location always near the top
+
+    m = bar_line_re.search(header)
+    if m:
+        return m.group(0)
+
+    # Pattern 3: international match (lower confidence — only use if no US match).
+    intl_m = intl_re.search(header)
+
+    # Pattern 4: standalone state name scan.
+    for line in text.splitlines()[:20]:
+        for state in _US_STATES:
+            if re.search(rf'\b{re.escape(state)}\b', line, re.I):
+                # Prefer "City, State" over bare state.
+                m2 = bar_line_re.search(line)
+                if m2:
+                    return m2.group(0)
+                return state
+
+    if intl_m:
+        return intl_m.group(0)
+
+    return ""
+
+
+# ── 2. Demo (regex / template, no API) ────────────────────────────────────────
+
 class DemoProvider(BaseProvider):
     """Template/regex-based provider.  Zero cost, zero setup, fully offline."""
 
@@ -278,6 +634,117 @@ class DemoProvider(BaseProvider):
         except Exception:
             return list(DemoProvider._DEFAULT_KEYWORDS)
 
+    @staticmethod
+    def _split_sections(resume_text: str) -> dict:
+        """Split a plain-text resume into {section_name_lower: lines[]}.
+
+        Section headers are detected as lines that are mostly uppercase or match
+        common resume headings.  Everything before the first header lands in
+        the synthetic 'header' bucket.
+        """
+        known = {
+            "experience", "work experience", "professional experience",
+            "projects", "personal projects", "academic projects",
+            "education", "skills", "technical skills", "core competencies",
+            "objective", "summary", "interests", "certifications", "awards",
+        }
+        sections: dict = {"header": []}
+        current = "header"
+        for raw in resume_text.splitlines():
+            line = raw.rstrip()
+            stripped = line.strip()
+            if not stripped:
+                sections.setdefault(current, []).append("")
+                continue
+            low = stripped.lower().rstrip(":")
+            is_header = (
+                low in known
+                or (len(stripped) <= 40 and stripped == stripped.upper()
+                    and any(c.isalpha() for c in stripped) and low in known)
+            )
+            if is_header:
+                current = low
+                sections.setdefault(current, [])
+            else:
+                sections.setdefault(current, []).append(line)
+        return sections
+
+    @staticmethod
+    def _parse_experience_block(lines: list) -> list:
+        """Parse an EXPERIENCE section into [{title, company, dates, bullets}]."""
+        roles: list = []
+        cur: dict = None
+        for raw in lines:
+            line = raw.strip()
+            if not line:
+                continue
+            indented = raw.startswith(("  ", "\t", "•", "  •", "- "))
+            bullet_marker = line.startswith(("•", "-", "*"))
+            if not indented and not bullet_marker and ("|" in line or any(
+                ch.isdigit() for ch in line
+            )):
+                # New role header line e.g. "Title | Company | Dates"
+                parts = [p.strip() for p in line.split("|")]
+                title    = parts[0] if len(parts) > 0 else ""
+                company  = parts[1] if len(parts) > 1 else ""
+                dates    = parts[2] if len(parts) > 2 else ""
+                cur = {"title": title, "company": company, "dates": dates, "bullets": []}
+                roles.append(cur)
+            else:
+                text = line.lstrip("•-* ").strip()
+                if not text:
+                    continue
+                if cur is None:
+                    cur = {"title": "", "company": "", "dates": "", "bullets": []}
+                    roles.append(cur)
+                cur["bullets"].append(text)
+        return roles
+
+    @staticmethod
+    def _parse_projects_block(lines: list) -> list:
+        """Parse a PROJECTS section into [{name, description, skills_used}]."""
+        projects: list = []
+        cur: dict = None
+        for raw in lines:
+            line = raw.strip()
+            if not line:
+                continue
+            indented = raw.startswith(("  ", "\t"))
+            bullet_marker = line.startswith(("•", "-", "*"))
+            if not indented and not bullet_marker:
+                cur = {"name": line, "description": "", "skills_used": []}
+                projects.append(cur)
+            else:
+                text = line.lstrip("•-* ").strip()
+                if cur is None:
+                    cur = {"name": "", "description": text, "skills_used": []}
+                    projects.append(cur)
+                else:
+                    cur["description"] = (cur["description"] + " " + text).strip()
+        return projects
+
+    @staticmethod
+    def _parse_education_block(lines: list) -> list:
+        """Parse an EDUCATION section into [{degree, institution, year, gpa}]."""
+        entries: list = []
+        for raw in lines:
+            line = raw.strip()
+            if not line:
+                continue
+            parts = [p.strip() for p in line.split("|")]
+            year_match = re.search(r"(19|20)\d{2}", line)
+            gpa_match  = re.search(r"GPA[:\s]*([\d.]+)", line, re.I)
+            entry = {
+                "degree":      parts[0] if parts else "",
+                "institution": parts[1] if len(parts) > 1 else "",
+                "year":        year_match.group() if year_match else (
+                    parts[2] if len(parts) > 2 else ""
+                ),
+                "gpa":         gpa_match.group(1) if gpa_match else "",
+            }
+            entries.append(entry)
+        return entries
+
     def extract_profile(self, resume_text: str, preferred_titles: list = None) -> dict:
         text_lower = resume_text.lower()
 
@@ -303,15 +770,8 @@ class DemoProvider(BaseProvider):
         if not hard_skills:
             hard_skills = ["MATLAB", "Python", "Verilog", "FPGA", "SPICE"]
 
-        degree = "B.S. Electrical & Computer Engineering"
-        institution = "University of Oklahoma"
-
-        name = OWNER_NAME
-        for line in resume_text.splitlines():
-            line = line.strip()
-            if line and len(line.split()) in (2, 3) and line[0].isupper() and "@" not in line:
-                name = line
-                break
+        name = _extract_name_from_text(resume_text)
+        location = _extract_location_from_text(resume_text)
 
         title_map = {
             "fpga":          "FPGA/Hardware Engineering Intern",
@@ -342,51 +802,61 @@ class DemoProvider(BaseProvider):
         if not re.search(r'\d+%|\d+ students|\d+ projects', resume_text):
             gaps.append("Few quantified achievements — add metrics")
 
+        # Parse free-form sections out of the resume text.
+        sections = self._split_sections(resume_text)
+
+        def _grab(*keys):
+            for k in keys:
+                if k in sections and sections[k]:
+                    return sections[k]
+            return []
+
+        experience = self._parse_experience_block(
+            _grab("experience", "work experience", "professional experience")
+        )
+        projects = self._parse_projects_block(
+            _grab("projects", "personal projects", "academic projects")
+        )
+        education_parsed = self._parse_education_block(_grab("education"))
+        # Fallback education: leave empty rather than injecting hardcoded values.
+        # The audit layer and Phase 3 tolerate an empty education list.
+
         return {
             "name": name, "email": email, "linkedin": linkedin,
-            "location": "Oklahoma, USA",
+            "location": location,
             "target_titles": target_titles,
             "top_hard_skills": hard_skills,
             "top_soft_skills": ["Teamwork", "Problem-solving", "Communication",
                                  "Attention to detail", "Time management"],
-            "education": [{"degree": degree, "institution": institution,
-                            "year": "2028", "gpa": ""}],
-            "experience": [], "projects": [], "resume_gaps": gaps,
+            "education":  education_parsed,
+            "experience": experience,
+            "projects":   projects,
+            "resume_gaps": gaps,
         }
 
     def score_job(self, job: dict, profile: dict) -> dict:
         skills_lower = {s.lower() for s in profile.get("top_hard_skills", [])}
         reqs = [r.lower() for r in job.get("requirements", [])]
-
         matched = [r for r in reqs if any(s in r or r in s for s in skills_lower)]
-        skills_score = min(30, int(len(matched) / max(len(reqs), 1) * 30))
+        req_raw = (len(matched) / len(reqs)) if reqs else 0.5
 
         title_lower = job.get("title", "").lower()
-        target_titles_lower = [t.lower() for t in profile.get("target_titles", [])]
-        title_score = 20 if any(
-            any(word in title_lower for word in t.split()) for t in target_titles_lower
-        ) else 10
+        targets_l = [t.lower() for t in profile.get("target_titles", [])]
+        industry_raw = 1.0 if any(
+            any(w in title_lower for w in t.split()) for t in targets_l
+        ) else 0.5
 
-        edu_score   = 10
-        loc         = job.get("location", "").lower()
-        remote_ok   = job.get("remote", False)
-        loc_score   = 10 if remote_ok or "oklahoma" in loc or "united states" in loc else 5
-        industry_score = 8
-        exp_score   = 10
+        loc = job.get("location", "").lower()
+        remote_ok = job.get("remote", False)
+        # Score location dynamically: remote always passes; "united states"
+        # is treated as a broad positive signal. No hardcoded city/state.
+        loc_raw = 1.0 if (remote_ok or "united states" in loc or "us" == loc.strip()) else 0.5
+        exp_ok = job.get("experience_level", "internship") in ("internship", "entry-level")
+        loc_seniority_raw = (loc_raw + (1.0 if exp_ok else 0.5)) / 2
 
-        total = title_score + skills_score + exp_score + industry_score + edu_score + loc_score
         missing = [r.title() for r in reqs if r not in matched and len(r) > 3][:5]
-
-        return {
-            "job_id": job.get("id", ""),
-            "score": min(total, 100),
-            "matching_skills": [r.title() for r in matched][:6],
-            "missing_skills": missing,
-            "reason": (
-                f"Matched {len(matched)}/{len(reqs)} requirements. "
-                f"Skills score: {skills_score}/30, Title: {title_score}/25."
-            ),
-        }
+        return _build_rubric_result(job, req_raw, industry_raw, loc_seniority_raw,
+                                    matched=matched, missing=missing)
 
     def tailor_resume(self, job: dict, profile: dict, resume_text: str) -> dict:  # noqa: ARG002
         jd_keywords  = [r.lower() for r in job.get("requirements", [])]
@@ -409,20 +879,25 @@ class DemoProvider(BaseProvider):
         }
 
     def generate_cover_letter(self, job: dict, profile: dict) -> str:
+        name       = profile.get("name") or OWNER_NAME
+        email      = profile.get("email") or ""
         skills_str = ", ".join(profile.get("top_hard_skills", [])[:3])
+        edu        = (profile.get("education") or [{}])[0]
+        degree     = edu.get("degree") or "Engineering"
+        university = edu.get("institution") or "my university"
+        top_reqs   = ", ".join((job.get("requirements") or [])[:3])
+        sign_off   = f"{name}" + (f"\n{email}" if email else "")
         return (
             f"Dear {job['company']} Hiring Team,\n\n"
-            f"I am writing to express my strong interest in the {job['title']} position at "
-            f"{job['company']}. As an Electrical & Computer Engineering student at the "
-            f"University of Oklahoma with experience in {skills_str}, I am excited to "
-            f"contribute to your team.\n\n"
-            "My hands-on lab work in photolithography, cleanroom fabrication, and data "
-            "analysis with MATLAB and Python directly aligns with your requirements. "
-            "I have applied these skills in research projects that mirror the challenges "
-            "your team works on.\n\n"
-            f"I would welcome the opportunity to discuss how I can contribute to "
+            f"I am writing to express my strong interest in the {job['title']} position "
+            f"at {job['company']}. As a {degree} student at {university} with experience "
+            f"in {skills_str}, I am eager to contribute to your team.\n\n"
+            f"My technical background in {skills_str} maps directly to your listed "
+            f"requirements ({top_reqs}). I have applied these skills through coursework, "
+            f"research, and hands-on projects and am confident I can add value quickly.\n\n"
+            f"I would welcome the opportunity to discuss how my background aligns with "
             f"{job['company']}'s goals. Thank you for your consideration.\n\n"
-            f"Sincerely,\n{OWNER_NAME}\nsao.sithisack@ou.edu"
+            f"Sincerely,\n{sign_off}"
         )
 
     def generate_report(self, summary_data: dict) -> str:
@@ -520,71 +995,128 @@ class OllamaProvider(BaseProvider):
         raise RuntimeError("Ollama rate limit: exceeded 5 retry attempts")
 
     def _parse_json(self, text: str, fallback: dict) -> dict:
-        for candidate in [text, re.sub(r'^```(?:json)?\s*|\s*```$', '', text, flags=re.M)]:
+        def _try(s: str) -> dict | None:
             try:
-                return json.loads(candidate.strip())
+                obj = json.loads(s.strip())
+                if isinstance(obj, dict):
+                    return obj
             except json.JSONDecodeError:
                 pass
-        m = re.search(r'\{.*\}', text, re.DOTALL)
-        if m:
-            try:
-                return json.loads(m.group())
-            except json.JSONDecodeError:
-                pass
+            return None
+
+        def _fix_and_try(s: str) -> dict | None:
+            # Fix trailing commas before ] or } — extremely common Ollama mistake.
+            fixed = re.sub(r',\s*([}\]])', r'\1', s)
+            return _try(fixed)
+
+        candidates = [
+            text,
+            re.sub(r'^```(?:json)?\s*|\s*```$', '', text, flags=re.M),
+            # strip everything before the first { and after the last }
+            text[text.find('{'):text.rfind('}')+1] if '{' in text else '',
+        ]
+        for c in candidates:
+            if not c:
+                continue
+            result = _try(c) or _fix_and_try(c)
+            if result:
+                return result
+
+        # Last-resort: find the largest {...} block
+        for m in re.finditer(r'\{', text):
+            depth, i = 0, m.start()
+            for j, ch in enumerate(text[i:], i):
+                if ch == '{':
+                    depth += 1
+                elif ch == '}':
+                    depth -= 1
+                    if depth == 0:
+                        blob = text[i:j+1]
+                        result = _try(blob) or _fix_and_try(blob)
+                        if result:
+                            return result
+                        break
         return fallback
 
     def extract_profile(self, resume_text: str, preferred_titles: list = None) -> dict:
+        from .profile_audit import DOMAIN_TITLE_FAMILIES, FORBIDDEN_GENERIC_TITLES
+
         pref_hint = ""
         if preferred_titles:
             pref_hint = (
-                f"\nThe candidate's preferred roles are: {', '.join(preferred_titles)}. "
-                "Weight these heavily when suggesting target_titles; include these and "
-                "closely related industry-standard title variants."
+                f"\nCandidate stated preferences: {', '.join(preferred_titles)} "
+                "(tiebreaker only; do NOT override the domain whitelist)."
             )
         prompt = (
-            "Parse this resume and return ONLY a JSON object with these fields:\n"
-            "name, email, linkedin, location, "
-            "target_titles (array of 5-8 specific searchable job titles this candidate "
-            "is best suited for based on their skills and experience level), "
-            "top_hard_skills (array of 10), top_soft_skills (array of 5), "
-            "education (array of {degree, institution, year, gpa}), "
-            "experience (array of {title, company, dates, bullets[]}), "
-            "projects (array of {name, description, skills_used[]}), "
-            "resume_gaps (array of strings)."
+            "Parse this resume in THREE ORDERED PASSES and return ONLY a JSON object.\n\n"
+            "PASS 1 — Section map: identify Education, Research Experience, Work "
+            "Experience, Projects, Skills.\n"
+            "PASS 2 — Hard skills (TECHNICAL NOUNS ONLY: tools, software, languages, "
+            "lab equipment, fab processes, measurement techniques). NEVER place "
+            "interpersonal traits under top_hard_skills. Soft skills are behavioral "
+            "only (teamwork, communication, technical writing). Scan EVERY section — "
+            "every bullet in Research Experience, Projects, and Coursework.\n"
+            "PASS 3 — Target titles: DRAWN ONLY from this whitelist:\n"
+            f"  {', '.join(DOMAIN_TITLE_FAMILIES)}\n"
+            "Forbidden (unless the candidate is CS-only with no lab experience): "
+            f"{', '.join(sorted(FORBIDDEN_GENERIC_TITLES))}\n"
+            "Weight Education and Research Experience much more heavily than Work "
+            "Experience when choosing titles.\n\n"
+            "JSON shape:\n"
+            "{\n"
+            '  "name": str, "email": str, "linkedin": str, "location": str,\n'
+            '  "target_titles": [{"title": str, "family": str, "evidence": str}],\n'
+            '  "top_hard_skills": [{"skill": str, "category": str, "evidence": str}],\n'
+            '  "top_soft_skills": [str],\n'
+            '  "education": [{"degree": str, "institution": str, "year": str, "gpa": str}],\n'
+            '  "research_experience": [{"title": str, "company": str, "dates": str, "bullets": [str]}],\n'
+            '  "work_experience":     [{"title": str, "company": str, "dates": str, "bullets": [str]}],\n'
+            '  "projects": [{"name": str, "description": str, "skills_used": [str]}],\n'
+            '  "resume_gaps": [str]\n'
+            "}\n"
             f"{pref_hint}\n\n"
-            f"Resume:\n{resume_text[:3000]}"
+            f"Resume:\n{resume_text[:4000]}"
         )
         raw = self._chat(prompt)
-        return self._parse_json(raw, {
-            "name": OWNER_NAME, "email": "", "linkedin": "", "location": "",
-            "target_titles": preferred_titles or ["IC Design Intern", "Hardware Engineering Intern"],
-            "top_hard_skills": ["MATLAB", "Python", "Verilog", "SPICE", "Photolithography"],
-            "top_soft_skills": ["Teamwork", "Problem-solving", "Communication",
-                                 "Detail-oriented", "Time management"],
-            "education": [], "experience": [], "projects": [], "resume_gaps": [],
-        })
+        result = self._parse_json(raw, {})
+        if not result:
+            # Ollama returned unparse-able output — fall back to regex extraction
+            # so the user's real resume data is never silently replaced with defaults.
+            console.print("  [yellow]⚠  Ollama JSON parse failed — using regex extractor as fallback[/yellow]")
+            return DemoProvider().extract_profile(resume_text, preferred_titles=preferred_titles)
+        return result
 
     def score_job(self, job: dict, profile: dict) -> dict:
         prompt = (
-            "Score this job against the candidate (0-100). "
-            "Weights: title alignment 25%, skills match 30%, experience 15%, "
-            "industry 10%, education 10%, location 10%.\n"
-            "Return ONLY a JSON object with: job_id (string), score (int), "
-            "matching_skills (array), missing_skills (array), reason (string).\n\n"
+            "Score this job against the candidate using EXACTLY three categories, "
+            "each a float 0.0-1.0:\n"
+            "  required_skills (weight 50%): fraction of requirements covered.\n"
+            "  industry (weight 30%): domain alignment with candidate targets.\n"
+            "  location_seniority (weight 20%): location + seniority fit.\n"
+            "Return ONLY a JSON object with keys: required_skills, industry, "
+            "location_seniority, reasoning (ONE sentence), "
+            "matching_skills (array), missing_skills (array).\n\n"
             f"Candidate skills: {', '.join(profile.get('top_hard_skills', []))}\n"
-            f"Education: {profile.get('education', [{}])[0].get('degree', '') if profile.get('education') else ''}\n"
             f"Target titles: {', '.join(profile.get('target_titles', []))}\n\n"
             f"Job: {job.get('title')} at {job.get('company')}\n"
             f"Requirements: {', '.join(job.get('requirements', []))}\n"
             f"Location: {job.get('location')} (Remote: {job.get('remote', False)})"
         )
         raw = self._chat(prompt)
-        result = self._parse_json(raw, {
-            "job_id": job.get("id", ""), "score": 50,
-            "matching_skills": [], "missing_skills": [], "reason": "Scored by Ollama",
+        parsed = self._parse_json(raw, {
+            "required_skills": 0.5, "industry": 0.5, "location_seniority": 0.5,
+            "reasoning": "Scored by Ollama (fallback).",
+            "matching_skills": [], "missing_skills": [],
         })
-        result.setdefault("job_id", job.get("id", ""))
-        return result
+        return _build_rubric_result(
+            job,
+            parsed.get("required_skills", 0),
+            parsed.get("industry", 0),
+            parsed.get("location_seniority", 0),
+            matched=parsed.get("matching_skills") or [],
+            missing=parsed.get("missing_skills") or [],
+            reasoning=parsed.get("reasoning", ""),
+        )
 
     def tailor_resume(self, job: dict, profile: dict, resume_text: str) -> dict:
         prompt = (

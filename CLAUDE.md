@@ -9,6 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **Job_App** is an AI-powered job application automation platform designed to become a full-featured web application comparable to jobright.ai. The system streamlines the entire job search workflow through a sophisticated 7-phase pipeline that handles resume parsing, job discovery, intelligent scoring, resume tailoring, application submission, tracking, and reporting.
 
 **Long-term Vision:** Build a production-ready SaaS platform for automated job applications with:
+
 - Multi-user support with authentication
 - Resume versioning and management
 - Job opportunity curation and personalization
@@ -35,17 +36,20 @@ This is an AI agent workspace for autonomous job application automation. The cor
 # Running the Agent
 
 **Setup** (one-time):
+
 ```bash
 pip install -r requirements.txt
 ```
 
 **Launch the FastAPI web UI:**
+
 ```bash
 python app.py
 # Navigate to http://localhost:8000
 ```
 
 **Run the backend directly (CLI):**
+
 ```bash
 python agent.py                              # Anthropic Claude (requires ANTHROPIC_API_KEY env var)
 python agent.py --demo                       # No API key — uses regex/template logic + hardcoded demo jobs
@@ -54,6 +58,7 @@ python agent.py --ollama --model mistral     # Choose specific Ollama model
 ```
 
 **Before running** (Anthropic mode):
+
 ```bash
 export ANTHROPIC_API_KEY=sk-...   # bash
 # or
@@ -68,12 +73,12 @@ set ANTHROPIC_API_KEY=sk-...      # Windows CMD
 
 - **Backend:** FastAPI (Python) with SSE streaming for real-time updates
 - **Frontend:** React with Tailwind CSS (served from `frontend/index.html`)
-- **LLM Integration:** 
+- **LLM Integration:**
   - Anthropic Claude (claude-opus-4-6) — primary production model
   - Local Ollama — for offline/cost-free development
   - Demo mode — pure regex/keyword matching for testing
 - **Job Scraping:** `jobspy` library (supports LinkedIn, Indeed, Glassdoor, ZipRecruiter, etc.)
-- **Data Storage:** 
+- **Data Storage:**
   - Excel (openpyxl) for application tracking
   - JSON for job caching (auto-cleared each Phase 2 run)
   - MD5-based profile caching for instant resume re-extraction
@@ -101,6 +106,7 @@ Job_App/
 ## Backend Architecture (`app.py`)
 
 **FastAPI endpoints:**
+
 - `GET /api/state` — Retrieve current pipeline state
 - `POST /api/config` — Update pipeline configuration
 - `GET /api/phase/{n}/run` — SSE stream for running phase n
@@ -109,6 +115,7 @@ Job_App/
 - `GET /api/health` — Health check
 
 **In-memory state dictionary (`_S`):**
+
 ```python
 _S = {
     'done': set(),                 # Completed phases
@@ -140,12 +147,14 @@ _S = {
 ```
 
 **SSE Handler (`_run_phase_sse`):**
+
 - Runs phase in background thread
 - Captures logs via `_LogCapture` wrapper
 - Streams progress updates every 0.2s
 - Yields final result with elapsed time
 
 **Phase Re-running (`_clear_phases_after`):**
+
 - Clears all phases downstream of target phase (n+1 through 7)
 - Removes cached results, errors, elapsed times
 - Allows users to iterate on individual phases without resetting entire pipeline
@@ -153,6 +162,7 @@ _S = {
 ## Frontend Architecture (`frontend/index.html`)
 
 **React Component Structure:**
+
 - Main `App` component manages state for:
   - `cfg` — Pipeline configuration
   - `phaseDone`, `phaseRunning`, `phaseTimes`, `phaseErrors`, `phaseResults` — Phase tracking
@@ -160,11 +170,13 @@ _S = {
   - `screen` — Current UI screen ('onboard', 'pipeline', etc.)
 
 **SSE Handler (`runPhaseSSE`):**
+
 - Opens EventSource to `/api/phase/{n}/run` or `/api/phase/{n}/rerun`
 - Handles 'start', 'done', 'error' message types
 - Calls callbacks for UI updates
 
 **Phase Display:**
+
 - Running phases show hardcoded CLI animations (CLI_LINES)
 - Results display real data from backend (`phaseResults`)
 - Re-run button appears when phase is completed
@@ -174,6 +186,7 @@ _S = {
   - All other configuration options
 
 **Animation Tuning:**
+
 - CLI loading bar: 5.6s sweep
 - CLI lines: 0.72s per line
 - Phase spinner: 20-second intervals
@@ -193,6 +206,7 @@ _S = {
 ### Key Optimizations
 
 **Phase 1 Caching (MD5-based):**
+
 ```python
 resume_md5 = hashlib.md5(resume_text.encode()).hexdigest()
 cache_file = _PROJECT_ROOT / f"pipeline_cache_{resume_md5}.json"
@@ -201,10 +215,12 @@ if cache_file.exists():
 # Extract profile...
 json.dump(profile, open(cache_file, 'w'))
 ```
+
 - Same resume content processed in milliseconds on repeat runs
 - Different resumes produce different MD5, fresh extraction
 
 **Phase 2 Cache Clearing:**
+
 - `sample_jobs.json` deleted at START of phase2_discover_jobs()
 - Cache is NOT re-saved at end of phase
 - Ensures fresh job discovery on every run, respects max_scrape_jobs limit
@@ -222,6 +238,7 @@ json.dump(profile, open(cache_file, 'w'))
    - Reduces Phase 3 runtime by ~80%
 
 **Scoring weights** (Phase 3):
+
 - Skills match: 30% | Title alignment: 25% | Experience: 15%
 - Education: 10% | Industry: 10% | Location: 10%
 
@@ -230,18 +247,21 @@ json.dump(profile, open(cache_file, 'w'))
 Three pluggable LLM backends:
 
 ### AnthropicProvider
+
 - Uses `claude-opus-4-6` (latest high-capability model)
 - Structured tool_use calls for JSON output
 - Enables `thinking` mode for resume parsing and tailoring
 - Requires `ANTHROPIC_API_KEY` environment variable
 
 ### DemoProvider
+
 - Pure Python regex/keyword matching
 - Zero LLM cost, fully offline
 - Uses hardcoded `DEMO_JOBS` list (8 semiconductor/EE internship postings)
 - Perfect for testing without API keys
 
 ### OllamaProvider
+
 - Calls any local Ollama model via OpenAI-compatible `/v1` endpoint
 - Default model: `llama3.2`
 - Requires Ollama running at `localhost:11434`
@@ -303,24 +323,28 @@ Three pluggable LLM backends:
 # Future Roadmap (SaaS Vision)
 
 ## Phase 1: Multi-user platform
+
 - User authentication (OAuth2 with Google/GitHub)
 - User dashboard with application history
 - Resume library per user (versioning, templates)
 - Job preference profiles
 
 ## Phase 2: Enhanced job curation
+
 - Real-time job board integrations
 - Saved job filters and alerts
 - Candidate fit scoring breakdown
 - Employer research (Glassdoor ratings, salary data)
 
 ## Phase 3: Smart application strategy
+
 - A/B testing different resume formats
 - Application result analytics
 - Interview prep materials (company-specific)
 - Salary negotiation guidance
 
 ## Phase 4: Full SaaS deployment
+
 - Multi-region infrastructure
 - Email notifications and summaries
 - Mobile app (React Native)
@@ -343,6 +367,7 @@ Three pluggable LLM backends:
 ## Testing the Full Pipeline
 
 1. **With demo jobs (no API key):**
+
    ```bash
    python agent.py --demo
    ```
@@ -378,9 +403,9 @@ Three pluggable LLM backends:
 
 <!-- TODO: Replace this section with a brief description of yourself -->
 
-**Developer:** Jonny (jliu1401@uw.edu)
+**Developer:**
 
-**Background:** UW student building intelligent job application automation tools.
+**Background:**
 
 ## Goals
 
@@ -399,7 +424,7 @@ Three pluggable LLM backends:
 
 # Key Contacts & Resources
 
-- **GitHub:** https://github.com/Sao-06/Job_App
+- **GitHub:** <https://github.com/Sao-06/Job_App>
 - **Main branch:** `main` (production)
 - **Development branch:** `job-finder-fix` (active feature development)
 - **API Key:** Set `ANTHROPIC_API_KEY` environment variable for Anthropic Claude backend
@@ -411,6 +436,7 @@ Three pluggable LLM backends:
 **Commit:** `9c9cd60` — "Optimize pipeline performance and improve job discovery"
 
 **Major additions:**
+
 - Two-tier scoring (Phase 3): fast heuristic pre-filter + selective LLM
 - MD5-based profile caching (Phase 1): instant re-extraction for same resume
 - Max scrape jobs customization (Phase 2): 1–100, default 20
@@ -421,6 +447,7 @@ Three pluggable LLM backends:
 **Files modified:** app.py, frontend/index.html, pipeline/phases.py, pipeline/config.py, pipeline/providers.py
 
 **Performance gains:**
+
 - Phase 1: instant (with cache)
 - Phase 3: ~80% faster (selective LLM)
 - Overall pipeline: 2–5 minutes typical
@@ -429,10 +456,10 @@ Three pluggable LLM backends:
 
 # Fillable Template (Copy & Customize)
 
-- **Full name:** Jonny
+- **Full name:**
 - **LinkedIn URL:** [Your LinkedIn]
-- **Current university and major:** University of Washington — Computer Engineering / Electrical Engineering
-- **Current year:** Junior, Spring 2026
+- **Current university and major:**
+- **Current year:**
 - **Top 3 technical interests:** AI/ML, Hardware Design, Automation
 - **Key skills & tools:**
   - Python, JavaScript, React, FastAPI
@@ -448,11 +475,10 @@ Three pluggable LLM backends:
 # Environment & Preferences
 
 - **OS:** Windows 11
-- **Timezone:** Pacific Time (UTC-8)
+- **Timezone:**
 - **Tone:** Professional, concise, and helpful
 - **Languages & tools:** Python, JavaScript/React, FastAPI, Git, Anthropic Claude API
 
 # Contact & Ownership
 
-- **Owner:** Jonny (jliu1401@uw.edu)
-- **GitHub:** https://github.com/Sao-06/Job_App
+- **GitHub:** <https://github.com/Sao-06/Job_App>

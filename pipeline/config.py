@@ -37,7 +37,7 @@ class _CliSpinner:
         "Almost there — please wait…",
     ]
 
-    def __init__(self, messages=None, interval: int = 20):
+    def __init__(self, messages=None, interval: int = 160):
         self._msgs = messages or self._MESSAGES
         self._interval = interval
         self._stop = threading.Event()

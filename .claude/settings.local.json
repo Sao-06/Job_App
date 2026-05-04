@@ -15,7 +15,16 @@
       "Bash(python -c \"import ast; ast.parse\\(open\\('agent.py', encoding='utf-8'\\).read\\(\\)\\); print\\('agent.py: OK'\\)\")",
       "Bash(python -c \"import ast; ast.parse\\(open\\('streamlit_app.py', encoding='utf-8'\\).read\\(\\)\\); print\\('streamlit_app.py: OK'\\)\")",
       "Bash(python -c \"import ast; ast.parse\\(open\\('agent.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")",
-      "Bash(python -c \"import agent; print\\('OK'\\)\")"
+      "Bash(python -c \"import agent; print\\('OK'\\)\")",
+      "Bash(pip install:*)",
+      "Bash(python -c \"import rich; print\\(rich.__file__\\)\")",
+      "WebFetch(domain:github.com)",
+      "Bash(python:*)",
+      "Bash(ls -la output/*.txt output/*.tex)",
+      "Bash(grep -v \"^\\\\s*$\")",
+      "Bash(curl -s http://localhost:8000/)",
+      "Bash(curl -s http://localhost:8000/api/state)",
+      "Bash(taskkill /F /IM python.exe /FI \"WINDOWTITLE eq uvicorn\")"
     ]
   }
 }

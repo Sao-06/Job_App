@@ -1,0 +1,1580 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Jobs AI — Dashboard</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+<style>
+/* ── TOKENS ── */
+:root {
+  --bg:      #0a0a0f;
+  --bg1:     #0f0f17;
+  --bg2:     #141420;
+  --bg3:     #1a1a28;
+  --surface: #1e1e2e;
+  --sur2:    #252538;
+  --bdr:     rgba(255,255,255,.07);
+  --bdr2:    rgba(255,255,255,.13);
+  --t1:  #f0f0f8;
+  --t2:  #8b8ba8;
+  --t3:  #4a4a68;
+  --accent:  #5e6ad2;
+  --acch:    #7b84e8;
+  --accd:    rgba(94,106,210,.14);
+  --green:   #4ade80;
+  --greend:  rgba(74,222,128,.12);
+  --amber:   #fbbf24;
+  --amberd:  rgba(251,191,36,.1);
+  --red:     #f87171;
+  --redd:    rgba(248,113,113,.1);
+  --mono: 'JetBrains Mono', monospace;
+  --sans: 'DM Sans', sans-serif;
+  --serif: 'DM Serif Display', Georgia, serif;
+  --sb: 260px;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{font-family:var(--sans);background:var(--bg);color:var(--t1);-webkit-font-smoothing:antialiased;overflow:hidden;height:100vh}
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--bdr2);border-radius:3px}
+
+/* ── ICON HELPER ── */
+.ic{display:inline-flex;align-items:center;justify-content:center;flex-shrink:0}
+
+/* ── LAYOUT ── */
+.shell{display:flex;height:100vh;width:100vw;overflow:hidden}
+
+/* ── SIDEBAR ── */
+.sidebar{
+  width:var(--sb);flex-shrink:0;background:var(--bg1);
+  border-right:1px solid var(--bdr);display:flex;flex-direction:column;
+  height:100vh;overflow-y:auto;
+}
+.sb-top{padding:18px 18px 14px;border-bottom:1px solid var(--bdr)}
+.sb-wordmark{font-family:var(--serif);font-size:17px;color:var(--t1);letter-spacing:-.2px;cursor:pointer;user-select:none;display:block}
+.sb-wordmark span{color:var(--accent)}
+.sb-body{flex:1;padding:12px 14px;display:flex;flex-direction:column;gap:18px;overflow-y:auto}
+.sb-section-label{
+  font-size:10px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--t3);margin-bottom:8px;font-family:var(--mono);
+}
+.sb-group{display:flex;flex-direction:column;gap:8px}
+.sb-field{display:flex;flex-direction:column;gap:4px}
+.sb-label{font-size:11px;font-weight:500;color:var(--t2)}
+.sb-input{
+  padding:7px 10px;border-radius:7px;border:1px solid var(--bdr2);
+  background:var(--bg2);color:var(--t1);font-family:var(--sans);font-size:13px;
+  outline:none;transition:border-color .15s,box-shadow .15s;width:100%;
+}
+.sb-input:focus{border-color:var(--accent);box-shadow:0 0 0 2px rgba(94,106,210,.18)}
+.sb-input:disabled{opacity:.4;cursor:not-allowed}
+.sb-select{
+  padding:7px 10px;border-radius:7px;border:1px solid var(--bdr2);
+  background:var(--bg2);color:var(--t1);font-family:var(--sans);font-size:13px;
+  outline:none;cursor:pointer;width:100%;
+}
+.sb-select:disabled{opacity:.4;cursor:not-allowed}
+.sb-helper{font-size:10px;color:var(--t3);line-height:1.4;margin-top:2px}
+.sb-warn{font-size:10px;color:var(--amber);background:var(--amberd);padding:5px 8px;border-radius:5px;border:1px solid rgba(251,191,36,.2)}
+/* range */
+.range-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:5px}
+.range-label{font-size:11px;font-weight:500;color:var(--t2)}
+.range-val{font-family:var(--mono);font-size:13px;color:var(--acch);font-weight:500}
+input[type=range]{width:100%;accent-color:var(--accent)}
+input[type=range]:disabled{opacity:.4}
+/* toggle */
+.toggle-row{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.toggle-lbl{font-size:12px;color:var(--t2)}
+.toggle-btn{
+  width:36px;height:20px;border-radius:10px;border:none;cursor:pointer;
+  background:var(--bg3);position:relative;transition:background .2s;flex-shrink:0;
+}
+.toggle-btn.on{background:var(--accent)}
+.toggle-btn::after{
+  content:'';position:absolute;top:3px;left:3px;
+  width:14px;height:14px;border-radius:50%;background:#fff;transition:transform .2s;
+}
+.toggle-btn.on::after{transform:translateX(16px)}
+.toggle-btn:disabled{opacity:.4;cursor:not-allowed}
+/* chips multiselect */
+.chips{display:flex;flex-wrap:wrap;gap:5px}
+.chip-opt{
+  padding:3px 10px;border-radius:20px;font-size:11px;font-weight:500;cursor:pointer;
+  border:1px solid var(--bdr2);color:var(--t3);transition:all .12s;user-select:none;
+}
+.chip-opt.sel{background:var(--accd);border-color:rgba(94,106,210,.4);color:var(--acch)}
+/* advanced collapse */
+.adv-toggle{
+  display:flex;align-items:center;gap:5px;font-size:11px;color:var(--t3);
+  cursor:pointer;user-select:none;transition:color .12s;background:none;border:none;padding:0;
+}
+.adv-toggle:hover{color:var(--t2)}
+.adv-body{overflow:hidden;max-height:0;transition:max-height .3s cubic-bezier(.16,1,.3,1)}
+.adv-body.open{max-height:400px}
+/* radio */
+.radio-group{display:flex;flex-direction:column;gap:5px}
+.radio-item{display:flex;align-items:center;gap:7px;cursor:pointer;font-size:12px;color:var(--t2)}
+.radio-item input{accent-color:var(--accent)}
+/* divider */
+.sb-sep{border:none;border-top:1px solid var(--bdr);margin:4px 0}
+/* bottom */
+.sb-bottom{padding:12px 14px;border-top:1px solid var(--bdr);display:flex;flex-direction:column;gap:8px}
+.sb-mode-pill{
+  display:flex;align-items:center;gap:6px;padding:5px 9px;
+  background:var(--bg3);border:1px solid var(--bdr);border-radius:6px;font-size:11px;color:var(--t2);
+  font-family:var(--mono);
+}
+.sb-mode-dot{width:6px;height:6px;border-radius:50%;background:var(--green);flex-shrink:0}
+.sb-reset{
+  padding:7px 12px;border-radius:7px;border:1px solid var(--bdr2);background:transparent;
+  color:var(--t3);font-family:var(--sans);font-size:12px;cursor:pointer;
+  transition:all .15s;display:flex;align-items:center;gap:6px;justify-content:center;
+  width:100%;
+}
+.sb-reset:hover{border-color:var(--red);color:var(--red);background:var(--redd)}
+
+/* ── MAIN ── */
+.main{flex:1;overflow:hidden;display:flex;flex-direction:column}
+
+/* ════════════════════════════════════
+   SCREEN 1 — ONBOARDING
+════════════════════════════════════ */
+.onboard{
+  flex:1;overflow-y:auto;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;padding:60px 32px;
+  background:var(--bg);
+}
+.ob-logo{font-family:var(--serif);font-size:28px;color:var(--t1);margin-bottom:52px;letter-spacing:-.3px}
+.ob-logo span{color:var(--accent)}
+.ob-card{
+  width:100%;max-width:600px;background:var(--surface);
+  border:1px solid var(--bdr2);border-radius:16px;padding:40px;
+  box-shadow:0 24px 64px rgba(0,0,0,.5);
+}
+.ob-h1{font-family:var(--serif);font-size:30px;color:var(--t1);letter-spacing:-.03em;margin-bottom:8px}
+.ob-sub{font-size:15px;color:var(--t2);line-height:1.6;margin-bottom:28px}
+.ob-textarea{
+  width:100%;min-height:180px;resize:vertical;padding:14px;
+  border-radius:10px;border:1px solid var(--bdr2);background:var(--bg2);
+  color:var(--t1);font-family:var(--mono);font-size:12px;line-height:1.7;
+  outline:none;transition:border-color .15s,box-shadow .15s;margin-bottom:16px;
+}
+.ob-textarea:focus{border-color:var(--accent);box-shadow:0 0 0 2px rgba(94,106,210,.18)}
+.ob-dropzone{
+  border:1.5px dashed var(--bdr2);border-radius:10px;padding:24px;
+  text-align:center;cursor:pointer;transition:all .15s;margin-bottom:14px;
+}
+.ob-dropzone:hover,.ob-dropzone.drag{border-color:var(--accent);background:var(--accd)}
+.ob-dz-icon{margin:0 auto 10px;color:var(--t3)}
+.ob-dz-title{font-size:14px;font-weight:500;color:var(--t2);margin-bottom:4px}
+.ob-dz-sub{font-size:12px;color:var(--t3)}
+.ob-dz-fmts{display:flex;gap:5px;justify-content:center;margin-top:10px}
+.ob-fmt{font-size:10px;font-family:var(--mono);padding:2px 7px;border-radius:4px;background:rgba(255,255,255,.06);color:var(--t3)}
+.ob-demo-link{
+  font-size:13px;color:var(--t3);cursor:pointer;text-align:center;
+  display:block;transition:color .15s;background:none;border:none;font-family:var(--sans);
+  width:100%;padding:4px 0;
+}
+.ob-demo-link:hover{color:var(--acch)}
+/* loaded state */
+.ob-loaded-banner{
+  display:flex;align-items:flex-start;gap:10px;padding:14px 16px;
+  background:var(--greend);border:1px solid rgba(74,222,128,.25);
+  border-radius:10px;margin-bottom:20px;
+}
+.ob-loaded-text{font-size:13px;color:var(--t1);line-height:1.5;flex:1}
+.ob-loaded-text strong{font-weight:600;color:var(--green)}
+.ob-change{font-size:12px;color:var(--t3);cursor:pointer;text-decoration:underline;background:none;border:none;font-family:var(--sans);margin-top:4px;display:block;padding:0}
+.ob-change:hover{color:var(--t2)}
+.ob-cta{
+  width:100%;padding:14px;border-radius:10px;border:none;cursor:pointer;
+  background:var(--accent);color:#fff;font-family:var(--sans);font-size:15px;
+  font-weight:600;transition:all .15s;display:flex;align-items:center;
+  justify-content:center;gap:8px;margin-bottom:12px;
+}
+.ob-cta:hover{background:var(--acch);transform:translateY(-1px);box-shadow:0 8px 24px rgba(94,106,210,.35)}
+.ob-settings-hint{font-size:12px;color:var(--t3);text-align:center;line-height:1.5}
+
+/* ════════════════════════════════════
+   SCREEN 2 — PIPELINE
+════════════════════════════════════ */
+.pipeline-shell{flex:1;display:flex;overflow:hidden}
+
+/* phase inline header bars */
+.ph-wrap{border-radius:10px;overflow:hidden;margin-bottom:16px;border:1px solid var(--bdr)}
+.ph-wrap.ph-done{border-left:3px solid var(--green)}
+.ph-wrap.ph-running{border-left:3px solid var(--amber);animation:ph-glow 2s ease-in-out infinite}
+.ph-wrap.ph-wait{border-left:3px solid var(--bdr)}
+.ph-wrap.ph-error{border-left:3px solid var(--red)}
+@keyframes ph-glow{0%,100%{box-shadow:0 0 0 0 rgba(251,191,36,.08)}50%{box-shadow:0 0 12px 0 rgba(251,191,36,.18)}}
+.ph-header{
+  display:flex;align-items:center;gap:10px;padding:0 16px;
+  height:44px;background:var(--bg2);cursor:pointer;
+  user-select:none;transition:background .12s;
+}
+.ph-header:hover{background:var(--bg3)}
+.ph-num{
+  width:26px;height:26px;border-radius:6px;flex-shrink:0;
+  display:flex;align-items:center;justify-content:center;
+  font-size:11px;font-family:var(--mono);font-weight:600;
+  background:var(--bg3);color:var(--t3);border:1px solid var(--bdr);
+  transition:all .2s;
+}
+.ph-done .ph-num{background:var(--greend);color:var(--green);border-color:rgba(74,222,128,.25)}
+.ph-running .ph-num{background:var(--amberd);color:var(--amber);border-color:rgba(251,191,36,.3)}
+.ph-error .ph-num{background:var(--redd);color:var(--red);border-color:rgba(248,113,113,.25)}
+.ph-name{font-size:13px;font-weight:600;color:var(--t1);flex:1;letter-spacing:-.01em}
+.ph-wait .ph-name{color:var(--t2)}
+.ph-right{display:flex;align-items:center;gap:8px;flex-shrink:0}
+.ph-badge{font-size:10px;font-weight:600;font-family:var(--mono);padding:2px 7px;border-radius:4px}
+.phb-done{background:var(--greend);color:var(--green)}
+.phb-run{background:var(--amberd);color:var(--amber)}
+.phb-wait{background:rgba(255,255,255,.05);color:var(--t3)}
+.phb-err{background:var(--redd);color:var(--red)}
+.ph-elapsed{font-family:var(--mono);font-size:10px;color:var(--t3)}
+.ph-chevron{font-size:11px;color:var(--t3);transition:transform .2s;line-height:1}
+.ph-chevron.open{transform:rotate(180deg)}
+.ph-body{background:var(--surface);border-top:1px solid var(--bdr)}
+.ph-wait-body{padding:12px 16px;font-size:12px;color:var(--t3);font-style:italic}
+.step-time{font-size:10px;font-family:var(--mono);color:var(--t3)}
+
+/* inline phase loading bar */
+.phase-loading-bar{height:2px;background:var(--bg3);overflow:hidden;border-radius:1px}
+.phase-loading-fill{height:100%;background:var(--amber);animation:lsweep 1.4s ease-in-out infinite}
+@keyframes lsweep{0%{transform:translateX(-100%)}100%{transform:translateX(200%)}}
+
+/* pipeline meta bar */
+.pipeline-meta-bar{padding:10px 32px 0;flex-shrink:0;font-family:var(--mono);font-size:11px;color:var(--t3)}
+/* progress bar */
+.prog-track{height:3px;background:var(--bg3);flex-shrink:0;position:relative;overflow:hidden;margin-top:8px}
+.prog-fill{height:100%;background:linear-gradient(90deg,var(--accent),var(--acch),var(--green));transition:width .8s cubic-bezier(.16,1,.3,1)}
+.prog-shimmer{position:absolute;top:0;bottom:0;width:60px;background:linear-gradient(90deg,transparent,rgba(255,255,255,.25),transparent);animation:shimmer 1.8s ease-in-out infinite}
+@keyframes shimmer{0%{left:-60px}100%{left:100%}}
+
+/* result area */
+.result-area{flex:1;overflow-y:auto;padding:24px 32px}
+
+/* phase result card */
+.phase-card{margin-bottom:36px;animation:card-in .45s cubic-bezier(.16,1,.3,1)}
+@keyframes card-in{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}
+.pc-header{display:flex;align-items:center;gap:10px;margin-bottom:16px}
+.pc-num{
+  width:24px;height:24px;border-radius:6px;background:var(--accd);
+  display:flex;align-items:center;justify-content:center;font-size:11px;
+  font-family:var(--mono);font-weight:600;color:var(--acch);flex-shrink:0;
+}
+.pc-num.done-card{background:var(--greend);color:var(--green)}
+.pc-title{font-size:16px;font-weight:600;color:var(--t1);letter-spacing:-.02em}
+.pc-divider{border:none;border-top:1px solid var(--bdr);margin:0 0 24px}
+
+/* metrics strip */
+.metrics{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:18px}
+.met{background:var(--bg2);border:1px solid var(--bdr);border-radius:8px;padding:11px 14px}
+.met-val{font-family:var(--mono);font-size:20px;font-weight:700;color:var(--t1);letter-spacing:-.04em;line-height:1}
+.met-lbl{font-size:10px;color:var(--t3);margin-top:4px;text-transform:uppercase;letter-spacing:.05em}
+
+/* data table */
+.dtbl{width:100%;border-collapse:collapse;margin-bottom:14px}
+.dtbl th{font-size:10px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:.06em;padding:6px 10px;text-align:left;border-bottom:1px solid var(--bdr)}
+.dtbl td{padding:9px 10px;font-size:12px;color:var(--t2);border-bottom:1px solid rgba(255,255,255,.03)}
+.dtbl tr:last-child td{border:none}
+.dtbl tr:hover td{background:rgba(255,255,255,.02)}
+.td-s{font-weight:600;color:var(--t1)}
+.score-cell{font-family:var(--mono);font-size:14px;font-weight:700}
+.sc-hi{color:var(--acch)}.sc-md{color:var(--amber)}.sc-lo{color:var(--t3)}
+.status-dot{width:7px;height:7px;border-radius:50%;display:inline-block;margin-right:6px}
+.sd-green{background:var(--green)}.sd-amber{background:var(--amber)}.sd-red{background:var(--red)}.sd-dim{background:var(--t3)}
+.chip-sm{font-size:10px;font-weight:600;font-family:var(--mono);padding:2px 7px;border-radius:4px;white-space:nowrap}
+.cg{background:var(--greend);color:var(--green)}
+.ca{background:var(--accd);color:var(--acch)}
+.cy{background:var(--amberd);color:var(--amber)}
+.cr{background:var(--redd);color:var(--red)}
+.cd{background:rgba(255,255,255,.05);color:var(--t3)}
+
+/* skills columns */
+.skills-cols{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:14px}
+.skills-group h4{font-size:11px;font-weight:600;color:var(--t3);letter-spacing:.06em;text-transform:uppercase;margin-bottom:8px}
+.skill-chips{display:flex;flex-wrap:wrap;gap:5px}
+.skill-chip{font-size:11px;padding:3px 9px;border-radius:20px;background:var(--bg3);border:1px solid var(--bdr2);color:var(--t2)}
+
+/* warning / info / success bars */
+.warn-bar{padding:10px 14px;background:var(--amberd);border:1px solid rgba(251,191,36,.2);border-radius:8px;font-size:12px;color:var(--amber);display:flex;align-items:center;gap:8px;margin-bottom:14px}
+.info-bar{padding:10px 14px;background:var(--accd);border:1px solid rgba(94,106,210,.2);border-radius:8px;font-size:12px;color:var(--t2);display:flex;align-items:center;gap:8px;margin-bottom:14px}
+.success-bar{padding:10px 14px;background:var(--greend);border:1px solid rgba(74,222,128,.25);border-radius:8px;font-size:12px;color:var(--green);display:flex;align-items:center;gap:8px;margin-bottom:14px}
+
+/* action button */
+.act-btn{
+  padding:7px 16px;border-radius:7px;border:1px solid var(--bdr2);background:transparent;
+  color:var(--t2);font-family:var(--sans);font-size:12px;font-weight:500;cursor:pointer;
+  transition:all .12s;display:inline-flex;align-items:center;gap:6px;
+}
+.act-btn:hover{background:rgba(255,255,255,.05);color:var(--t1)}
+.act-btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.act-btn.primary:hover{background:var(--acch)}
+.act-btn:disabled{opacity:.35;cursor:not-allowed}
+
+/* tailoring expand rows */
+.tailor-row{border-bottom:1px solid var(--bdr)}
+.tailor-row-header{display:flex;align-items:center;gap:10px;padding:10px 12px;cursor:pointer;transition:background .12s;border-radius:7px}
+.tailor-row-header:hover{background:rgba(255,255,255,.02)}
+.tailor-row-co{font-size:13px;font-weight:600;color:var(--t1);flex:1}
+.tailor-row-role{font-size:12px;color:var(--t2)}
+.tailor-expand{overflow:hidden;max-height:0;transition:max-height .3s cubic-bezier(.16,1,.3,1)}
+.tailor-expand.open{max-height:400px}
+.tailor-expand-body{padding:12px 12px 18px;border-top:1px solid var(--bdr)}
+.ats-row{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+.ats-score{font-family:var(--mono);font-size:18px;font-weight:700}
+.ats-arrow{color:var(--t3);font-size:14px}
+.ats-delta{font-size:12px;font-weight:600;font-family:var(--mono);padding:2px 7px;border-radius:4px}
+.delta-pos{background:var(--greend);color:var(--green)}
+
+/* CLI / terminal log */
+.cli-wrap{background:var(--bg);border-radius:8px;border:1px solid var(--bdr);padding:14px 16px;margin-bottom:14px;font-family:var(--mono);font-size:12px;line-height:1.85;min-height:60px}
+.cli-line{animation:cli-in .18s ease}
+@keyframes cli-in{from{opacity:0;transform:translateX(-5px)}to{opacity:1;transform:none}}
+.cc0{color:var(--t3)}.cc1{color:var(--t2)}.cc2{color:var(--acch)}.cc3{color:var(--green)}.cc4{color:var(--amber)}
+.cli-cursor{display:inline-block;width:7px;height:13px;background:var(--accent);vertical-align:middle;animation:cur 1s step-end infinite}
+@keyframes cur{0%,100%{opacity:1}50%{opacity:0}}
+
+/* loading sweep */
+.load-track{height:2px;background:var(--bg3);overflow:hidden;border-radius:1px}
+.load-fill{height:100%;background:var(--amber);animation:lsweep 1.4s ease-in-out infinite}
+
+/* waiting state */
+.wait-state{padding:20px;border:1.5px dashed var(--bdr);border-radius:10px;text-align:center}
+.wait-text{font-size:13px;color:var(--t3);margin-top:8px}
+
+/* error block */
+.err-block{background:var(--redd);border:1px solid rgba(248,113,113,.25);border-radius:8px;padding:14px;margin-bottom:14px}
+.err-title{font-size:13px;font-weight:600;color:var(--red);margin-bottom:6px;display:flex;align-items:center;gap:6px}
+.err-msg{font-family:var(--mono);font-size:11px;color:rgba(248,113,113,.8);line-height:1.6}
+
+/* ── COMPLETION BANNER ── */
+.complete-banner{
+  margin-bottom:32px;padding:28px 32px;border-radius:14px;
+  background:linear-gradient(135deg,rgba(94,106,210,.2),rgba(94,106,210,.06));
+  border:1px solid rgba(94,106,210,.3);animation:card-in .5s cubic-bezier(.16,1,.3,1);
+}
+.cb-h{font-family:var(--serif);font-size:36px;color:var(--t1);letter-spacing:-.04em;margin-bottom:8px}
+.cb-sub{font-size:14px;color:var(--t2);line-height:1.6;margin-bottom:20px}
+.cb-actions{display:flex;gap:10px}
+
+/* spinner */
+.spin{width:13px;height:13px;border:2px solid rgba(255,255,255,.2);border-top-color:currentColor;border-radius:50%;animation:sp .6s linear infinite;display:inline-block}
+@keyframes sp{to{transform:rotate(360deg)}}
+
+/* markdown simple render */
+.md-render p{margin-bottom:10px;font-size:13px;color:var(--t2);line-height:1.7}
+.md-render h2{font-size:16px;font-weight:600;color:var(--t1);margin:18px 0 8px}
+.md-render h3{font-size:14px;font-weight:600;color:var(--t1);margin:14px 0 6px}
+.md-render ul{padding-left:16px;margin-bottom:10px}
+.md-render li{font-size:13px;color:var(--t2);line-height:1.7;margin-bottom:4px}
+.md-render code{font-family:var(--mono);font-size:11px;background:var(--bg3);padding:1px 5px;border-radius:3px;color:var(--acch)}
+.md-render strong{color:var(--t1);font-weight:600}
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<!-- ── TWEAKS PANEL (inlined from tweaks-panel.jsx) ── -->
+<script type="text/babel">
+const __TWEAKS_STYLE = `
+  .twk-panel{position:fixed;right:16px;bottom:16px;z-index:2147483646;width:280px;
+    max-height:calc(100vh - 32px);display:flex;flex-direction:column;
+    background:rgba(250,249,247,.78);color:#29261b;
+    -webkit-backdrop-filter:blur(24px) saturate(160%);backdrop-filter:blur(24px) saturate(160%);
+    border:.5px solid rgba(255,255,255,.6);border-radius:14px;
+    box-shadow:0 1px 0 rgba(255,255,255,.5) inset,0 12px 40px rgba(0,0,0,.18);
+    font:11.5px/1.4 ui-sans-serif,system-ui,-apple-system,sans-serif;overflow:hidden}
+  .twk-hd{display:flex;align-items:center;justify-content:space-between;
+    padding:10px 8px 10px 14px;cursor:move;user-select:none}
+  .twk-hd b{font-size:12px;font-weight:600;letter-spacing:.01em}
+  .twk-x{appearance:none;border:0;background:transparent;color:rgba(41,38,27,.55);
+    width:22px;height:22px;border-radius:6px;cursor:default;font-size:13px;line-height:1}
+  .twk-x:hover{background:rgba(0,0,0,.06);color:#29261b}
+  .twk-body{padding:2px 14px 14px;display:flex;flex-direction:column;gap:10px;
+    overflow-y:auto;overflow-x:hidden;min-height:0;
+    scrollbar-width:thin;scrollbar-color:rgba(0,0,0,.15) transparent}
+  .twk-row{display:flex;flex-direction:column;gap:5px}
+  .twk-row-h{flex-direction:row;align-items:center;justify-content:space-between;gap:10px}
+  .twk-lbl{display:flex;justify-content:space-between;align-items:baseline;color:rgba(41,38,27,.72)}
+  .twk-lbl>span:first-child{font-weight:500}
+  .twk-val{color:rgba(41,38,27,.5);font-variant-numeric:tabular-nums}
+  .twk-sect{font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;
+    color:rgba(41,38,27,.45);padding:10px 0 0}
+  .twk-sect:first-child{padding-top:0}
+  .twk-field{appearance:none;width:100%;height:26px;padding:0 8px;
+    border:.5px solid rgba(0,0,0,.1);border-radius:7px;
+    background:rgba(255,255,255,.6);color:inherit;font:inherit;outline:none}
+  .twk-field:focus{border-color:rgba(0,0,0,.25);background:rgba(255,255,255,.85)}
+  .twk-slider{appearance:none;-webkit-appearance:none;width:100%;height:4px;margin:6px 0;
+    border-radius:999px;background:rgba(0,0,0,.12);outline:none}
+  .twk-slider::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;
+    width:14px;height:14px;border-radius:50%;background:#fff;
+    border:.5px solid rgba(0,0,0,.12);box-shadow:0 1px 3px rgba(0,0,0,.2);cursor:default}
+  .twk-toggle{position:relative;width:32px;height:18px;border:0;border-radius:999px;
+    background:rgba(0,0,0,.15);transition:background .15s;cursor:default;padding:0}
+  .twk-toggle[data-on="1"]{background:#34c759}
+  .twk-toggle i{position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;
+    background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.25);transition:transform .15s}
+  .twk-toggle[data-on="1"] i{transform:translateX(14px)}
+  .twk-swatch{appearance:none;-webkit-appearance:none;width:56px;height:22px;
+    border:.5px solid rgba(0,0,0,.1);border-radius:6px;padding:0;cursor:default;background:transparent;flex-shrink:0}
+  .twk-swatch::-webkit-color-swatch-wrapper{padding:0}
+  .twk-swatch::-webkit-color-swatch{border:0;border-radius:5.5px}
+`;
+
+function useTweaks(defaults) {
+  const [values, setValues] = React.useState(defaults);
+  const setTweak = React.useCallback((keyOrEdits, val) => {
+    const edits = typeof keyOrEdits === 'object' && keyOrEdits !== null
+      ? keyOrEdits : { [keyOrEdits]: val };
+    setValues((prev) => ({ ...prev, ...edits }));
+    window.parent.postMessage({ type: '__edit_mode_set_keys', edits }, '*');
+  }, []);
+  return [values, setTweak];
+}
+
+function TweaksPanel({ title = 'Tweaks', children }) {
+  const [open, setOpen] = React.useState(false);
+  const dragRef = React.useRef(null);
+  const offsetRef = React.useRef({ x: 16, y: 16 });
+  const PAD = 16;
+  const clampToViewport = React.useCallback(() => {
+    const panel = dragRef.current;
+    if (!panel) return;
+    const w = panel.offsetWidth, h = panel.offsetHeight;
+    const maxRight = Math.max(PAD, window.innerWidth - w - PAD);
+    const maxBottom = Math.max(PAD, window.innerHeight - h - PAD);
+    offsetRef.current = {
+      x: Math.min(maxRight, Math.max(PAD, offsetRef.current.x)),
+      y: Math.min(maxBottom, Math.max(PAD, offsetRef.current.y)),
+    };
+    panel.style.right = offsetRef.current.x + 'px';
+    panel.style.bottom = offsetRef.current.y + 'px';
+  }, []);
+  React.useEffect(() => {
+    if (!open) return;
+    clampToViewport();
+    const ro = new ResizeObserver(clampToViewport);
+    ro.observe(document.documentElement);
+    return () => ro.disconnect();
+  }, [open, clampToViewport]);
+  React.useEffect(() => {
+    const onMsg = (e) => {
+      const t = e?.data?.type;
+      if (t === '__activate_edit_mode') setOpen(true);
+      else if (t === '__deactivate_edit_mode') setOpen(false);
+    };
+    window.addEventListener('message', onMsg);
+    window.parent.postMessage({ type: '__edit_mode_available' }, '*');
+    return () => window.removeEventListener('message', onMsg);
+  }, []);
+  const dismiss = () => { setOpen(false); window.parent.postMessage({ type: '__edit_mode_dismissed' }, '*'); };
+  const onDragStart = (e) => {
+    const panel = dragRef.current;
+    if (!panel) return;
+    const r = panel.getBoundingClientRect();
+    const sx = e.clientX, sy = e.clientY;
+    const startRight = window.innerWidth - r.right;
+    const startBottom = window.innerHeight - r.bottom;
+    const move = (ev) => {
+      offsetRef.current = { x: startRight - (ev.clientX - sx), y: startBottom - (ev.clientY - sy) };
+      clampToViewport();
+    };
+    const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+  };
+  if (!open) return null;
+  return (
+    <>
+      <style>{__TWEAKS_STYLE}</style>
+      <div ref={dragRef} className="twk-panel" style={{ right: offsetRef.current.x, bottom: offsetRef.current.y }}>
+        <div className="twk-hd" onMouseDown={onDragStart}>
+          <b>{title}</b>
+          <button className="twk-x" onMouseDown={e=>e.stopPropagation()} onClick={dismiss}>✕</button>
+        </div>
+        <div className="twk-body">{children}</div>
+      </div>
+    </>
+  );
+}
+function TweakSection({ label, children }) {
+  return <><div className="twk-sect">{label}</div>{children}</>;
+}
+function TweakSlider({ label, value, min=0, max=100, step=1, unit='', onChange }) {
+  return (
+    <div className="twk-row">
+      <div className="twk-lbl"><span>{label}</span><span className="twk-val">{value}{unit}</span></div>
+      <input type="range" className="twk-slider" min={min} max={max} step={step} value={value} onChange={e=>onChange(Number(e.target.value))}/>
+    </div>
+  );
+}
+function TweakToggle({ label, value, onChange }) {
+  return (
+    <div className="twk-row twk-row-h">
+      <div className="twk-lbl"><span>{label}</span></div>
+      <button type="button" className="twk-toggle" data-on={value?'1':'0'} onClick={()=>onChange(!value)}><i/></button>
+    </div>
+  );
+}
+function TweakText({ label, value, placeholder, onChange }) {
+  return (
+    <div className="twk-row">
+      <div className="twk-lbl"><span>{label}</span></div>
+      <input className="twk-field" type="text" value={value} placeholder={placeholder} onChange={e=>onChange(e.target.value)}/>
+    </div>
+  );
+}
+function TweakColor({ label, value, onChange }) {
+  return (
+    <div className="twk-row twk-row-h">
+      <div className="twk-lbl"><span>{label}</span></div>
+      <input type="color" className="twk-swatch" value={value} onChange={e=>onChange(e.target.value)}/>
+    </div>
+  );
+}
+
+Object.assign(window, { useTweaks, TweaksPanel, TweakSection, TweakSlider, TweakToggle, TweakText, TweakColor });
+</script>
+
+<!-- ── MAIN APP ── -->
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback } = React;
+
+/* ── REAL API MODULE ── */
+const api = {
+  get:    url  => fetch(url).then(r => r.json()),
+  post:   (url, body) => fetch(url, {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body),
+  }).then(r => r.json()),
+  upload: (url, file) => {
+    const fd = new FormData(); fd.append('file', file);
+    return fetch(url, {method: 'POST', body: fd}).then(r => r.json());
+  },
+  del:    url  => fetch(url, {method: 'DELETE'}).then(r => r.json()),
+};
+
+/* ── SSE PHASE RUNNER ── */
+function runPhaseSSE(n, { onStart, onDone, onError }) {
+  const es = new EventSource(`/api/phase/${n}/run`);
+  es.onmessage = e => {
+    let msg;
+    try { msg = JSON.parse(e.data); } catch { return; }
+    if (msg.type === 'start')  onStart && onStart(msg);
+    if (msg.type === 'done')  { onDone && onDone(msg); es.close(); }
+    if (msg.type === 'error') { onError && onError(msg); es.close(); }
+  };
+  es.onerror = () => { onError && onError({message: 'Connection lost'}); es.close(); };
+  return es;
+}
+
+/* ── LUCIDE ICON HELPER ── */
+function Icon({ name, size = 16, color = 'currentColor', style = {} }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    if (ref.current && window.lucide) {
+      ref.current.innerHTML = '';
+      const el = document.createElement('i');
+      el.setAttribute('data-lucide', name);
+      el.style.width = size + 'px';
+      el.style.height = size + 'px';
+      el.style.color = color;
+      ref.current.appendChild(el);
+      window.lucide.createIcons({ nodes: [el] });
+    }
+  }, [name, size, color]);
+  return <span ref={ref} className="ic" style={{ width: size, height: size, ...style }} />;
+}
+
+const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "accentColor": "#5e6ad2",
+  "sidebarWidth": 260,
+  "fontSize": 14,
+  "runBtnLabel": "Start your application",
+  "showElapsed": true,
+  "compactMode": false
+}/*EDITMODE-END*/;
+
+const PHASE_NAMES = ['Resume Ingestion','Job Discovery','Relevance Scoring','Resume Tailoring','Submit & Track','Excel Tracker','Run Report'];
+
+/* ── COSMETIC CLI LINES (shown while phase is running — backend doesn't stream these) ── */
+const CLI_LINES = {
+  1:['$ agent.py --phase 1','  parsing resume → extracting text…','  nlp: extracting skills and experience…','  auditing hard/soft skill split…','  verifying evidence, re-ranking titles…','✓ phase_1 complete'],
+  2:['$ agent.py --phase 2','  sources: linkedin · indeed · glassdoor · ziprecruiter','  simplify: github.com/SimplifyJobs enabled','  deduplicating and filtering postings…','  applying education + citizenship filters…','✓ phase_2 complete'],
+  3:['$ agent.py --phase 3','  scoring jobs against profile…','  weights: skills×0.50 + industry×0.30 + location×0.20','  filtering by experience level…','✓ phase_3 complete'],
+  4:['$ agent.py --phase 4','  tailoring resumes for shortlisted jobs…','    reordering skills to front-load JD keywords','    running ATS gap analysis…','  saving .tex + .pdf to output/','✓ phase_4 complete'],
+  5:['$ agent.py --phase 5','  submitting auto-eligible applications…','  flagging below-threshold for manual review…','✓ phase_5 complete'],
+  6:['$ agent.py --phase 6','  writing Job_Applications_Tracker…','  17 columns | status colors applied','✓ phase_6 complete'],
+  7:['$ agent.py --phase 7','  generating run report…','  saving to output/','✓ phase_7 complete — all done'],
+};
+
+/* ── MARKDOWN RENDERER ── */
+function MdRender({ text }) {
+  const lines = (text || '').split('\n');
+  const els = []; let buf = [];
+  const flush = () => { if (buf.length) { els.push(<p key={els.length}>{buf.join(' ')}</p>); buf = []; } };
+  lines.forEach((l, i) => {
+    if (l.startsWith('## '))      { flush(); els.push(<h2 key={i}>{l.slice(3)}</h2>); }
+    else if (l.startsWith('### ')) { flush(); els.push(<h3 key={i}>{l.slice(4)}</h3>); }
+    else if (l.startsWith('- '))   { flush(); els.push(<ul key={i}><li dangerouslySetInnerHTML={{__html:l.slice(2).replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>').replace(/`(.*?)`/g,'<code>$1</code>')}}/></ul>); }
+    else if (/^\d+\. /.test(l))    { flush(); els.push(<ul key={i}><li dangerouslySetInnerHTML={{__html:l.replace(/^\d+\. /,'').replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>')}}/></ul>); }
+    else if (l.trim() === '')      { flush(); }
+    else { buf.push(l); }
+  });
+  flush();
+  return <div className="md-render">{els}</div>;
+}
+
+/* ── PHASE RESULT COMPONENTS (driven by real backend data) ── */
+function Phase1Results({ data, setJobTitles }) {
+  if (!data) return null;
+  const titles    = data.target_titles || [];
+  const hardSkills= data.top_hard_skills || [];
+  const softSkills= data.top_soft_skills || [];
+  const gaps      = data.resume_gaps || [];
+  return (
+    <>
+      <div className="metrics">
+        {[['Name', data.name||'—'], ['Email', data.email||'—'], ['Location', data.location||'—']].map(([l,v])=>(
+          <div key={l} className="met"><div className="met-val" style={{fontSize:13,marginTop:2,wordBreak:'break-all'}}>{v}</div><div className="met-lbl">{l}</div></div>
+        ))}
+      </div>
+      <div className="skills-cols">
+        <div className="skills-group">
+          <h4>Suggested Titles</h4>
+          <div className="skill-chips" style={{marginBottom:10}}>
+            {titles.map(t=><span key={t} className="skill-chip">{t}</span>)}
+          </div>
+          {titles.length > 0 && (
+            <button className="act-btn primary" onClick={()=>setJobTitles(titles.join(', '))} style={{fontSize:11}}>
+              <Icon name="arrow-right" size={12}/> Use these titles
+            </button>
+          )}
+        </div>
+        <div className="skills-group">
+          <h4>Hard Skills</h4>
+          <div className="skill-chips">{hardSkills.map(s=><span key={s} className="skill-chip">{s}</span>)}</div>
+          {softSkills.length > 0 && <>
+            <h4 style={{marginTop:10}}>Soft Skills</h4>
+            <div className="skill-chips">{softSkills.map(s=><span key={s} className="skill-chip">{s}</span>)}</div>
+          </>}
+        </div>
+      </div>
+      {gaps.length > 0 && (
+        <div className="warn-bar"><Icon name="alert-triangle" size={14}/>{gaps[0]}</div>
+      )}
+    </>
+  );
+}
+
+function Phase2Results({ data }) {
+  if (!data) return null;
+  const jobs = data.jobs || [];
+  return (
+    <>
+      <div className="metrics">
+        {[
+          [String(data.total||0),'Jobs found'],
+          [String(jobs.length),'Shown'],
+        ].map(([v,l])=>(
+          <div key={l} className="met"><div className="met-val">{v}</div><div className="met-lbl">{l}</div></div>
+        ))}
+      </div>
+      <div style={{overflowX:'auto'}}>
+        <table className="dtbl">
+          <thead><tr><th>Company</th><th>Role</th><th>Location</th><th>Exp</th><th>Edu</th><th>Cit</th><th>Salary</th><th>Platform</th><th>Date</th><th>Apply</th></tr></thead>
+          <tbody>{jobs.map((j,i)=>(
+            <tr key={i}>
+              <td className="td-s">{j.co}</td><td>{j.role}</td>
+              <td style={{fontSize:11,color:'var(--t3)'}}>{j.loc}</td>
+              <td style={{fontSize:11}}>{j.experience}</td><td style={{fontSize:11}}>{j.education}</td>
+              <td><span className={`chip-sm ${j.citizenship==='Open'?'cg':'cy'}`}>{j.citizenship||'?'}</span></td>
+              <td style={{fontFamily:'var(--mono)',fontSize:11}}>{j.salary||'—'}</td>
+              <td style={{fontSize:11}}>{j.platform}</td>
+              <td style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--t3)'}}>{j.posted}</td>
+              <td>{j.url && <a href={j.url} target="_blank" style={{fontSize:11,color:'var(--acch)',textDecoration:'none'}}>Apply →</a>}</td>
+            </tr>
+          ))}</tbody>
+        </table>
+      </div>
+    </>
+  );
+}
+
+function Phase3Results({ data, threshold }) {
+  if (!data) return null;
+  const jobs = data.jobs || [];
+  return (
+    <>
+      <div className="metrics">
+        {[
+          [String(data.auto||0),`Auto ≥${threshold}`],
+          [String(data.manual||0),'Review'],
+          [String((data.below||0)+(data.filtered||0)),'Excluded'],
+          [String(data.total||0),'Total'],
+        ].map(([v,l])=>(
+          <div key={l} className="met"><div className="met-val">{v}</div><div className="met-lbl">{l}</div></div>
+        ))}
+      </div>
+      <table className="dtbl">
+        <thead><tr><th>Company</th><th>Role</th><th>Score</th><th>Matching</th><th>Missing</th><th>Status</th></tr></thead>
+        <tbody>{jobs.map((j,i)=>(
+          <tr key={i}>
+            <td className="td-s">{j.co}</td><td>{j.role}</td>
+            <td><span className={`score-cell ${j.score>=threshold?'sc-hi':j.score>=60?'sc-md':'sc-lo'}`}>{j.score}</span></td>
+            <td style={{fontSize:11}}>{(j.matching||[]).join(', ')}</td>
+            <td style={{fontSize:11,color:'var(--amber)'}}>{(j.missing||[]).join(', ')}</td>
+            <td><span className={`chip-sm ${j.status==='passed'&&j.score>=threshold?'ca':j.status==='passed'?'cy':'cd'}`}>
+              {j.status==='passed'&&j.score>=threshold?'auto':j.status==='passed'?'review':j.status||'—'}
+            </span></td>
+          </tr>
+        ))}</tbody>
+      </table>
+    </>
+  );
+}
+
+function Phase4Results({ data }) {
+  const [expanded, setExpanded] = useState(null);
+  if (!data) return null;
+  const items = data.items || [];
+  return (
+    <>
+      <div className="info-bar"><Icon name="info" size={13}/> {items.length} resume(s) tailored — click a row to expand</div>
+      <div style={{background:'var(--bg2)',border:'1px solid var(--bdr)',borderRadius:10,overflow:'hidden',marginBottom:14}}>
+        {items.map((item,i)=>(
+          <div key={i} className="tailor-row">
+            <div className="tailor-row-header" onClick={()=>setExpanded(expanded===i?null:i)}>
+              <div style={{flex:1}}>
+                <div className="tailor-row-co">{item.co}</div>
+                <div className="tailor-row-role">{item.role}</div>
+              </div>
+              <div className="ats-row" style={{margin:0}}>
+                <span className="ats-score sc-md">{item.ats_before||0}%</span>
+                <span className="ats-arrow">→</span>
+                <span className="ats-score sc-hi">{item.ats_after||0}%</span>
+                {item.ats_after > item.ats_before && (
+                  <span className="ats-delta delta-pos">+{item.ats_after-item.ats_before}</span>
+                )}
+              </div>
+              <Icon name={expanded===i?'chevron-up':'chevron-down'} size={14} color="var(--t3)" style={{marginLeft:10}}/>
+            </div>
+            <div className={`tailor-expand${expanded===i?' open':''}`}>
+              <div className="tailor-expand-body">
+                {(item.ats_gaps||[]).length > 0 && (
+                  <div style={{marginBottom:10}}>
+                    <div className="met-lbl" style={{marginBottom:6}}>Keyword gaps</div>
+                    <div style={{display:'flex',gap:5,flexWrap:'wrap'}}>
+                      {item.ats_gaps.map(g=><span key={g} className="chip-sm cy">{g}</span>)}
+                    </div>
+                  </div>
+                )}
+                {item.resume_file && (
+                  <div style={{display:'flex',gap:8}}>
+                    <a className="act-btn" href={`/output/${item.resume_file}`} download>
+                      <Icon name="download" size={12}/> Download Resume
+                    </a>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </>
+  );
+}
+
+function Phase5Results({ data, threshold }) {
+  if (!data) return null;
+  const apps = data.apps || [];
+  return (
+    <>
+      <div className="metrics">
+        {[
+          [String(data.applied||0),'Applied'],
+          [String(data.manual||0),'Manual'],
+          [String(apps.length-(data.applied||0)-(data.manual||0)),'Skipped'],
+          [String(apps.length),'Total'],
+        ].map(([v,l])=>(
+          <div key={l} className="met"><div className="met-val">{v}</div><div className="met-lbl">{l}</div></div>
+        ))}
+      </div>
+      <table className="dtbl">
+        <thead><tr><th></th><th>Company</th><th>Role</th><th>Score</th><th>Status</th><th>Confirmation</th></tr></thead>
+        <tbody>{apps.map((a,i)=>(
+          <tr key={i}>
+            <td><span className={`status-dot ${a.status==='Applied'?'sd-green':a.status==='Manual Required'?'sd-amber':'sd-red'}`}/></td>
+            <td className="td-s">{a.co}</td><td>{a.role}</td>
+            <td><span className={`score-cell ${a.score>=(threshold||75)?'sc-hi':a.score>=60?'sc-md':'sc-lo'}`}>{a.score}</span></td>
+            <td><span className={`chip-sm ${a.status==='Applied'?'cg':a.status==='Manual Required'?'cy':'cr'}`}>{a.status}</span></td>
+            <td style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--t3)'}}>{a.confirmation}</td>
+          </tr>
+        ))}</tbody>
+      </table>
+    </>
+  );
+}
+
+function Phase6Results({ data }) {
+  if (!data) return null;
+  return (
+    <div className="success-bar">
+      <Icon name="check-circle" size={13}/>
+      Tracker saved →{' '}
+      <a href={data.url||'#'} download style={{fontFamily:'var(--mono)',fontSize:11,color:'var(--green)',marginLeft:4}}>
+        {data.tracker}
+      </a>
+    </div>
+  );
+}
+
+function Phase7Results({ data }) {
+  if (!data) return null;
+  return (
+    <>
+      <MdRender text={data.report||''}/>
+      {data.report && (
+        <div style={{display:'flex',gap:8,marginTop:16}}>
+          <a className="act-btn primary" href={`data:text/markdown,${encodeURIComponent(data.report)}`}
+             download={`${new Date().toISOString().slice(0,10)}_run-report.md`}>
+            <Icon name="download" size={12}/> Download .md Report
+          </a>
+        </div>
+      )}
+    </>
+  );
+}
+
+/* ── CLI LOG COMPONENT ── */
+function CliLog({ phaseN, running }) {
+  const lines = CLI_LINES[phaseN] || [];
+  const [shown, setShown] = useState(running ? 0 : lines.length);
+  useEffect(() => {
+    if (!running) { setShown(lines.length); return; }
+    setShown(0);
+    let i = 0;
+    const iv = setInterval(() => { i++; setShown(i); if (i >= lines.length) clearInterval(iv); }, 280);
+    return () => clearInterval(iv);
+  }, [running, phaseN]);
+  const cls = l => {
+    if (l.startsWith('✓')) return 'cc3';
+    if (l.startsWith('$')) return 'cc0';
+    if (l.startsWith('    +') || l.startsWith('    ~')) return 'cc2';
+    if (l.includes('error') || l.includes('failed')) return 'cc4';
+    return 'cc1';
+  };
+  return (
+    <div className="cli-wrap">
+      {lines.slice(0, shown).map((l, i) => <div key={i} className={`cli-line ${cls(l)}`}>{l}</div>)}
+      {running && shown < lines.length && <div className="cc0">▌<span className="cli-cursor"/></div>}
+    </div>
+  );
+}
+
+/* ── ELAPSED TIMER ── */
+function ElapsedTimer({ active }) {
+  const [t, setT] = useState(0);
+  useEffect(() => {
+    if (!active) { setT(0); return; }
+    const s = Date.now();
+    const iv = setInterval(() => setT(((Date.now()-s)/1000).toFixed(1)), 100);
+    return () => clearInterval(iv);
+  }, [active]);
+  if (!active) return null;
+  return <span className="step-time">{t}s</span>;
+}
+
+/* ── TOGGLE ── */
+function Toggle({ on, onChange, disabled }) {
+  return <button className={`toggle-btn${on?' on':''}`} onClick={() => !disabled && onChange(!on)} disabled={disabled}/>;
+}
+
+/* ── CHIPS MULTISELECT ── */
+function ChipSelect({ options, value, onChange, disabled }) {
+  const toggle = o => {
+    if (disabled) return;
+    onChange(value.includes(o) ? value.filter(x => x !== o) : [...value, o]);
+  };
+  return (
+    <div className="chips">
+      {options.map(o => (
+        <span key={o} className={`chip-opt${value.includes(o)?' sel':''}`} onClick={() => toggle(o)}>{o}</span>
+      ))}
+    </div>
+  );
+}
+
+/* ── MARKDOWN RENDERER ── */
+function PhaseResults({ n, threshold, setJobTitles, data }) {
+  if (n === 1) return <Phase1Results data={data} setJobTitles={setJobTitles}/>;
+  if (n === 2) return <Phase2Results data={data}/>;
+  if (n === 3) return <Phase3Results data={data} threshold={threshold}/>;
+  if (n === 4) return <Phase4Results data={data}/>;
+  if (n === 5) return <Phase5Results data={data} threshold={threshold}/>;
+  if (n === 6) return <Phase6Results data={data}/>;
+  if (n === 7) return <Phase7Results data={data}/>;
+  return null;
+}
+
+/* ── SIDEBAR ── */
+function Sidebar({ cfg, setCfg, running, onReset, onHome, onRunAll, runBtnLabel, phaseRunning }) {
+  const [showAdv, setShowAdv] = useState(false);
+  const [ollamaModels, setOllamaModels] = useState([]);
+  const [ollamaOk, setOllamaOk] = useState(null); // null=unknown, true, false
+  const set = (k, v) => setCfg(c => ({ ...c, [k]: v }));
+  const dis = running;
+
+  /* fetch live Ollama model list whenever mode switches to ollama */
+  useEffect(() => {
+    if (cfg.mode !== 'ollama') return;
+    api.get('/api/ollama/status').then(s => {
+      setOllamaOk(s.running);
+      setOllamaModels(s.models || []);
+      if (s.models && s.models.length > 0 && !s.models.find(m => m.name === cfg.ollamaModel)) {
+        set('ollamaModel', s.models[0].name);
+      }
+    }).catch(() => setOllamaOk(false));
+  }, [cfg.mode]);
+
+  return (
+    <div className="sidebar">
+      <div className="sb-top">
+        <span className="sb-wordmark" onClick={onHome}>Jobs<span>AI</span></span>
+      </div>
+      <div className="sb-body">
+        {/* LLM BACKEND */}
+        <div>
+          <div className="sb-section-label">LLM Backend</div>
+          <div className="sb-group">
+            <div className="sb-field">
+              <select className="sb-select" value={cfg.mode} onChange={e=>set('mode',e.target.value)} disabled={dis}>
+                <option value="demo">Demo (no API key)</option>
+                <option value="anthropic">Anthropic Claude</option>
+                <option value="ollama">Ollama (local)</option>
+              </select>
+            </div>
+            {cfg.mode==='anthropic' && (
+              <div className="sb-field">
+                <label className="sb-label">API Key</label>
+                <input className="sb-input" type="password" placeholder="sk-ant-api03-…" value={cfg.apiKey} onChange={e=>set('apiKey',e.target.value)} disabled={dis} style={{fontFamily:'var(--mono)',fontSize:12}}/>
+              </div>
+            )}
+            {cfg.mode==='ollama' && (
+              <div className="sb-field">
+                {ollamaOk === false && (
+                  <div className="sb-warn">Ollama not reachable — run: <code style={{fontFamily:'var(--mono)'}}>ollama serve</code></div>
+                )}
+                {ollamaModels.length > 0 ? (
+                  <>
+                    <label className="sb-label">Model</label>
+                    <select className="sb-select" value={cfg.ollamaModel} onChange={e=>set('ollamaModel',e.target.value)} disabled={dis}>
+                      {ollamaModels.map(m=><option key={m.name} value={m.name}>{m.name}</option>)}
+                    </select>
+                    {ollamaModels.find(m=>m.name===cfg.ollamaModel) && (() => {
+                      const m = ollamaModels.find(x=>x.name===cfg.ollamaModel);
+                      return <div className="sb-helper">{m.params} · {m.family} · {m.size_gb} GB</div>;
+                    })()}
+                  </>
+                ) : ollamaOk && (
+                  <div className="sb-warn">No models pulled — run: <code style={{fontFamily:'var(--mono)'}}>ollama pull llama3.2</code></div>
+                )}
+              </div>
+            )}
+            {cfg.mode==='demo' && <div className="sb-helper">No API key needed. Uses template matching + 8 demo jobs.</div>}
+          </div>
+        </div>
+
+        <hr className="sb-sep"/>
+
+        {/* JOB SEARCH */}
+        <div>
+          <div className="sb-section-label">Job Search</div>
+          <div className="sb-group">
+            <div className="sb-field">
+              <label className="sb-label">Job Titles</label>
+              <input className="sb-input" value={cfg.jobTitles} onChange={e=>set('jobTitles',e.target.value)} placeholder="Hardware Engineer, FPGA Intern" disabled={dis}/>
+            </div>
+            <div className="sb-field">
+              <label className="sb-label">Location</label>
+              <input className="sb-input" value={cfg.location} onChange={e=>set('location',e.target.value)} placeholder="United States" disabled={dis}/>
+            </div>
+            <div className="sb-field">
+              <div className="range-row">
+                <span className="range-label">Auto-apply threshold</span>
+                <span className="range-val">{cfg.threshold}</span>
+              </div>
+              <input type="range" min={50} max={100} value={cfg.threshold} onChange={e=>set('threshold',+e.target.value)} disabled={dis}/>
+              <div className="sb-helper">{cfg.threshold>=85?'Very selective':cfg.threshold>=75?'Balanced':'Broad — more volume'}</div>
+            </div>
+            <div className="sb-field">
+              <label className="sb-label">Max applications</label>
+              <input className="sb-input" type="number" min={1} max={50} value={cfg.maxApps} onChange={e=>set('maxApps',+e.target.value)} disabled={dis}/>
+            </div>
+            <div className="toggle-row">
+              <span className="toggle-lbl">Generate cover letters</span>
+              <Toggle on={cfg.coverLetter} onChange={v=>set('coverLetter',v)} disabled={dis}/>
+            </div>
+          </div>
+        </div>
+
+        <hr className="sb-sep"/>
+
+        {/* FILTERS */}
+        <div>
+          <div className="sb-section-label">Filters</div>
+          <div className="sb-group">
+            <div className="sb-field">
+              <label className="sb-label">Experience level</label>
+              <ChipSelect options={['Internship','Entry-level','Mid-level','Senior']} value={cfg.expLevels} onChange={v=>set('expLevels',v)} disabled={dis}/>
+            </div>
+            <div className="sb-field">
+              <label className="sb-label">Education required</label>
+              <ChipSelect options={["High School","Associate's","Bachelor's","Master's","PhD"]} value={cfg.eduFilter} onChange={v=>set('eduFilter',v)} disabled={dis}/>
+            </div>
+            <div className="toggle-row">
+              <span className="toggle-lbl">Include unspecified education</span>
+              <Toggle on={cfg.inclUnknownEdu} onChange={v=>set('inclUnknownEdu',v)} disabled={dis}/>
+            </div>
+            <div className="toggle-row">
+              <span className="toggle-lbl">Include SimplifyJobs / GitHub</span>
+              <Toggle on={cfg.useSimplify} onChange={v=>set('useSimplify',v)} disabled={dis}/>
+            </div>
+            <div className="sb-field">
+              <label className="sb-label">Posted within (days)</label>
+              <input className="sb-input" type="number" min={1} max={180} value={cfg.daysOld} onChange={e=>set('daysOld',+e.target.value)} disabled={dis}/>
+            </div>
+            <button className="adv-toggle" onClick={()=>setShowAdv(a=>!a)}>
+              <Icon name={showAdv?'chevron-up':'chevron-down'} size={12}/>
+              {showAdv ? 'Hide advanced' : 'Advanced filters'}
+            </button>
+            <div className={`adv-body${showAdv?' open':''}`}>
+              <div className="sb-group" style={{paddingTop:8}}>
+                <div className="sb-field">
+                  <label className="sb-label">Blacklist companies</label>
+                  <input className="sb-input" placeholder="Google, Meta" value={cfg.blacklist} onChange={e=>set('blacklist',e.target.value)} disabled={dis}/>
+                </div>
+                <div className="sb-field">
+                  <label className="sb-label">Priority companies</label>
+                  <input className="sb-input" placeholder="NVIDIA, Apple, Intel" value={cfg.whitelist} onChange={e=>set('whitelist',e.target.value)} disabled={dis}/>
+                </div>
+                <div className="sb-field">
+                  <label className="sb-label">US Citizenship</label>
+                  <div className="radio-group">
+                    {['Show all','Exclude required','Only required'].map(o=>(
+                      <label key={o} className="radio-item">
+                        <input type="radio" name="cit" checked={cfg.citFilter===o} onChange={()=>!dis&&set('citFilter',o)} disabled={dis}/>
+                        {o}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="sb-bottom">
+        <div className="sb-mode-pill">
+          <div className="sb-mode-dot"/>
+          <span>{cfg.mode}{cfg.mode==='ollama'?` · ${cfg.ollamaModel}`:''}</span>
+        </div>
+        <button
+          className="act-btn primary"
+          style={{width:'100%',justifyContent:'center',padding:'10px 16px',borderRadius:8,fontSize:13}}
+          disabled={phaseRunning!==null}
+          onClick={onRunAll}
+        >
+          {phaseRunning!==null ? <><span className="spin"/>Running…</> : <><Icon name="play" size={13}/>{runBtnLabel}</>}
+        </button>
+        <button className="sb-reset" onClick={onReset}>
+          <Icon name="rotate-ccw" size={12}/> Reset Pipeline
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ── SCREEN 1 — ONBOARDING ── */
+function OnboardScreen({ resume, setResume, onStart, cfg }) {
+  const [text, setText] = useState('');
+  const [drag, setDrag] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState('');
+  const fileRef = useRef(null);
+
+  const handleFile = async f => {
+    if (!f) return;
+    setLoading(true); setErr('');
+    try {
+      const res = await api.upload('/api/resume/upload', f);
+      if (res.ok) setResume({ name: res.filename, length: res.length });
+      else setErr(res.detail || 'Upload failed');
+    } catch (e) { setErr(String(e)); }
+    setLoading(false);
+  };
+  const handleDrop = e => {
+    e.preventDefault(); setDrag(false);
+    handleFile(e.dataTransfer.files[0]);
+  };
+  const handlePaste = async () => {
+    if (text.trim().length < 20) return;
+    setLoading(true); setErr('');
+    try {
+      // Upload pasted text as a plain-text file
+      const blob = new Blob([text], {type: 'text/plain'});
+      const file = new File([blob], 'pasted_resume.txt', {type: 'text/plain'});
+      const res = await api.upload('/api/resume/upload', file);
+      if (res.ok) setResume({ name: 'pasted resume', length: res.length });
+      else setErr(res.detail || 'Upload failed');
+    } catch (e) { setErr(String(e)); }
+    setLoading(false);
+  };
+  const useDemo = async () => {
+    setLoading(true); setErr('');
+    try {
+      const res = await api.post('/api/resume/demo', {});
+      if (res.ok) setResume({ name: 'demo_resume.txt', length: 0 });
+      else setErr('Demo load failed');
+    } catch (e) { setErr(String(e)); }
+    setLoading(false);
+  };
+
+  return (
+    <div className="onboard">
+      <div className="ob-logo">Jobs<span>AI</span></div>
+      <div className="ob-card">
+        {resume ? (
+          <>
+            <div className="ob-loaded-banner">
+              <Icon name="check-circle" size={16} color="var(--green)"/>
+              <div>
+                <div className="ob-loaded-text">
+                  <strong>Resume loaded</strong> — {resume.name}
+                  {resume.length > 0 && <span style={{fontSize:11,color:'var(--t3)',marginLeft:6}}>({resume.length.toLocaleString()} chars)</span>}
+                </div>
+                <button className="ob-change" onClick={()=>{ api.post('/api/reset',{}); setResume(null); }}>Change resume</button>
+              </div>
+            </div>
+            <button className="ob-cta" onClick={onStart}>
+              Start Applying <Icon name="arrow-right" size={16}/>
+            </button>
+            <div className="ob-settings-hint">
+              Mode: <strong>{cfg.mode}</strong> · Searching for <strong>{(cfg.jobTitles||'').split(',')[0].trim()||'engineer'}</strong> · {cfg.location} · threshold {cfg.threshold}
+            </div>
+          </>
+        ) : (
+          <>
+            <h1 className="ob-h1">Let's find your next role.</h1>
+            <p className="ob-sub">Paste your resume below or upload a file to get started.</p>
+            {err && <div className="err-block" style={{marginBottom:12}}><div className="err-msg">{err}</div></div>}
+            <textarea
+              className="ob-textarea"
+              placeholder={'Alex Chen\nalex@university.edu | San Jose, CA\n\nEDUCATION\nBS Electrical Engineering, Stanford University, 2024\n\nSKILLS\nFPGA, Verilog, Python, CMOS, Signal Integrity, PCB Layout…\n\nEXPERIENCE\n…'}
+              value={text}
+              onChange={e=>setText(e.target.value)}
+              disabled={loading}
+            />
+            {text.trim().length > 20 && (
+              <button className="ob-cta" onClick={handlePaste} style={{marginBottom:12}} disabled={loading}>
+                {loading ? <><span className="spin"/>Uploading…</> : <>Use this resume <Icon name="arrow-right" size={16}/></>}
+              </button>
+            )}
+            <div
+              className={`ob-dropzone${drag?' drag':''}`}
+              onDrop={handleDrop}
+              onDragOver={e=>{e.preventDefault();setDrag(true)}}
+              onDragLeave={()=>setDrag(false)}
+              onClick={()=>!loading && fileRef.current?.click()}
+              style={{opacity:loading?.5:1}}
+            >
+              <div className="ob-dz-icon"><Icon name="upload" size={24} color="var(--t3)"/></div>
+              <div className="ob-dz-title">{loading ? 'Uploading…' : 'Drop your resume here'}</div>
+              <div className="ob-dz-sub">or click to browse files</div>
+              <div className="ob-dz-fmts">{['PDF','DOCX','TXT','TEX'].map(f=><span key={f} className="ob-fmt">{f}</span>)}</div>
+              <input ref={fileRef} type="file" accept=".pdf,.docx,.txt,.tex" style={{display:'none'}} onChange={e=>handleFile(e.target.files[0])}/>
+            </div>
+            <button className="ob-demo-link" onClick={useDemo} disabled={loading}>Use demo profile instead</button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ── INLINE PHASE CARD ── */
+function PhaseInlineCard({ n, done, running, locked, elapsed, threshold, setJobTitles, phaseErrors, showElapsed, onRun, phaseRunning, phaseData }) {
+  const [open, setOpen] = useState(true);
+  useEffect(() => { if (running) setOpen(true); }, [running]);
+
+  const st = phaseErrors[n] ? 'error' : done ? 'done' : running ? 'running' : locked ? 'wait' : 'ready';
+  const wrapCls = `ph-wrap ph-${st==='ready'?'wait':st}`;
+  const badgeCls = st==='done'?'phb-done':st==='running'?'phb-run':st==='error'?'phb-err':'phb-wait';
+  const badgeTxt = st==='done'?'done':st==='running'?'running…':st==='error'?'error':st==='ready'?'ready':'waiting';
+  const numContent = st==='done'
+    ? <Icon name="check" size={11} color="var(--green)"/>
+    : running
+      ? <span className="spin" style={{borderTopColor:'var(--amber)',width:10,height:10}}/>
+      : n;
+
+  return (
+    <div className={wrapCls} id={`phase-card-${n}`}>
+      <div className="ph-header" onClick={()=>setOpen(o=>!o)}>
+        <div className="ph-num">{numContent}</div>
+        <span className="ph-name">{PHASE_NAMES[n-1]}</span>
+        <div className="ph-right">
+          {running && <ElapsedTimer active={true}/>}
+          {(done || st==='error') && showElapsed && elapsed && <span className="ph-elapsed">{elapsed}</span>}
+          <span className={`ph-badge ${badgeCls}`}>{badgeTxt}</span>
+          <span className={`ph-chevron${open?' open':''}`}>▾</span>
+        </div>
+      </div>
+      {running && <div className="phase-loading-bar"><div className="phase-loading-fill"/></div>}
+      {open && (
+        <div className="ph-body">
+          {st==='wait' ? (
+            <div className="ph-wait-body">Waiting for Phase {n-1} to complete.</div>
+          ) : st==='ready' ? (
+            <div style={{padding:'12px 16px'}}>
+              <button className="act-btn primary" onClick={()=>onRun(n)} disabled={phaseRunning!==null} style={{fontSize:12}}>
+                <Icon name="play" size={12}/>
+                {['Extract Profile','Discover Jobs','Score Jobs','Tailor Resumes','Submit Applications','Write Tracker','Generate Report'][n-1]} →
+              </button>
+            </div>
+          ) : (
+            <>
+              {(done || running) && <CliLog phaseN={n} running={running}/>}
+              {st==='error' && (
+                <div style={{padding:'14px 16px'}}>
+                  <div className="err-block">
+                    <div className="err-title"><Icon name="alert-circle" size={14}/> Phase {n} failed</div>
+                    <div className="err-msg">{phaseErrors[n]}</div>
+                    <button className="act-btn" style={{marginTop:10}}>Retry →</button>
+                  </div>
+                </div>
+              )}
+              {done && (
+                <div style={{padding:'0 16px 16px'}}>
+                  <PhaseResults n={n} threshold={threshold} setJobTitles={setJobTitles} data={phaseData}/>
+                </div>
+              )}
+              {running && (
+                <div style={{padding:'0 16px 14px'}}>
+                  <div className="ph-wait-body" style={{fontStyle:'normal',color:'var(--t2)'}}>Processing…</div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── SCREEN 2+3 — PIPELINE ── */
+function PipelineScreen({ cfg, setCfg, phaseDone, phaseRunning, phaseTimes, phaseErrors, phaseResults, onRun, onRunAll, onReset, runBtnLabel='Start your application', showElapsed=true }) {
+  const nDone = phaseDone.size;
+  const allDone = nDone === 7;
+
+  // Summary numbers for completion banner from real Phase 5 data
+  const p5 = phaseResults[5] || {};
+  const bannerSub = allDone
+    ? `${p5.applied||0} applications submitted · ${p5.manual||0} flagged for manual review · report saved to output/`
+    : '';
+
+  return (
+    <div className="pipeline-shell" style={{flexDirection:'column'}}>
+      <div className="pipeline-meta-bar">
+        <span>{nDone} of 7 phases complete · {cfg.mode} · threshold {cfg.threshold}</span>
+      </div>
+      <div className="prog-track">
+        <div className="prog-fill" style={{width:`${(nDone/7)*100}%`}}/>
+        {phaseRunning!==null && <div className="prog-shimmer"/>}
+      </div>
+
+      <div style={{flex:1,overflowY:'auto'}}>
+        <div className="result-area">
+          {allDone && (
+            <div className="complete-banner">
+              <div className="cb-h">All done.</div>
+              <div className="cb-sub">{bannerSub}</div>
+              <div className="cb-actions">
+                {phaseResults[7]?.report && (
+                  <a className="act-btn primary"
+                     href={`data:text/markdown,${encodeURIComponent(phaseResults[7].report)}`}
+                     download={`${new Date().toISOString().slice(0,10)}_run-report.md`}>
+                    <Icon name="download" size={13}/> Download Report
+                  </a>
+                )}
+                <button className="act-btn" onClick={onReset}><Icon name="rotate-ccw" size={13}/> Start a new run</button>
+              </div>
+            </div>
+          )}
+          {PHASE_NAMES.map((_, i) => {
+            const n = i + 1;
+            const isLocked = n > 1 && !phaseDone.has(n-1) && phaseRunning !== n;
+            return (
+              <PhaseInlineCard
+                key={n} n={n}
+                done={phaseDone.has(n)}
+                running={phaseRunning===n}
+                locked={isLocked}
+                elapsed={phaseTimes[n]}
+                threshold={cfg.threshold}
+                setJobTitles={v=>setCfg(c=>({...c,jobTitles:v}))}
+                phaseErrors={phaseErrors}
+                showElapsed={showElapsed}
+                onRun={onRun}
+                phaseRunning={phaseRunning}
+                phaseData={phaseResults[n]}
+              />
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── ROOT APP ── */
+function App() {
+  const [tweaks, setTweak] = useTweaks(TWEAK_DEFAULTS);
+
+  useEffect(() => {
+    document.documentElement.style.setProperty('--accent', tweaks.accentColor);
+    document.documentElement.style.setProperty('--acch', tweaks.accentColor + 'cc');
+    document.documentElement.style.setProperty('--accd', tweaks.accentColor + '25');
+    document.documentElement.style.setProperty('--sb', tweaks.sidebarWidth + 'px');
+    document.documentElement.style.setProperty('font-size', tweaks.fontSize + 'px');
+  }, [tweaks.accentColor, tweaks.sidebarWidth, tweaks.fontSize]);
+
+  const [screen, setScreen] = useState('onboard');
+  const [resume, setResume] = useState(null);
+  const [cfg, setCfg] = useState({
+    mode:'demo', apiKey:'', ollamaModel:'llama3.2',
+    jobTitles:'Hardware Engineer, FPGA Intern', location:'United States',
+    threshold:75, maxApps:10, coverLetter:false,
+    expLevels:['Internship','Entry-level'],
+    eduFilter:["Bachelor's"],
+    inclUnknownEdu:false, useSimplify:true, daysOld:30,
+    blacklist:'', whitelist:'NVIDIA, Apple, Microsoft, Intel',
+    citFilter:'Exclude required',
+  });
+  const [phaseDone,    setPhaseDone]    = useState(new Set());
+  const [phaseRunning, setPhaseRunning] = useState(null);
+  const [phaseTimes,   setPhaseTimes]   = useState({});
+  const [phaseErrors,  setPhaseErrors]  = useState({});
+  const [phaseResults, setPhaseResults] = useState({});  // real data from SSE done events
+  const phaseRunningRef = useRef(null);
+
+  /* ── Sync initial state from backend on mount ── */
+  useEffect(() => {
+    api.get('/api/state').then(s => {
+      if (s.has_resume) setResume({ name: s.resume_filename || 'resume loaded', length: 0 });
+      setCfg(c => ({
+        ...c,
+        mode:           s.mode           || c.mode,
+        ollamaModel:    s.ollama_model    || c.ollamaModel,
+        jobTitles:      s.job_titles      || c.jobTitles,
+        location:       s.location        || c.location,
+        threshold:      s.threshold       ?? c.threshold,
+        maxApps:        s.max_apps        ?? c.maxApps,
+        coverLetter:    s.cover_letter    ?? c.coverLetter,
+        expLevels:      s.experience_levels || c.expLevels,
+        eduFilter:      s.education_filter  || c.eduFilter,
+        inclUnknownEdu: s.include_unknown_education ?? c.inclUnknownEdu,
+        citizenship_filter: s.citizenship_filter || c.citFilter,
+        useSimplify:    s.use_simplify    ?? c.useSimplify,
+        daysOld:        s.days_old        ?? c.daysOld,
+        blacklist:      s.blacklist       || c.blacklist,
+        whitelist:      s.whitelist       || c.whitelist,
+      }));
+      // Restore pipeline state if phases already ran
+      if (s.done && s.done.length > 0) {
+        setPhaseDone(new Set(s.done));
+        const times = {};
+        (s.done || []).forEach(n => { if (s.elapsed && s.elapsed[n]) times[n] = s.elapsed[n]+'s'; });
+        setPhaseTimes(times);
+        setScreen('pipeline');
+      }
+    }).catch(() => {/* backend not running — stay in demo */});
+  }, []);
+
+  /* ── Sync cfg changes to backend (debounced 400ms) ── */
+  const syncTimer = useRef(null);
+  useEffect(() => {
+    clearTimeout(syncTimer.current);
+    syncTimer.current = setTimeout(() => {
+      api.post('/api/config', {
+        mode:            cfg.mode,
+        api_key:         cfg.apiKey,
+        ollama_model:    cfg.ollamaModel,
+        job_titles:      cfg.jobTitles,
+        location:        cfg.location,
+        threshold:       cfg.threshold,
+        max_apps:        cfg.maxApps,
+        cover_letter:    cfg.coverLetter,
+        experience_levels: cfg.expLevels,
+        education_filter:  cfg.eduFilter,
+        include_unknown_education: cfg.inclUnknownEdu,
+        citizenship_filter: cfg.citFilter,
+        use_simplify:    cfg.useSimplify,
+        days_old:        cfg.daysOld,
+        blacklist:       cfg.blacklist,
+        whitelist:       cfg.whitelist,
+      }).catch(() => {});
+    }, 400);
+    return () => clearTimeout(syncTimer.current);
+  }, [cfg]);
+
+  /* ── Real phase runner via SSE ── */
+  const runPhase = useCallback(n => {
+    if (phaseRunningRef.current !== null) return;
+    phaseRunningRef.current = n;
+    setPhaseRunning(n);
+    setPhaseErrors(e => { const ne = {...e}; delete ne[n]; return ne; });
+
+    runPhaseSSE(n, {
+      onStart: () => {},
+      onDone: msg => {
+        phaseRunningRef.current = null;
+        setPhaseDone(p => new Set([...p, n]));
+        setPhaseTimes(p => ({ ...p, [n]: msg.elapsed ? msg.elapsed+'s' : '' }));
+        setPhaseResults(r => ({ ...r, [n]: msg.data || {} }));
+        setPhaseRunning(null);
+
+        // If Phase 1 completed, update job titles from extracted profile
+        if (n === 1 && msg.data?.target_titles?.length > 0) {
+          const titles = msg.data.target_titles.join(', ');
+          setCfg(c => {
+            const cur = (c.jobTitles || '').trim().toLowerCase();
+            if (cur === '' || cur === 'hardware engineer, fpga intern' || cur === 'engineer') {
+              return { ...c, jobTitles: titles };
+            }
+            return c;
+          });
+        }
+      },
+      onError: msg => {
+        phaseRunningRef.current = null;
+        setPhaseErrors(e => ({ ...e, [n]: msg.message || 'Phase failed' }));
+        setPhaseRunning(null);
+      },
+    });
+  }, []);
+
+  /* ── Run all 7 phases sequentially ── */
+  const runAll = useCallback(() => {
+    api.post('/api/reset', {}).then(() => {
+      setPhaseDone(new Set());
+      setPhaseRunning(null);
+      setPhaseTimes({});
+      setPhaseErrors({});
+      setPhaseResults({});
+      phaseRunningRef.current = null;
+      setScreen('pipeline');
+
+      // Chain: each phase starts after the previous SSE done event
+      const chain = (n) => {
+        if (n > 7) return;
+        phaseRunningRef.current = n;
+        setPhaseRunning(n);
+        runPhaseSSE(n, {
+          onStart: () => {},
+          onDone: msg => {
+            phaseRunningRef.current = null;
+            setPhaseDone(p => new Set([...p, n]));
+            setPhaseTimes(p => ({ ...p, [n]: msg.elapsed ? msg.elapsed+'s' : '' }));
+            setPhaseResults(r => ({ ...r, [n]: msg.data || {} }));
+            setPhaseRunning(null);
+            if (n === 1 && msg.data?.target_titles?.length > 0) {
+              const titles = msg.data.target_titles.join(', ');
+              setCfg(c => {
+                const cur = (c.jobTitles || '').trim().toLowerCase();
+                if (cur === '' || cur === 'hardware engineer, fpga intern' || cur === 'engineer') {
+                  return { ...c, jobTitles: titles };
+                }
+                return c;
+              });
+            }
+            chain(n + 1);
+          },
+          onError: msg => {
+            phaseRunningRef.current = null;
+            setPhaseErrors(e => ({ ...e, [n]: msg.message || 'Phase failed' }));
+            setPhaseRunning(null);
+            // Stop the chain on error
+          },
+        });
+      };
+      chain(1);
+    }).catch(() => {});
+  }, []);
+
+  const reset = useCallback(() => {
+    api.post('/api/reset', {}).catch(() => {});
+    setPhaseDone(new Set()); setPhaseRunning(null);
+    setPhaseTimes({}); setPhaseErrors({}); setPhaseResults({});
+    phaseRunningRef.current = null;
+    setResume(null);
+    setScreen('onboard');
+  }, []);
+
+  const startPipeline = () => setScreen('pipeline');
+
+  return (
+    <div className="shell">
+      <TweaksPanel>
+        <TweakSection label="Appearance">
+          <TweakColor id="accentColor" label="Accent color" value={tweaks.accentColor} onChange={v=>setTweak('accentColor',v)}/>
+          <TweakSlider id="sidebarWidth" label="Sidebar width" min={200} max={360} step={10} value={tweaks.sidebarWidth} onChange={v=>setTweak('sidebarWidth',v)}/>
+          <TweakSlider id="fontSize" label="Font size" min={11} max={16} step={1} value={tweaks.fontSize} onChange={v=>setTweak('fontSize',v)}/>
+        </TweakSection>
+        <TweakSection label="Pipeline">
+          <TweakText id="runBtnLabel" label="Run button label" value={tweaks.runBtnLabel} onChange={v=>setTweak('runBtnLabel',v)}/>
+          <TweakToggle id="showElapsed" label="Show elapsed time" value={tweaks.showElapsed} onChange={v=>setTweak('showElapsed',v)}/>
+        </TweakSection>
+      </TweaksPanel>
+
+      <Sidebar
+        cfg={cfg} setCfg={setCfg}
+        running={phaseRunning!==null}
+        onReset={reset}
+        onHome={() => window.location.href = '/'}
+        onRunAll={runAll}
+        runBtnLabel={tweaks.runBtnLabel}
+        phaseRunning={phaseRunning}
+      />
+
+      <div className="main">
+        {screen === 'onboard'
+          ? <OnboardScreen resume={resume} setResume={setResume} onStart={startPipeline} cfg={cfg}/>
+          : <PipelineScreen
+              cfg={cfg} setCfg={setCfg}
+              phaseDone={phaseDone} phaseRunning={phaseRunning}
+              phaseTimes={phaseTimes} phaseErrors={phaseErrors}
+              phaseResults={phaseResults}
+              onRun={runPhase} onRunAll={runAll} onReset={reset}
+              runBtnLabel={tweaks.runBtnLabel}
+              showElapsed={tweaks.showElapsed}
+            />
+        }
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>

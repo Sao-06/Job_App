@@ -1,0 +1,613 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Jobs AI — Autonomous Job Application Platform</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<style>
+:root {
+  --bg:       #0a0a0f;
+  --bg1:      #0f0f17;
+  --bg2:      #141420;
+  --bg3:      #1a1a28;
+  --surface:  #1e1e2e;
+  --border:   rgba(255,255,255,.07);
+  --border2:  rgba(255,255,255,.12);
+  --t1: #f0f0f8;
+  --t2: #8b8ba8;
+  --t3: #4a4a68;
+  --accent:   #5e6ad2;
+  --accent-h: #7b84e8;
+  --accent-d: rgba(94,106,210,.15);
+  --green:    #4ade80;
+  --green-d:  rgba(74,222,128,.12);
+  --amber:    #fbbf24;
+  --amber-d:  rgba(251,191,36,.1);
+  --red:      #f87171;
+  --mono: 'JetBrains Mono', monospace;
+  --sans: 'Inter', sans-serif;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{font-family:var(--sans);background:var(--bg);color:var(--t1);-webkit-font-smoothing:antialiased;overflow-x:hidden}
+::-webkit-scrollbar{width:4px;height:4px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border2);border-radius:2px}
+
+/* ── NAV ── */
+.hn{
+  position:fixed;top:0;left:0;right:0;z-index:100;height:52px;
+  display:flex;align-items:center;justify-content:space-between;padding:0 40px;
+  background:rgba(10,10,15,.85);backdrop-filter:blur(20px);border-bottom:1px solid var(--border);
+}
+.hn-logo{font-size:15px;font-weight:700;color:var(--t1);letter-spacing:-.3px;cursor:pointer;text-decoration:none}
+.hn-logo span{color:var(--accent)}
+.hn-right{display:flex;align-items:center;gap:10px}
+.hn-link{font-size:13px;color:var(--t2);cursor:pointer;transition:color .15s;padding:5px 10px;border-radius:6px;text-decoration:none}
+.hn-link:hover{color:var(--t1);background:rgba(255,255,255,.04)}
+.hn-cta{
+  padding:6px 16px;border-radius:6px;border:none;cursor:pointer;
+  background:var(--accent);color:#fff;font-family:var(--sans);
+  font-size:13px;font-weight:500;transition:all .15s;text-decoration:none;display:inline-block;
+}
+.hn-cta:hover{background:var(--accent-h);transform:translateY(-1px)}
+
+/* ── HERO ── */
+.hero{
+  min-height:100vh;padding:120px 40px 80px;
+  display:flex;align-items:center;position:relative;overflow:hidden;
+  background:url('/frontend/hero-bg.png') center center/cover no-repeat;
+}
+.hero::after{
+  content:'';position:absolute;inset:0;pointer-events:none;
+  background:linear-gradient(135deg,rgba(10,10,15,.78) 0%,rgba(10,10,15,.45) 55%,rgba(10,10,15,.65) 100%);
+  z-index:0;
+}
+.hero-glow{
+  position:absolute;top:-200px;left:-100px;width:800px;height:800px;border-radius:50%;
+  background:radial-gradient(circle,rgba(94,106,210,.12) 0%,transparent 65%);
+  pointer-events:none;z-index:1;
+}
+.hero-inner{max-width:1200px;margin:0 auto;display:grid;grid-template-columns:1fr 1fr;gap:80px;align-items:center;width:100%;position:relative;z-index:2}
+.hero-tag{
+  display:inline-flex;align-items:center;gap:6px;
+  background:var(--accent-d);border:1px solid rgba(94,106,210,.3);
+  padding:4px 12px;border-radius:20px;font-size:11px;font-weight:500;
+  color:var(--accent-h);letter-spacing:.05em;text-transform:uppercase;margin-bottom:24px;
+}
+.hero-tag::before{content:'';width:6px;height:6px;border-radius:50%;background:var(--accent-h);animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(.8)}}
+.hero h1{font-size:clamp(40px,5.5vw,68px);font-weight:800;line-height:1.05;letter-spacing:-.04em;color:var(--t1);margin-bottom:20px}
+.hero h1 em{font-style:normal;color:var(--accent-h)}
+.hero-sub{font-size:17px;color:var(--t2);line-height:1.65;font-weight:400;max-width:440px;margin-bottom:36px}
+.hero-btns{display:flex;gap:10px;flex-wrap:wrap}
+.btn-primary{
+  padding:11px 24px;border-radius:8px;border:none;cursor:pointer;
+  background:var(--accent);color:#fff;font-family:var(--sans);font-size:14px;font-weight:600;
+  transition:all .15s;display:inline-flex;align-items:center;gap:7px;text-decoration:none;
+}
+.btn-primary:hover{background:var(--accent-h);transform:translateY(-1px);box-shadow:0 8px 24px rgba(94,106,210,.35)}
+.btn-secondary{
+  padding:11px 24px;border-radius:8px;border:1px solid var(--border2);cursor:pointer;
+  background:transparent;color:var(--t1);font-family:var(--sans);font-size:14px;font-weight:500;
+  transition:all .15s;text-decoration:none;display:inline-flex;align-items:center;
+}
+.btn-secondary:hover{background:rgba(255,255,255,.05)}
+
+/* hero dashboard preview */
+.hero-right{position:relative}
+.dashboard-preview{
+  transform:perspective(900px) rotateY(-8deg) rotateX(4deg);
+  transform-style:preserve-3d;transition:transform .4s ease;
+}
+.dashboard-preview:hover{transform:perspective(900px) rotateY(-2deg) rotateX(1deg)}
+.dp-window{
+  background:var(--bg2);border:1px solid var(--border2);
+  border-radius:14px;overflow:hidden;
+  box-shadow:0 40px 80px rgba(0,0,0,.7),0 0 0 1px rgba(255,255,255,.05),inset 0 1px 0 rgba(255,255,255,.08);
+}
+.dp-bar{background:var(--bg3);padding:10px 14px;display:flex;align-items:center;gap:6px;border-bottom:1px solid var(--border)}
+.dp-dot{width:9px;height:9px;border-radius:50%}
+.dp-title{margin-left:6px;font-size:11px;color:var(--t3);font-family:var(--mono)}
+.dp-body{padding:16px}
+.dp-topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+.dp-tabs{display:flex;gap:2px}
+.dp-tab{padding:4px 10px;border-radius:5px;font-size:11px;font-weight:500;cursor:pointer;color:var(--t3)}
+.dp-tab.active{background:var(--accent-d);color:var(--accent-h)}
+.dp-prog-label{font-size:10px;color:var(--t3);font-family:var(--mono)}
+.dp-prog-bar{height:3px;background:var(--bg3);border-radius:2px;width:120px;margin-top:4px}
+.dp-prog-fill{height:100%;border-radius:2px;background:var(--accent);width:43%}
+.dp-phase-list{display:flex;flex-direction:column;gap:6px}
+.dp-phase-row{display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--bg3);border-radius:7px;border:1px solid var(--border)}
+.dp-phase-name{font-size:11px;font-weight:500;color:var(--t1);flex:1}
+.dp-phase-badge{font-size:10px;font-family:var(--mono);padding:2px 6px;border-radius:4px;font-weight:500}
+.dpb-done{background:var(--green-d);color:var(--green)}
+.dpb-run{background:var(--amber-d);color:var(--amber)}
+.dpb-wait{background:rgba(255,255,255,.05);color:var(--t3)}
+.dp-score{font-size:10px;font-family:var(--mono);color:var(--t3);margin-left:4px}
+
+/* hero animations */
+@keyframes hero-in{from{opacity:0;transform:translateY(24px)}to{opacity:1;transform:none}}
+.hero-anim{animation:hero-in .7s cubic-bezier(.16,1,.3,1) both}
+.ha-1{animation-delay:.05s}.ha-2{animation-delay:.15s}.ha-3{animation-delay:.25s}
+.ha-4{animation-delay:.35s}.ha-5{animation-delay:.5s}
+
+/* ── SCROLL REVEAL ── */
+.sr{opacity:0;transform:translateY(28px);transition:opacity .7s cubic-bezier(.16,1,.3,1),transform .7s cubic-bezier(.16,1,.3,1)}
+.sr.visible{opacity:1;transform:none}
+.sr-d1{transition-delay:.08s}.sr-d2{transition-delay:.16s}.sr-d3{transition-delay:.24s}
+
+/* ── STATS BAND ── */
+.stats-band{padding:80px 40px;background:var(--bg1);border-top:1px solid var(--border);border-bottom:1px solid var(--border)}
+.stats-inner{max-width:900px;margin:0 auto;display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--border2);border-radius:14px;overflow:hidden;border:1px solid var(--border2)}
+.stat-cell{background:var(--bg2);padding:48px 40px;text-align:center}
+.stat-n{font-size:clamp(52px,7vw,76px);font-weight:800;color:var(--t1);letter-spacing:-.05em;line-height:1;font-family:var(--mono)}
+.stat-n span{color:var(--accent-h)}
+.stat-l{font-size:14px;color:var(--t2);margin-top:10px;font-weight:400}
+
+/* ── SECTIONS ── */
+.hp-section{padding:100px 40px}
+.hp-section.alt{background:var(--bg1);border-top:1px solid var(--border);border-bottom:1px solid var(--border)}
+.hp-inner{max-width:1100px;margin:0 auto}
+.hp-label{font-size:11px;font-weight:600;color:var(--accent-h);letter-spacing:.1em;text-transform:uppercase;margin-bottom:14px;font-family:var(--mono)}
+.hp-h2{font-size:clamp(28px,4vw,44px);font-weight:800;color:var(--t1);letter-spacing:-.04em;line-height:1.1;margin-bottom:14px}
+.hp-sub{font-size:16px;color:var(--t2);line-height:1.65;max-width:520px}
+
+/* feature split */
+.feat-split{display:grid;grid-template-columns:1fr 1fr;gap:72px;align-items:center}
+.feat-split.flip{direction:rtl}
+.feat-split.flip>*{direction:ltr}
+.feat-visual{background:var(--bg2);border:1px solid var(--border2);border-radius:14px;overflow:hidden;box-shadow:0 24px 64px rgba(0,0,0,.5)}
+.fv-bar{background:var(--bg3);padding:10px 14px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:6px}
+.fv-bar-dot{width:8px;height:8px;border-radius:50%}
+.fv-bar-title{margin-left:6px;font-size:10px;color:var(--t3);font-family:var(--mono)}
+.fv-body{padding:18px;font-family:var(--mono);font-size:12px;line-height:1.85}
+.fv-line{padding:3px 8px;border-radius:5px;margin-bottom:3px}
+.fvl-add{background:rgba(94,106,210,.1);color:var(--accent-h)}
+.fvl-ok{background:rgba(74,222,128,.08);color:var(--green)}
+.fvl-dim{color:var(--t3)}
+.fv-job-row{display:flex;align-items:center;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--border)}
+.fv-job-row:last-child{border:none}
+.fv-job-co{font-size:12px;font-weight:600;color:var(--t1)}
+.fv-job-role{font-size:11px;color:var(--t3);margin-top:1px}
+.fv-job-score{font-size:16px;font-weight:700;letter-spacing:-.03em}
+.fvs-hi{color:var(--accent-h)}.fvs-md{color:var(--amber)}
+.fv-step-row{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)}
+.fv-step-row:last-child{border:none}
+.fv-step-ic{width:30px;height:30px;border-radius:8px;background:var(--accent-d);display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0;color:var(--accent-h)}
+.fv-step-tx{font-size:12px;font-weight:500;color:var(--t1)}
+.fv-step-sub{font-size:11px;color:var(--t3);margin-top:1px}
+.fv-step-chip{margin-left:auto;font-size:10px;font-family:var(--mono);padding:2px 7px;border-radius:4px}
+.fvc-done{background:var(--green-d);color:var(--green)}
+.fvc-run{background:var(--amber-d);color:var(--amber)}
+
+/* how it works */
+.steps-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:48px}
+.step-card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:20px 22px;transition:border-color .15s,transform .15s}
+.step-card:hover{border-color:var(--border2);transform:translateY(-2px)}
+.step-n{font-family:var(--mono);font-size:11px;font-weight:600;color:var(--accent-h);margin-bottom:8px;letter-spacing:.04em}
+.step-title{font-size:14px;font-weight:600;color:var(--t1);margin-bottom:5px;letter-spacing:-.02em}
+.step-desc{font-size:12px;color:var(--t3);line-height:1.6}
+.step-time{display:inline-block;margin-top:8px;font-family:var(--mono);font-size:10px;color:var(--t3);background:rgba(255,255,255,.04);padding:2px 7px;border-radius:4px}
+
+/* reviews */
+.reviews-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:48px}
+.review-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:24px;transition:border-color .15s}
+.review-card:hover{border-color:var(--border2)}
+.review-stars{color:var(--amber);font-size:12px;letter-spacing:2px;margin-bottom:16px;display:flex;gap:3px}
+.review-quote{font-size:14px;color:var(--t1);line-height:1.65;margin-bottom:20px;font-weight:400}
+.review-author{display:flex;align-items:center;gap:10px}
+.review-av{width:34px;height:34px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--accent-h));display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#fff;flex-shrink:0}
+.review-name{font-size:13px;font-weight:600;color:var(--t1)}
+.review-role{font-size:11px;color:var(--t3);margin-top:1px}
+
+/* CTA */
+.cta-band{padding:120px 40px;text-align:center;background:var(--bg);position:relative;overflow:hidden}
+.cta-band::before{content:'';position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse 60% 70% at 50% 50%,rgba(94,106,210,.2) 0%,transparent 70%)}
+.cta-band h2{font-size:clamp(36px,5vw,56px);font-weight:800;color:var(--t1);letter-spacing:-.04em;margin-bottom:16px;position:relative}
+.cta-band p{font-size:17px;color:var(--t2);margin-bottom:36px;position:relative}
+
+/* footer */
+.hp-footer{background:var(--bg1);border-top:1px solid var(--border);padding:32px 40px;text-align:center;font-size:12px;color:var(--t3);font-family:var(--mono)}
+
+/* star SVG helper */
+.star-svg{width:11px;height:11px;fill:var(--amber);flex-shrink:0}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useEffect, useRef } = React;
+
+const LAUNCH_URL = '/app';
+
+/* ── SCROLL REVEAL ── */
+function useReveal(threshold = 0.12) {
+  const ref = useRef(null);
+  useEffect(() => {
+    const el = ref.current; if (!el) return;
+    const obs = new IntersectionObserver(([e]) => { if (e.isIntersecting) el.classList.add('visible'); }, { threshold });
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, []);
+  return ref;
+}
+function SR({ children, delay = 0, className = '', style = {} }) {
+  const ref = useReveal();
+  return (
+    <div ref={ref} className={`sr${delay ? ` sr-d${delay}` : ''} ${className}`} style={style}>
+      {children}
+    </div>
+  );
+}
+
+/* ── STAR ── */
+function Star() {
+  return (
+    <svg className="star-svg" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+    </svg>
+  );
+}
+
+/* ── NAV ── */
+function Nav() {
+  return (
+    <nav className="hn">
+      <a className="hn-logo" href="landing.html">Jobs<span>AI</span></a>
+      <div className="hn-right">
+        <a className="hn-link" href="#features">Features</a>
+        <a className="hn-link" href="#how-it-works">How it works</a>
+        <a className="hn-link" href="#reviews">Reviews</a>
+        <a className="hn-cta" href={LAUNCH_URL}>Open Dashboard →</a>
+      </div>
+    </nav>
+  );
+}
+
+/* ── HERO ── */
+function Hero() {
+  const phases = [
+    {n:1, name:'Resume Ingestion',     badge:'done',     badgeCls:'dpb-done', score:'1.6s'},
+    {n:2, name:'Job Discovery',        badge:'done',     badgeCls:'dpb-done', score:'2.1s'},
+    {n:3, name:'Relevance Scoring',    badge:'running…', badgeCls:'dpb-run',  score:''},
+    {n:4, name:'Resume Tailoring',     badge:'waiting',  badgeCls:'dpb-wait', score:''},
+    {n:5, name:'Submission',           badge:'waiting',  badgeCls:'dpb-wait', score:''},
+  ];
+  return (
+    <section className="hero">
+      <div className="hero-glow"/>
+      <div className="hero-inner">
+        <div className="hero-left">
+          <div className="hero-tag hero-anim ha-1">Autonomous 7-phase pipeline</div>
+          <h1 className="hero-anim ha-2">
+            Your job search,<br/><em>on autopilot.</em>
+          </h1>
+          <p className="hero-sub hero-anim ha-3">
+            Upload your resume once. Jobs AI discovers opportunities, scores them, tailors your materials to each posting, and submits applications — automatically.
+          </p>
+          <div className="hero-btns hero-anim ha-4">
+            <a className="btn-primary" href={LAUNCH_URL}>Open Dashboard →</a>
+            <a className="btn-secondary" href="#features">See how it works ↓</a>
+          </div>
+        </div>
+
+        <div className="hero-right hero-anim ha-5">
+          <div className="dashboard-preview">
+            <div className="dp-window">
+              <div className="dp-bar">
+                <div className="dp-dot" style={{background:'#ff5f57'}}/>
+                <div className="dp-dot" style={{background:'#febc2e'}}/>
+                <div className="dp-dot" style={{background:'#28c840'}}/>
+                <span className="dp-title">job-application-agent — pipeline</span>
+              </div>
+              <div className="dp-body">
+                <div className="dp-topbar">
+                  <div className="dp-tabs">
+                    {['Pipeline','Tracker','Reports'].map((t,i) =>
+                      <div key={t} className={`dp-tab${i===0?' active':''}`}>{t}</div>
+                    )}
+                  </div>
+                  <div>
+                    <div className="dp-prog-label">3 / 7 phases</div>
+                    <div className="dp-prog-bar"><div className="dp-prog-fill"/></div>
+                  </div>
+                </div>
+                <div className="dp-phase-list">
+                  {phases.map(p => (
+                    <div key={p.n} className="dp-phase-row">
+                      <span style={{fontSize:11,width:14,textAlign:'center',color:p.badge==='done'?'var(--green)':p.badge==='running…'?'var(--amber)':'var(--t3)'}}>
+                        {p.badge==='done' ? '✓' : p.badge==='running…' ? '⟳' : '○'}
+                      </span>
+                      <span className="dp-phase-name">{p.name}</span>
+                      <span className={`dp-phase-badge ${p.badgeCls}`}>{p.badge}</span>
+                      {p.score && <span className="dp-score">{p.score}</span>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/* ── STATS ── */
+function StatsBand() {
+  return (
+    <section className="stats-band">
+      <SR>
+        <div className="stats-inner">
+          {[['7','Pipeline phases'],['89+','Avg. jobs discovered'],['4 min','Full pipeline time']].map(([n,l]) => (
+            <div key={l} className="stat-cell">
+              <div className="stat-n"><span>{n}</span></div>
+              <div className="stat-l">{l}</div>
+            </div>
+          ))}
+        </div>
+      </SR>
+    </section>
+  );
+}
+
+/* ── FEATURE: RESUME AI ── */
+function FeatResumeSection() {
+  return (
+    <section className="hp-section" id="features">
+      <div className="hp-inner">
+        <div className="feat-split">
+          <SR className="feat-text">
+            <div className="hp-label">Phase 1 &amp; 4 · Resume AI</div>
+            <h2 className="hp-h2">One resume.<br/>Tailored to every job.</h2>
+            <p className="hp-sub">The AI extracts every skill and experience from your resume, then surgically rewrites it for each posting — mirroring JD keywords, reordering sections, and closing ATS gaps automatically.</p>
+          </SR>
+          <SR delay={2}>
+            <div className="feat-visual">
+              <div className="fv-bar">
+                <div className="fv-bar-dot" style={{background:'#ff5f57'}}/>
+                <div className="fv-bar-dot" style={{background:'#febc2e'}}/>
+                <div className="fv-bar-dot" style={{background:'#28c840'}}/>
+                <span className="fv-bar-title">resume_tailoring.py — phase 4</span>
+              </div>
+              <div className="fv-body">
+                {[
+                  {cls:'fvl-dim', t:'  target: NVIDIA — Hardware Eng Intern'},
+                  {cls:'fvl-add', t:'+ FPGA · Verilog · Signal Integrity → top of skills'},
+                  {cls:'fvl-add', t:'+ summary rewritten to mirror JD title'},
+                  {cls:'fvl-add', t:'+ 3 bullets rephrased with JD keywords'},
+                  {cls:'fvl-ok',  t:'✓ ATS score: 92/100'},
+                  {cls:'fvl-dim', t:'  output: Your_Name_Resume_NVIDIA.tex'},
+                ].map((l,i) => <div key={i} className={`fv-line ${l.cls}`}>{l.t}</div>)}
+              </div>
+            </div>
+          </SR>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/* ── FEATURE: DISCOVERY ── */
+function FeatDiscoverySection() {
+  const jobs = [
+    {co:'NVIDIA',  role:'Hardware Eng Intern',     s:92, hi:true},
+    {co:'Apple',   role:'Mixed-Signal IC Intern',   s:85, hi:true},
+    {co:'Intel',   role:'FPGA Design Intern',       s:78, hi:true},
+    {co:'Micron',  role:'ML Hardware Intern',       s:70, hi:false},
+    {co:'Samsung', role:'EE Design Intern',         s:65, hi:false},
+  ];
+  return (
+    <section className="hp-section alt" id="discovery">
+      <div className="hp-inner">
+        <div className="feat-split flip">
+          <SR className="feat-text">
+            <div className="hp-label">Phase 2 &amp; 3 · Discovery</div>
+            <h2 className="hp-h2">Scrapes four<br/>job boards at once.</h2>
+            <p className="hp-sub">LinkedIn, Indeed, Glassdoor, ZipRecruiter, and SimplifyJobs — deduped, filtered by experience level, education, citizenship, and date. Every posting scored 0–100 against your profile.</p>
+          </SR>
+          <SR delay={2}>
+            <div className="feat-visual">
+              <div className="fv-bar">
+                <div className="fv-bar-dot" style={{background:'#ff5f57'}}/>
+                <div className="fv-bar-dot" style={{background:'#febc2e'}}/>
+                <div className="fv-bar-dot" style={{background:'#28c840'}}/>
+                <span className="fv-bar-title">scored_results.json — phase 3</span>
+              </div>
+              <div style={{padding:'16px 18px'}}>
+                {jobs.map(j => (
+                  <div key={j.co} className="fv-job-row">
+                    <div>
+                      <div className="fv-job-co">{j.co}</div>
+                      <div className="fv-job-role">{j.role}</div>
+                    </div>
+                    <span className={`fv-job-score ${j.hi?'fvs-hi':'fvs-md'}`}>{j.s}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </SR>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/* ── FEATURE: APPLY ── */
+function FeatApplySection() {
+  const steps = [
+    {t:'Resume tailored',        s:'NVIDIA · ATS 92/100',              st:'done'},
+    {t:'Application submitted',  s:'Apple · confirmation #AP-0812',    st:'done'},
+    {t:'Application submitted',  s:'Intel · confirmation #IN-2244',    st:'done'},
+    {t:'Flagged for manual review', s:'Micron (score 70)',             st:'run'},
+    {t:'Excel tracker written',  s:'17 columns · 6 rows',              st:'done'},
+  ];
+  const ArrowIcon = () => (
+    <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>
+    </svg>
+  );
+  return (
+    <section className="hp-section" id="apply">
+      <div className="hp-inner">
+        <div className="feat-split">
+          <SR className="feat-text">
+            <div className="hp-label">Phases 5–7 · Apply &amp; Track</div>
+            <h2 className="hp-h2">Applies while<br/>you sleep.</h2>
+            <p className="hp-sub">Jobs above your threshold are submitted automatically. Every run produces a color-coded Excel tracker with 17 columns and a plain-language run report. Low-score jobs are flagged for manual review.</p>
+          </SR>
+          <SR delay={2}>
+            <div className="feat-visual">
+              <div className="fv-bar">
+                <div className="fv-bar-dot" style={{background:'#ff5f57'}}/>
+                <div className="fv-bar-dot" style={{background:'#febc2e'}}/>
+                <div className="fv-bar-dot" style={{background:'#28c840'}}/>
+                <span className="fv-bar-title">pipeline run — 2026-05-03</span>
+              </div>
+              <div style={{padding:'14px 18px'}}>
+                {steps.map((a,i) => (
+                  <div key={i} className="fv-step-row">
+                    <div className="fv-step-ic"><ArrowIcon/></div>
+                    <div>
+                      <div className="fv-step-tx">{a.t}</div>
+                      <div className="fv-step-sub">{a.s}</div>
+                    </div>
+                    <span className={`fv-step-chip ${a.st==='done'?'fvc-done':'fvc-run'}`}>
+                      {a.st==='done'?'done':'review'}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </SR>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/* ── HOW IT WORKS ── */
+function HowItWorksSection() {
+  const steps = [
+    {n:'01',t:'Resume Ingestion',      d:'Parses PDF, DOCX, or LaTeX. Extracts skills, education, target roles, and flags resume gaps.',                                                                         time:'~15s'},
+    {n:'02',t:'Job Discovery',         d:'Scrapes LinkedIn, Indeed, Glassdoor, ZipRecruiter + SimplifyJobs. Deduplicates and filters by date, education, and experience.',                                       time:'~60s'},
+    {n:'03',t:'Relevance Scoring',     d:'Scores each job 0–100 using a weighted model: skills 30%, title 25%, experience 15%, education 10%, domain + location 20%.',                                           time:'~45s'},
+    {n:'04',t:'Resume Tailoring',      d:'Rewrites your summary, reorders skills, rephrases bullets to mirror JD keywords. ATS gap analysis included.',                                                          time:'~2m'},
+    {n:'05',t:'Application Submission',d:'Navigates to each application URL, fills form fields from your profile, and uploads tailored resume + optional cover letter.',                                          time:'~1m'},
+    {n:'06',t:'Excel Tracker',         d:'Writes a 17-column color-coded tracker to output/ with Applied, Manual, and Skipped status rows plus a Summary Dashboard tab.',                                        time:'~3s'},
+    {n:'07',t:'Run Report',            d:'Plain-language summary: stats, top 3 jobs, manual action items, and recommended next steps.',                                                                           time:'~5s'},
+  ];
+  return (
+    <section className="hp-section alt" id="how-it-works">
+      <div className="hp-inner">
+        <SR>
+          <div className="hp-label">How it works</div>
+          <h2 className="hp-h2">The 7-phase pipeline</h2>
+          <p className="hp-sub">Run phases one at a time, or hit ▶ Run all 7 phases and let the agent cascade through automatically.</p>
+        </SR>
+        <div className="steps-grid">
+          {steps.map((s,i) => (
+            <SR key={s.n} delay={Math.min((i%3)+1,3)}>
+              <div className="step-card">
+                <div className="step-n">Phase {s.n}</div>
+                <div className="step-title">{s.t}</div>
+                <div className="step-desc">{s.d}</div>
+                <span className="step-time">{s.time}</span>
+              </div>
+            </SR>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/* ── REVIEWS ── */
+function ReviewsSection() {
+  const reviews = [
+    {q:'"I used to spend 3 hours customising my resume per application. Jobs AI does it in 20 seconds — and the tailoring is genuinely better than what I was doing manually."',n:'Priya S.',r:'EE PhD Student, MIT',i:'PS'},
+    {q:'"Set it up Sunday night. By Monday morning I had 6 tailored resumes, 3 submitted applications, and a complete tracker. Got my first callback by Wednesday."',n:'Marcus T.',r:'Hardware Engineer',i:'MT'},
+    {q:'"The scoring model is uncanny. It surfaced FPGA roles at companies I\'d never considered that turned out to be perfect fits."',n:'Yuki L.',r:'FPGA Design Intern, Intel',i:'YL'},
+    {q:'"Ran it overnight in Ollama mode against 80 postings — zero API cost. Woke up to a complete tracker with 4 auto-submitted applications."',n:'Diego R.',r:'Embedded Systems Engineer',i:'DR'},
+    {q:'"The ATS scoring caught gaps in my resume I didn\'t know existed. After tailoring, my response rate went from ~5% to over 30%."',n:'Aisha K.',r:'IC Design Intern, Apple',i:'AK'},
+    {q:'"Clean pipeline, transparent logs, no magic. As an engineer I appreciate being able to see exactly what it\'s doing at each phase."',n:'James W.',r:'Signal Integrity Engineer',i:'JW'},
+  ];
+  return (
+    <section className="hp-section" id="reviews">
+      <div className="hp-inner">
+        <SR>
+          <div className="hp-label">Reviews</div>
+          <h2 className="hp-h2">Engineers who've used it</h2>
+          <p className="hp-sub">Real feedback from real job hunters.</p>
+        </SR>
+        <div className="reviews-grid">
+          {reviews.map((r,i) => (
+            <SR key={r.n} delay={Math.min((i%3)+1,3)}>
+              <div className="review-card">
+                <div className="review-stars">{[0,1,2,3,4].map(j=><Star key={j}/>)}</div>
+                <div className="review-quote">{r.q}</div>
+                <div className="review-author">
+                  <div className="review-av">{r.i}</div>
+                  <div>
+                    <div className="review-name">{r.n}</div>
+                    <div className="review-role">{r.r}</div>
+                  </div>
+                </div>
+              </div>
+            </SR>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/* ── CTA ── */
+function CTABand() {
+  return (
+    <section className="cta-band" id="cta">
+      <SR>
+        <h2>Start automating<br/>your job search today.</h2>
+        <p>Demo mode requires zero setup. Swap to Anthropic Claude or Ollama when you're ready.</p>
+        <a className="btn-primary" href={LAUNCH_URL} style={{fontSize:15,padding:'13px 32px',display:'inline-flex'}}>Open Dashboard →</a>
+      </SR>
+    </section>
+  );
+}
+
+/* ── FOOTER ── */
+function Footer() {
+  return (
+    <footer className="hp-footer">
+      Jobs AI · Autonomous Job Application Agent · Built with React + Python
+    </footer>
+  );
+}
+
+/* ── APP ── */
+function App() {
+  return (
+    <>
+      <Nav/>
+      <Hero/>
+      <StatsBand/>
+      <FeatResumeSection/>
+      <FeatDiscoverySection/>
+      <FeatApplySection/>
+      <HowItWorksSection/>
+      <ReviewsSection/>
+      <CTABand/>
+      <Footer/>
+    </>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>

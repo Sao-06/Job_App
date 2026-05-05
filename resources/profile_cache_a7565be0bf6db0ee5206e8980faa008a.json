@@ -1,0 +1,185 @@
+{
+  "degree": "B.S. Electrical & Computer Engineering",
+  "institution": "University of Washington, Seattle, WA",
+  "year": "2024.09 - 2028.06 (Expected)",
+  "gpa": "3.93 (Top 3%)",
+  "top_hard_skills_detailed": [
+    {
+      "skill": "Verilog",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Arduino",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "GIT",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Spice",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Linux",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Microcontroller",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "RUST",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Altium",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "JAVA",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "C++",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Kicad",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "TEM",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Matlab",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "MBE",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "STM",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "FPGA",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Oscilloscope",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "PL",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Stm32",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Numpy",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Systemverilog",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "RIE",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Python",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Scipy",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "SEM",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "SOC",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "GO",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Ltspice",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    }
+  ],
+  "top_hard_skills": [
+    "Verilog",
+    "Arduino",
+    "GIT",
+    "Spice",
+    "Linux",
+    "Microcontroller",
+    "RUST",
+    "Altium",
+    "JAVA",
+    "C++",
+    "Kicad",
+    "TEM",
+    "Matlab",
+    "MBE",
+    "STM",
+    "FPGA",
+    "Oscilloscope",
+    "PL",
+    "Stm32",
+    "Numpy",
+    "Systemverilog",
+    "RIE",
+    "Python",
+    "Scipy",
+    "SEM",
+    "SOC",
+    "GO",
+    "Ltspice"
+  ],
+  "target_titles_detailed": [],
+  "target_titles": [],
+  "top_soft_skills": [],
+  "_audit_log": [
+    "retention_audit recovered 28 missing skills: ['Verilog', 'Arduino', 'GIT', 'Spice', 'Linux', 'Microcontroller', 'RUST', 'Altium', 'JAVA', 'C++', 'Kicad', 'TEM', 'Matlab', 'MBE', 'STM', 'FPGA', 'Oscilloscope', 'PL', 'Stm32', 'Numpy', 'Systemverilog', 'RIE', 'Python', 'Scipy', 'SEM', 'SOC', 'GO', 'Ltspice']"
+  ],
+  "experience": []
+}

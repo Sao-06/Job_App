@@ -1,0 +1,77 @@
+{
+  "name": "Your Name",
+  "email": "",
+  "linkedin": "",
+  "github": "",
+  "phone": "",
+  "location": "",
+  "summary": "Your Name is a IC Design Engineering Intern with hands-on experience across MATLAB, Python, Verilog, FPGA, SPICE.",
+  "target_titles": [
+    "IC Design Engineering Intern",
+    "Hardware Engineering Intern"
+  ],
+  "top_hard_skills": [
+    "MATLAB",
+    "Python",
+    "Verilog",
+    "FPGA",
+    "SPICE"
+  ],
+  "top_soft_skills": [
+    "Teamwork",
+    "Problem-solving",
+    "Communication",
+    "Attention to detail",
+    "Time management"
+  ],
+  "education": [],
+  "experience": [],
+  "work_experience": [],
+  "research": [],
+  "research_experience": [],
+  "projects": [],
+  "resume_gaps": [
+    "Missing professional summary/objective",
+    "Few quantified achievements \u2014 add metrics"
+  ],
+  "critical_analysis": "Impact: add numeric outcomes to the strongest bullets wherever possible. Skill density: the parser found the technical keywords listed in hard skills; add any missing tools, instruments, and methods explicitly. ATS structure: keep Education, Experience, Projects, and Skills as clear headings. Next actions: add LinkedIn, work authorization, target salary, and target titles to improve matching and autofill.",
+  "top_hard_skills_detailed": [
+    {
+      "skill": "MATLAB",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Python",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Verilog",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "FPGA",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "SPICE",
+      "category": "unknown",
+      "evidence": ""
+    }
+  ],
+  "target_titles_detailed": [
+    {
+      "title": "IC Design Engineering Intern",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "Hardware Engineering Intern",
+      "family": "",
+      "evidence": ""
+    }
+  ]
+}

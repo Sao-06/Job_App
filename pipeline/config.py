@@ -6,11 +6,18 @@ All other pipeline modules import from here instead of defining their own.
 """
 
 import threading
+import io
+import sys
 from pathlib import Path
 from datetime import date
 
 from rich.console import Console
 from rich.panel import Panel  # noqa: F401 – re-exported for convenience
+
+if hasattr(sys.stdout, "buffer") and "utf" not in (sys.stdout.encoding or "").lower():
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "buffer") and "utf" not in (sys.stderr.encoding or "").lower():
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 # ── User-editable constants ────────────────────────────────────────────────────
 OWNER_NAME       = "Your Name"   # TODO: replace with your full name

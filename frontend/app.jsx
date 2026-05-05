@@ -8,7 +8,7 @@ const { useState, useEffect, useRef, useCallback, useMemo } = React;
 const api = {
   get:  url => fetch(url).then(async r => {
     const data = await r.json();
-    if (!r.ok) throw new Error(data.detail || data.message || 'API Error');
+    if (!r.ok) throw new Error(data.detail || data.error || data.message || 'API Error');
     return data;
   }),
   post: (url, body) => fetch(url, {
@@ -16,20 +16,20 @@ const api = {
     body: JSON.stringify(body),
   }).then(async r => {
     const data = await r.json();
-    if (!r.ok) throw new Error(data.detail || data.message || 'API Error');
+    if (!r.ok) throw new Error(data.detail || data.error || data.message || 'API Error');
     return data;
   }),
   upload: (url, file) => {
     const fd = new FormData(); fd.append('file', file);
     return fetch(url, { method:'POST', body:fd }).then(async r => {
       const data = await r.json();
-      if (!r.ok) throw new Error(data.detail || data.message || 'API Error');
+      if (!r.ok) throw new Error(data.detail || data.error || data.message || 'API Error');
       return data;
     });
   },
   delete: url => fetch(url, { method:'DELETE' }).then(async r => {
     const data = await r.json();
-    if (!r.ok) throw new Error(data.detail || data.message || 'API Error');
+    if (!r.ok) throw new Error(data.detail || data.error || data.message || 'API Error');
     return data;
   }),
 };
@@ -2328,7 +2328,7 @@ function AuthPage({ onAuth }) {
     try {
       const res = await api.post(`/api/auth/${mode}`, { email, password });
       if (res.ok) {
-        onAuth(res.user);
+        await onAuth(res.user);
       } else {
         setError(res.error || 'Authentication failed');
       }
@@ -2484,7 +2484,7 @@ function App() {
       case 'dev':       return <DevPage state={state} refresh={refresh}/>;
       case 'feedback':  return <FeedbackPage refresh={refresh}/>;
       case 'settings':  return <SettingsPage state={state} refresh={refresh}/>;
-      case 'auth':      return <AuthPage onAuth={() => { refresh(); setPage('home'); }} />;
+      case 'auth':      return <AuthPage onAuth={async () => { await refresh(); setPage('home'); }} />;
       default:          return <Dashboard state={state} setPage={setPage}/>;
     }
   })();

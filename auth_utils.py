@@ -1,24 +1,31 @@
-import bcrypt
 import os
-import json
-from pathlib import Path
+
+try:
+    import bcrypt
+except ImportError:  # Password auth can fail without disabling Google OAuth.
+    bcrypt = None
 
 # Password hashing
 def hash_password(password: str) -> str:
+    if bcrypt is None:
+        raise RuntimeError("bcrypt is required for password auth")
     salt = bcrypt.gensalt()
     return bcrypt.hashpw(password.encode('utf-8'), salt).decode('utf-8')
 
 def verify_password(password: str, hashed: str) -> bool:
+    if bcrypt is None:
+        raise RuntimeError("bcrypt is required for password auth")
     if not hashed:
         return False
     return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('utf-8'))
 
 # Google OAuth placeholder (actual implementation will need client secrets)
 # For now, I'll provide the logic, but the user will need to set up the Google Cloud Project.
-GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")
-GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET")
-
 def get_google_auth_url(redirect_uri: str):
+    GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")
+    GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET")
+    if redirect_uri.startswith("http://localhost") or redirect_uri.startswith("http://127.0.0.1"):
+        os.environ.setdefault("OAUTHLIB_INSECURE_TRANSPORT", "1")
     if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
         # Return a dummy URL that points back to our own callback for dev purposes
         return f"/api/auth/google/callback?code=dummy_code&state=dummy_state", "dummy_state"
@@ -47,6 +54,10 @@ def get_google_auth_url(redirect_uri: str):
     return authorization_url, state
 
 def verify_google_token(code: str, redirect_uri: str, state: str):
+    GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")
+    GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET")
+    if redirect_uri.startswith("http://localhost") or redirect_uri.startswith("http://127.0.0.1"):
+        os.environ.setdefault("OAUTHLIB_INSECURE_TRANSPORT", "1")
     if code == "dummy_code" and state == "dummy_state":
         return {
             "email": "dev@example.com",

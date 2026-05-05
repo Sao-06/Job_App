@@ -14,13 +14,19 @@ import io
 import json
 import os
 import queue
+import secrets
 import sys
 import threading
 import time
 import uuid
+<<<<<<< HEAD
 from collections.abc import MutableMapping
+=======
+import contextvars
+>>>>>>> 77a1a1157d53d108d83f9b01d994d4c49a1ef2df
 from datetime import datetime
 from pathlib import Path
+from collections.abc import MutableMapping
 
 # Force UTF-8 stdout/stderr so Rich emoji don't crash on Windows cp1252
 if hasattr(sys.stdout, "buffer"):
@@ -36,6 +42,7 @@ from pipeline.config import OUTPUT_DIR, RESOURCES_DIR
 
 # Auth helpers — imported lazily so missing bcrypt doesn't crash the server
 try:
+<<<<<<< HEAD
     from auth_utils import hash_password, verify_password
 except ImportError:
     def hash_password(pw): return pw
@@ -51,20 +58,47 @@ try:
 except Exception:
     _session_store = None
 _user_store = _session_store
+=======
+    from auth_utils import (
+        get_google_auth_url,
+        hash_password,
+        verify_google_token,
+        verify_password,
+    )
+except ImportError:
+    def hash_password(_pw):
+        raise RuntimeError("bcrypt is required for password auth")
+    def verify_password(_pw, _h):
+        raise RuntimeError("bcrypt is required for password auth")
+    def get_google_auth_url(_redirect_uri):
+        raise RuntimeError("Google OAuth dependencies are not installed")
+    def verify_google_token(_code, _redirect_uri, _state):
+        raise RuntimeError("Google OAuth dependencies are not installed")
+
+from session_store import SQLiteSessionStore
+>>>>>>> 77a1a1157d53d108d83f9b01d994d4c49a1ef2df
 from pipeline.phases import (
     phase1_ingest_resume,
     phase2_discover_jobs,
     phase3_score_jobs,
     phase4_tailor_resume,
     phase5_simulate_submission,
+    _load_existing_applications,
     phase6_update_tracker,
     phase7_run_report,
 )
 from pipeline.resume import _build_demo_resume, _read_resume, _save_tailored_resume
 
 app = FastAPI(title="Jobs AI")
+<<<<<<< HEAD
 _STATE_COOKIE = "jobs_ai_session_id"
 _DEV_IMPERSONATE_COOKIE = "dev_impersonate_id"
+=======
+_AUTH_COOKIE = "jobs_ai_auth"
+_STATE_COOKIE = "jobs_ai_session"
+_SESSION_SWITCH_HEADER = "x-jobs-ai-session-switch"
+_AUTH_SESSIONS: dict[str, dict] = {}
+>>>>>>> 77a1a1157d53d108d83f9b01d994d4c49a1ef2df
 
 # ── Serve frontend ─────────────────────────────────────────────────────────────
 
@@ -85,17 +119,28 @@ def frontend_static(filename: str):
 
 @app.get("/output/{path:path}")
 def serve_output_file(path: str):
-    p = OUTPUT_DIR / path
-    if not p.exists():
+    root = OUTPUT_DIR.resolve()
+    p = (root / path).resolve()
+    if root != p and root not in p.parents:
+        raise HTTPException(403, "File access denied")
+    session_root = (root / "sessions").resolve()
+    if p == session_root or session_root in p.parents:
+        current_root = _session_output_dir().resolve()
+        if p != current_root and current_root not in p.parents:
+            raise HTTPException(403, "File access denied")
+    if not p.exists() or not p.is_file():
         raise HTTPException(404, "File not found")
     return FileResponse(p)
 
+<<<<<<< HEAD
 # ── Session state ─────────────────────────────────────────────────────────────
 
+=======
+>>>>>>> 77a1a1157d53d108d83f9b01d994d4c49a1ef2df
 def _default_state() -> dict:
     return {
     # LLM backend
-    "mode": "ollama",
+    "mode": "demo",
     "api_key": "",
     "ollama_model": "llama3.2",
     # Search / apply settings
@@ -144,6 +189,7 @@ def _default_state() -> dict:
     "feedback": [],
 }
 
+<<<<<<< HEAD
 
 class _SessionStateProxy(MutableMapping):
     def __init__(self):
@@ -159,6 +205,23 @@ class _SessionStateProxy(MutableMapping):
 
     def session_id(self) -> str | None:
         return getattr(self._local, "session_id", None)
+=======
+class _SessionStateProxy(MutableMapping):
+    def __init__(self):
+        self._fallback = _default_state()
+        self._state_var = contextvars.ContextVar("jobs_ai_state", default=None)
+        self._session_var = contextvars.ContextVar("jobs_ai_session_id", default=None)
+
+    def bind(self, state: dict, session_id: str = None):
+        self._state_var.set(state)
+        self._session_var.set(session_id)
+
+    def current(self) -> dict:
+        return self._state_var.get() or self._fallback
+
+    def session_id(self) -> str | None:
+        return self._session_var.get()
+>>>>>>> 77a1a1157d53d108d83f9b01d994d4c49a1ef2df
 
     def __getitem__(self, key):
         return self.current()[key]
@@ -175,6 +238,7 @@ class _SessionStateProxy(MutableMapping):
     def __len__(self):
         return len(self.current())
 
+<<<<<<< HEAD
 
 _S = _SessionStateProxy()
 
@@ -327,6 +391,90 @@ def _run_extraction_bg(record: dict, state: dict, session_id: str | None) -> Non
         _S["extracting_ids"].discard(rid)
         _save_bound_state(state, session_id)
 
+=======
+_S = _SessionStateProxy()
+
+_store_db = OUTPUT_DIR / "jobs_ai_sessions.sqlite3"
+_session_store = SQLiteSessionStore(_store_db, default_state_factory=_default_state)
+_user_store = _session_store
+
+def _bind_request_state(request: Request) -> tuple[str, dict, bool]:
+    session_id = request.cookies.get(_STATE_COOKIE) or uuid.uuid4().hex
+    state = _load_session_state(session_id)
+    _S.bind(state, session_id)
+    return session_id, state, not bool(request.cookies.get(_STATE_COOKIE))
+
+def _load_session_state(session_id: str) -> dict:
+    loaded = _session_store.get_state(session_id)
+    state = _default_state()
+    state.update(loaded or {})
+    state["done"] = set(state.get("done") or [])
+    state["liked_ids"] = set(state.get("liked_ids") or [])
+    state["hidden_ids"] = set(state.get("hidden_ids") or [])
+    return state
+
+def _save_bound_state(state: dict = None, session_id: str = None) -> None:
+    sid = session_id or _S.session_id()
+    if not sid:
+        return
+    _session_store.save_state(sid, state or _S.current())
+
+def _start_session(state: dict = None, user_id: str = None) -> str:
+    session_id = uuid.uuid4().hex
+    next_state = _default_state()
+    if state:
+        next_state.update(state)
+    next_state["done"] = set(next_state.get("done") or [])
+    next_state["liked_ids"] = set(next_state.get("liked_ids") or [])
+    next_state["hidden_ids"] = set(next_state.get("hidden_ids") or [])
+    _S.bind(next_state, session_id)
+    _save_bound_state(next_state, session_id)
+    if user_id:
+        _session_store.associate_session_with_user(session_id, user_id)
+    return session_id
+
+def _switch_to_user_session(user: dict, auth_user: dict) -> str:
+    sessions = _session_store.get_user_sessions(user["id"])
+    session_id = sessions[0] if sessions else uuid.uuid4().hex
+    state = _load_session_state(session_id)
+    state["user"] = auth_user
+    _S.bind(state, session_id)
+    _save_bound_state(state, session_id)
+    _session_store.associate_session_with_user(session_id, user["id"])
+    return session_id
+
+def _session_output_dir(session_id: str = None) -> Path:
+    sid = session_id or _S.session_id() or "local"
+    safe_sid = "".join(ch for ch in sid if ch.isalnum() or ch in ("-", "_")) or "local"
+    out = OUTPUT_DIR / "sessions" / safe_sid
+    out.mkdir(parents=True, exist_ok=True)
+    return out
+
+def _output_url(path: Path | str) -> str:
+    p = Path(path)
+    try:
+        rel = p.resolve().relative_to(OUTPUT_DIR.resolve()).as_posix()
+    except Exception:
+        rel = p.name
+    return f"/output/{rel}"
+
+@app.middleware("http")
+async def session_state_middleware(request: Request, call_next):
+    request_session_id, _state, is_new = _bind_request_state(request)
+    response = await call_next(request)
+    switched_session_id = response.headers.get(_SESSION_SWITCH_HEADER)
+    if switched_session_id:
+        del response.headers[_SESSION_SWITCH_HEADER]
+        response.set_cookie(_STATE_COOKIE, switched_session_id, httponly=True, samesite="lax")
+        return response
+    current_session_id = _S.session_id() or request_session_id
+    if is_new or current_session_id != request_session_id:
+        response.set_cookie(_STATE_COOKIE, current_session_id, httponly=True, samesite="lax")
+    if not response.headers.get("content-type", "").startswith("text/event-stream"):
+        _save_bound_state(_S.current(), current_session_id)
+    return response
+
+>>>>>>> 77a1a1157d53d108d83f9b01d994d4c49a1ef2df
 # ── Provider factory ──────────────────────────────────────────────────────────
 
 def _make_provider():
@@ -373,16 +521,57 @@ class _LogCapture:
     def __getattr__(self, name):
         return getattr(self.original, name)
 
+<<<<<<< HEAD
 def _run_phase_sse(phase: int, fn, state: dict | None = None, session_id: str | None = None):
     """Generator: run *fn* in a thread, stream SSE + console output."""
     result_q: "queue.Queue[tuple]" = queue.Queue()
     log_q: "queue.Queue[str]" = queue.Queue()
     _phase_logs[phase] = log_q
+=======
+def _run_phase_sse(phase: int, fn):
+    """Run *fn* in a thread and stream SSE for this bound user session."""
+    state = _S.current()
+    session_id = _S.session_id()
 
-    def _worker():
-        import sys
-        old_stdout = sys.stdout
+    def _events():
+        _S.bind(state, session_id)
+        result_q: "queue.Queue[tuple]" = queue.Queue()
+        log_q: "queue.Queue[str]" = queue.Queue()
+        _phase_logs[(session_id, phase)] = log_q
+
+        def _worker():
+            import sys
+            _S.bind(state, session_id)
+            old_stdout = sys.stdout
+            try:
+                sys.stdout = _LogCapture(old_stdout, log_q)
+                val = fn()
+                result_q.put(("ok", val))
+            except Exception as exc:
+                result_q.put(("err", str(exc)))
+            finally:
+                sys.stdout = old_stdout
+
+        t = threading.Thread(target=_worker, daemon=True)
+        t.start()
+        t0 = time.time()
+
+        yield _sse({"type": "start", "phase": phase})
+
+        while t.is_alive():
+            try:
+                while True:
+                    text = log_q.get_nowait()
+                    yield _sse({"type": "log", "phase": phase, "text": text})
+            except queue.Empty:
+                pass
+
+            yield ": keep-alive\n\n"
+            t.join(timeout=0.2)
+>>>>>>> 77a1a1157d53d108d83f9b01d994d4c49a1ef2df
+
         try:
+<<<<<<< HEAD
             if state is not None:
                 _bind_thread_state(state, session_id)
             # Wrap stdout to capture while keeping normal output
@@ -406,18 +595,35 @@ def _run_phase_sse(phase: int, fn, state: dict | None = None, session_id: str | 
             while True:
                 text = log_q.get_nowait()
                 yield _sse({"type": "log", "phase": phase, "text": text})
+=======
+            status, val = result_q.get_nowait()
+>>>>>>> 77a1a1157d53d108d83f9b01d994d4c49a1ef2df
         except queue.Empty:
-            pass
+            state["error"][phase] = "phase timed out"
+            _save_bound_state(state, session_id)
+            yield _sse({"type": "error", "phase": phase, "message": "phase timed out"})
+            return
 
-        yield ": keep-alive\n\n"
-        t.join(timeout=0.2)
+        elapsed = round(time.time() - t0, 1)
 
-    try:
-        status, val = result_q.get_nowait()
-    except queue.Empty:
-        yield _sse({"type": "error", "phase": phase, "message": "phase timed out"})
-        return
+        if status == "err":
+            state["error"][phase] = val
+            _save_bound_state(state, session_id)
+            yield _sse({"type": "error", "phase": phase, "message": val})
+        else:
+            state["done"].add(phase)
+            state["elapsed"][phase] = elapsed
+            state["error"].pop(phase, None)
+            data = _serialize(phase, val)
+            _save_bound_state(state, session_id)
+            yield _sse({
+                "type": "done",
+                "phase": phase,
+                "elapsed": elapsed,
+                "data": data,
+            })
 
+<<<<<<< HEAD
     elapsed = round(time.time() - t0, 1)
 
     if status == "err":
@@ -435,6 +641,9 @@ def _run_phase_sse(phase: int, fn, state: dict | None = None, session_id: str | 
             "elapsed": elapsed,
             "data": _serialize(phase, val),
         })
+=======
+    return _events()
+>>>>>>> 77a1a1157d53d108d83f9b01d994d4c49a1ef2df
 
 def _serialize(phase: int, val) -> dict:
     def _title_str(t):
@@ -551,8 +760,8 @@ def _serialize(phase: int, val) -> dict:
             ],
         }
     if phase == 6:
-        p = Path(str(val)).name if val else ""
-        return {"tracker": p, "url": f"/output/{p}" if p else ""}
+        p = Path(str(val)) if val else None
+        return {"tracker": p.name if p else "", "url": _output_url(p) if p else ""}
     if phase == 7:
         return {"report": str(val) if val else ""}
     return {}
@@ -567,6 +776,20 @@ def _guess_phase(name: str) -> int:
     if "report" in name.lower() or name.endswith(".md"):
         return 7
     return 0
+
+def _dedupe_jobs_for_state(jobs: list) -> list:
+    seen = set()
+    out = []
+    for job in jobs:
+        key = (
+            job.get("application_url")
+            or f"{job.get('company', '').strip().lower()}|{job.get('title', '').strip().lower()}"
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(job)
+    return out
 
 # ── Resume endpoints ──────────────────────────────────────────────────────────
 
@@ -630,6 +853,7 @@ async def update_config(req: Request):
         "experience_levels", "education_filter",
         "include_unknown_education", "citizenship_filter",
         "use_simplify", "llm_score_limit",
+        "force_dev_mode", "force_customer_mode",
     ):
         if k in body:
             _S[k] = body[k]
@@ -640,7 +864,17 @@ async def update_config(req: Request):
 
 @app.get("/api/state")
 def get_state(request: Request):
+<<<<<<< HEAD
     is_dev = _is_dev_request(request)
+=======
+    # Localhost connections are always treated as developer sessions
+    client_host = getattr(request.client, "host", "") if request.client else ""
+    is_local = client_host in ("127.0.0.1", "::1", "localhost")
+    is_dev = False if _S.get("force_customer_mode") else (
+        is_local or bool(_S.get("force_dev_mode"))
+    )
+    auth_user = _AUTH_SESSIONS.get(request.cookies.get(_AUTH_COOKIE, ""))
+>>>>>>> 77a1a1157d53d108d83f9b01d994d4c49a1ef2df
 
     profile = _S.get("profile") or {}
     scored  = _S.get("scored") or []
@@ -650,13 +884,15 @@ def get_state(request: Request):
     manual   = [j for j in passed  if j.get("score", 0) <  thr]
 
     files = []
-    if OUTPUT_DIR.exists():
-        for f in sorted(OUTPUT_DIR.glob("*"), key=lambda x: x.stat().st_mtime, reverse=True):
+    user_output = _session_output_dir()
+    if user_output.exists():
+        for f in sorted(user_output.glob("*"), key=lambda x: x.stat().st_mtime, reverse=True):
             if f.is_file() and not f.name.startswith("."):
                 files.append({
                     "name": f.name,
                     "phase": _guess_phase(f.name),
                     "size_kb": round(f.stat().st_size / 1024, 1),
+                    "url": _output_url(f),
                 })
 
     return {
@@ -697,7 +933,9 @@ def get_state(request: Request):
                     "role":     j.get("title", ""),
                     "loc":      j.get("location", ""),
                     "score":    j.get("score", 0),
-                    "skills":   ", ".join(list(j.get("skills_matched") or [])[:4]),
+                    "id":       j.get("id") or f"{j.get('company', '')}|{j.get('title', '')}",
+                    "url":      j.get("application_url", ""),
+                    "skills":   ", ".join(list(j.get("matching_skills") or [])[:4]),
                     "status":   j.get("filter_status", ""),
                 }
                 for j in sorted(passed, key=lambda x: x.get("score", 0), reverse=True)[:20]
@@ -711,6 +949,8 @@ def get_state(request: Request):
                 "score":        a.get("score", 0),
                 "app_status":   a.get("status", ""),
                 "confirmation": a.get("confirmation", ""),
+                "id":           a.get("id") or f"{a.get('company', '')}|{a.get('title', '')}",
+                "url":          a.get("application_url", ""),
                 "date":         datetime.now().strftime("%Y-%m-%d"),
             }
             for a in (_S.get("applications") or [])
@@ -718,8 +958,22 @@ def get_state(request: Request):
         "output_files": files,
         # Auth / session
         "is_dev": is_dev,
+<<<<<<< HEAD
         "user": _S.get("user") or ({"email": "dev@localhost", "name": "Developer"} if is_dev else None),
         "resumes": [_serialize_resume(r) for r in (_S.get("resumes") or [])],
+=======
+        "user": auth_user or _S.get("user") or ({"email": "dev@localhost", "name": "Developer"} if is_dev else None),
+        # Resume list (synthesised from single-resume state)
+        "resumes": (
+            [{
+                "id": "primary",
+                "filename": _S.get("resume_filename") or "resume.txt",
+                "primary": True,
+                "created_at": None,
+            }]
+            if _S.get("resume_text") else []
+        ),
+>>>>>>> 77a1a1157d53d108d83f9b01d994d4c49a1ef2df
         # UI state
         "liked_ids": list(_S.get("liked_ids") or []),
         "hidden_ids": list(_S.get("hidden_ids") or []),
@@ -758,11 +1012,23 @@ async def auth_login(req: Request):
     user = _user_store.get_user_by_email(email)
     if not user or not verify_password(password, user.get("password_hash") or ""):
         return JSONResponse({"ok": False, "error": "Invalid email or password"})
+<<<<<<< HEAD
     _S["user"] = {"id": user["id"], "email": user["email"]}
     session_id = getattr(req.state, "session_id", None)
     if session_id:
         _user_store.associate_session_with_user(session_id, user["id"])
     return {"ok": True, "user": {"email": user["email"]}}
+=======
+    auth_user = {"id": user["id"], "email": user["email"]}
+    app_session_id = _switch_to_user_session(user, auth_user)
+    token = secrets.token_urlsafe(32)
+    _AUTH_SESSIONS[token] = auth_user
+    resp = JSONResponse({"ok": True, "user": {"email": user["email"]}})
+    resp.set_cookie(_AUTH_COOKIE, token, httponly=True, samesite="lax")
+    resp.set_cookie(_STATE_COOKIE, app_session_id, httponly=True, samesite="lax")
+    resp.headers[_SESSION_SWITCH_HEADER] = app_session_id
+    return resp
+>>>>>>> 77a1a1157d53d108d83f9b01d994d4c49a1ef2df
 
 @app.post("/api/auth/signup")
 async def auth_signup(req: Request):
@@ -777,25 +1043,92 @@ async def auth_signup(req: Request):
         return JSONResponse({"ok": False, "error": "An account with this email already exists"})
     pw_hash = hash_password(password)
     user_id = _user_store.create_user(email, pw_hash)
+<<<<<<< HEAD
     _S["user"] = {"id": user_id, "email": email}
     session_id = getattr(req.state, "session_id", None)
     if session_id:
         _user_store.associate_session_with_user(session_id, user_id)
     return {"ok": True, "user": {"email": email}}
+=======
+    auth_user = {"id": user_id, "email": email}
+    app_session_id = _start_session({"user": auth_user}, user_id=user_id)
+    token = secrets.token_urlsafe(32)
+    _AUTH_SESSIONS[token] = auth_user
+    resp = JSONResponse({"ok": True, "user": {"email": email}})
+    resp.set_cookie(_AUTH_COOKIE, token, httponly=True, samesite="lax")
+    resp.set_cookie(_STATE_COOKIE, app_session_id, httponly=True, samesite="lax")
+    resp.headers[_SESSION_SWITCH_HEADER] = app_session_id
+    return resp
+>>>>>>> 77a1a1157d53d108d83f9b01d994d4c49a1ef2df
 
 @app.post("/api/auth/logout")
-def auth_logout():
-    _S["user"] = None
-    return {"ok": True}
+def auth_logout(request: Request):
+    token = request.cookies.get(_AUTH_COOKIE, "")
+    if token:
+        _AUTH_SESSIONS.pop(token, None)
+    app_session_id = _start_session()
+    resp = JSONResponse({"ok": True})
+    resp.delete_cookie(_AUTH_COOKIE)
+    resp.set_cookie(_STATE_COOKIE, app_session_id, httponly=True, samesite="lax")
+    resp.headers[_SESSION_SWITCH_HEADER] = app_session_id
+    return resp
 
 @app.get("/api/auth/google")
-def auth_google():
-    return JSONResponse({"ok": False, "error": "Google OAuth not configured — use email/password login"}, status_code=200)
+def auth_google(request: Request):
+    try:
+        redirect_uri = str(request.url_for("auth_google_callback"))
+        url, state = get_google_auth_url(redirect_uri)
+        _S["google_oauth_state"] = state
+        return {"ok": True, "url": url}
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
 
 @app.get("/api/auth/google/callback")
-def auth_google_callback():
+def auth_google_callback(request: Request, code: str = "", state: str = ""):
     from fastapi.responses import RedirectResponse
-    return RedirectResponse("/app")
+    if not code:
+        return RedirectResponse("/app#auth")
+    expected_state = _S.get("google_oauth_state")
+    if expected_state and state != expected_state:
+        return RedirectResponse("/app#auth")
+    try:
+        redirect_uri = str(request.url_for("auth_google_callback"))
+        info = verify_google_token(code, redirect_uri, state)
+        email = (info.get("email") or "").strip().lower()
+        google_id = info.get("sub") or info.get("id")
+        name = info.get("name") or email.split("@")[0]
+        if not email:
+            return RedirectResponse("/app#auth")
+
+        user = None
+        if _user_store is not None:
+            if google_id:
+                user = _user_store.get_user_by_google_id(google_id)
+            if user is None:
+                user = _user_store.get_user_by_email(email)
+            if user is None:
+                user_id = _user_store.create_user(
+                    email=email,
+                    password_hash=None,
+                    google_id=google_id,
+                )
+                user = {"id": user_id, "email": email, "google_id": google_id}
+            auth_user = {"id": user["id"], "email": user["email"], "name": name}
+            app_session_id = _switch_to_user_session(user, auth_user)
+        else:
+            auth_user = {"email": email, "name": name}
+            app_session_id = _start_session({"user": auth_user})
+
+        token = secrets.token_urlsafe(32)
+        _AUTH_SESSIONS[token] = auth_user
+        _S.pop("google_oauth_state", None)
+        resp = RedirectResponse("/app")
+        resp.set_cookie(_AUTH_COOKIE, token, httponly=True, samesite="lax")
+        resp.set_cookie(_STATE_COOKIE, app_session_id, httponly=True, samesite="lax")
+        resp.headers[_SESSION_SWITCH_HEADER] = app_session_id
+        return resp
+    except Exception:
+        return RedirectResponse("/app#auth")
 
 
 # ── Profile ───────────────────────────────────────────────────────────────────
@@ -839,6 +1172,8 @@ async def extract_profile(req: Request):
         except Exception as e: err["e"] = str(e)
     th = _t.Thread(target=_run, daemon=True)
     th.start(); th.join(timeout=120)
+    if th.is_alive():
+        raise HTTPException(504, "Profile extraction timed out")
     if err: raise HTTPException(500, err["e"])
     return {"ok": True}
 
@@ -955,6 +1290,7 @@ async def submit_feedback(req: Request):
 
 # ── Dev endpoints ─────────────────────────────────────────────────────────────
 
+<<<<<<< HEAD
 def _list_tracked_sessions() -> list[dict]:
     if _session_store is None:
         return []
@@ -968,6 +1304,13 @@ def _load_session_state(session_id: str) -> dict:
     if session_id not in known:
         raise HTTPException(404, "Session not found")
     return _session_store.get_state(session_id)
+=======
+def _is_dev_request(request: Request) -> bool:
+    host = getattr(request.client, "host", "") if request.client else ""
+    if _S.get("force_customer_mode"):
+        return False
+    return host in ("127.0.0.1", "::1", "localhost") or bool(_S.get("force_dev_mode"))
+>>>>>>> 77a1a1157d53d108d83f9b01d994d4c49a1ef2df
 
 @app.get("/api/dev/overview")
 def dev_overview(request: Request):
@@ -1154,7 +1497,7 @@ def rerun_phase1():
 # ── Phase 2 ───────────────────────────────────────────────────────────────────
 
 @app.get("/api/phase/2/run")
-def run_phase2():
+def run_phase2(request: Request = None):
     if not _S.get("profile"):
         raise HTTPException(400, "Run Phase 1 first")
     titles = [
@@ -1163,9 +1506,14 @@ def run_phase2():
         if t.strip()
     ]
     loc = _S.get("location") or "United States"
+    params = request.query_params if request else {}
+    deep = str(params.get("deep", "")).lower() in ("1", "true", "yes")
+    append = str(params.get("append", "")).lower() in ("1", "true", "yes")
+    force_live = str(params.get("force", "")).lower() in ("1", "true", "yes") or append
 
     def _fn():
         prov = _make_provider()
+        offset = len(_S.get("jobs") or []) if append else 0
         result = phase2_discover_jobs(
             _S["profile"], titles, loc, prov,
             use_simplify=_S.get("use_simplify", True),
@@ -1173,11 +1521,16 @@ def run_phase2():
             days_old=_S.get("days_old", 30),
             education_filter=_S.get("education_filter") or None,
             include_unknown_education=_S.get("include_unknown_education", True),
+            deep_search=deep,
+            force_live=force_live,
+            offset=offset,
         )
         # Apply blacklist
         bl = {c.strip().lower() for c in (_S.get("blacklist") or "").split(",") if c.strip()}
         if bl:
             result = [j for j in result if j.get("company", "").lower() not in bl]
+        if append:
+            result = _dedupe_jobs_for_state((_S.get("jobs") or []) + result)
         _S["jobs"] = result
         return result
 
@@ -1188,24 +1541,29 @@ def run_phase2():
     )
 
 @app.get("/api/phase/2/rerun")
-def rerun_phase2():
-    _clear_phases_after(2)
-    return run_phase2()
+def rerun_phase2(request: Request):
+    append = str(request.query_params.get("append", "")).lower() in ("1", "true", "yes")
+    if not append:
+        _clear_phases_after(2)
+    return run_phase2(request)
 
 # ── Phase 3 ───────────────────────────────────────────────────────────────────
 
 @app.get("/api/phase/3/run")
-def run_phase3():
+def run_phase3(request: Request = None):
     if _S.get("jobs") is None:
         raise HTTPException(400, "Run Phase 2 first")
 
     def _fn():
         prov = _make_provider()
+        params = request.query_params if request else {}
+        fast_only = str(params.get("fast", "")).lower() in ("1", "true", "yes")
         result = phase3_score_jobs(
             _S["jobs"], _S["profile"], prov, min_score=60,
             experience_levels=_S.get("experience_levels") or None,
             citizenship_filter=_S.get("citizenship_filter", "all"),
             llm_score_limit=_S.get("llm_score_limit", 10),
+            fast_only=fast_only,
         )
         _S["scored"] = result
         return result
@@ -1217,9 +1575,9 @@ def run_phase3():
     )
 
 @app.get("/api/phase/3/rerun")
-def rerun_phase3():
+def rerun_phase3(request: Request):
     _clear_phases_after(3)
-    return run_phase3()
+    return run_phase3(request)
 
 # ── Phase 4 ───────────────────────────────────────────────────────────────────
 
@@ -1246,10 +1604,13 @@ def run_phase4():
                     job, tailored, _S["profile"],
                     _S.get("latex_source"),
                     resume_text=_S.get("resume_text", ""),
+                    output_dir=_session_output_dir(),
                 )
                 resume_file = resume_files.get("pdf") or resume_files.get("tex")
-                tailored_map[jk] = {"job": job, "tailored": tailored, "resume_file": resume_file}
-                apps.append({**job, "resume_version": resume_file, "status": "Tailored"})
+                resume_path = _session_output_dir() / resume_file
+                resume_ref = Path(_output_url(resume_path)).as_posix().removeprefix("/output/")
+                tailored_map[jk] = {"job": job, "tailored": tailored, "resume_file": resume_ref}
+                apps.append({**job, "resume_version": resume_ref, "status": "Tailored"})
             except Exception as exc:
                 apps.append({**job, "status": "Error", "notes": str(exc)})
         _S["tailored_map"] = tailored_map
@@ -1278,17 +1639,15 @@ def run_phase5():
         apps      = _S["applications"] or []
         thr       = _S.get("threshold", 75)
         max_apps  = _S.get("max_apps", 10)
-        already   = set()
+        already   = _load_existing_applications(_session_output_dir())
         results   = []
         submitted = 0
         for job in apps:
             if job.get("score", 0) >= thr and submitted < max_apps:
                 res = phase5_simulate_submission(job, already_applied=already)
-                already.add((
-                    job.get("company", "").lower(),
-                    job.get("title", "").lower(),
-                ))
-                submitted += 1
+                if res.get("status") != "Skipped":
+                    submitted += 1
+                already.add((job.get("company", "").lower(), job.get("title", "").lower()))
                 results.append({**job, **res})
             else:
                 results.append({**job, "status": "Manual Required", "confirmation": "N/A"})
@@ -1315,7 +1674,7 @@ def run_phase6():
 
     def _fn():
         apps          = _S["applications"] or []
-        tracker_path  = phase6_update_tracker(apps)
+        tracker_path  = phase6_update_tracker(apps, output_dir=_session_output_dir())
         _S["tracker_path"] = tracker_path
         return tracker_path
 
@@ -1340,7 +1699,7 @@ def run_phase7():
     def _fn():
         prov   = _make_provider()
         apps   = _S["applications"] or []
-        report = phase7_run_report(apps, _S.get("tracker_path"), prov)
+        report = phase7_run_report(apps, _S.get("tracker_path"), prov, output_dir=_session_output_dir())
         _S["report"] = report
         return report
 
@@ -1355,28 +1714,29 @@ def run_phase7():
 @app.get("/api/phase/2/cache")
 def phase2_cache_status():
     import json as _json
-    cache = RESOURCES_DIR / "sample_jobs.json"
-    if not cache.exists():
+    caches = [RESOURCES_DIR / "sample_jobs_quick.json", RESOURCES_DIR / "sample_jobs_deep.json"]
+    existing = [p for p in caches if p.exists()]
+    if not existing:
         return {"exists": False}
     try:
-        data = _json.loads(cache.read_text(encoding="utf-8"))
-        first_url = (data[0].get("application_url", "") if data else "")
-        _demo_domains = [
-            "nvidia.com/careers", "intel.com/jobs", "microsoft.com/careers",
-            "apple.com/jobs", "lumentum.com/careers", "micron.com/careers",
-            "research.ibm.com", "samsung.com/us/careers",
-        ]
-        is_demo = any(d in first_url for d in _demo_domains)
-        age_h = int((time.time() - cache.stat().st_mtime) / 3600)
-        return {"exists": True, "count": len(data), "age_h": age_h, "is_demo": is_demo}
+        entries = []
+        total = 0
+        newest = max(p.stat().st_mtime for p in existing)
+        for cache in existing:
+            payload = _json.loads(cache.read_text(encoding="utf-8"))
+            jobs = payload.get("jobs", []) if isinstance(payload, dict) else payload
+            total += len(jobs or [])
+            entries.append({"name": cache.name, "count": len(jobs or [])})
+        age_h = int((time.time() - newest) / 3600)
+        return {"exists": True, "count": total, "age_h": age_h, "files": entries}
     except Exception as e:
-        return {"exists": True, "count": 0, "age_h": 0, "is_demo": False, "error": str(e)}
+        return {"exists": True, "count": 0, "age_h": 0, "files": [], "error": str(e)}
 
 
 @app.delete("/api/phase/2/cache")
 def phase2_cache_clear():
-    cache = RESOURCES_DIR / "sample_jobs.json"
-    cache.unlink(missing_ok=True)
+    for cache in (RESOURCES_DIR / "sample_jobs_quick.json", RESOURCES_DIR / "sample_jobs_deep.json"):
+        cache.unlink(missing_ok=True)
     for k in ("jobs", "scored", "applications", "tracker_path"):
         _S[k] = None
     _S["tailored_map"] = {}

@@ -41,7 +41,12 @@ def phase1_ingest_resume(resume_text: str, provider: BaseProvider,
     console.print("\n[bold cyan]Phase 1 — Resume Ingestion & Profile Extraction[/bold cyan]")
     _t0 = time.time()
 
-    resume_hash = hashlib.md5(resume_text.encode()).hexdigest()
+    cache_key = json.dumps({
+        "resume_text": resume_text,
+        "provider": provider.__class__.__name__,
+        "preferred_titles": preferred_titles or [],
+    }, sort_keys=True)
+    resume_hash = hashlib.md5(cache_key.encode()).hexdigest()
     cache_file = RESOURCES_DIR / f"profile_cache_{resume_hash}.json"
 
     if cache_file.exists():
@@ -421,7 +426,7 @@ def phase2_discover_jobs(profile: dict, job_titles: list, location: str,
         before_edu = len(jobs)
         # We now keep 'unknown' education listings, only dropping explicit mismatches.
         jobs = filter_jobs_by_education(
-            jobs, education_filter, include_unknown=True,
+            jobs, education_filter, include_unknown=include_unknown_education,
         )
         from .helpers import (_last_education_dropped_unknown as _du,
                               _last_education_dropped_mismatch as _dm)
@@ -814,10 +819,10 @@ class PlaywrightSubmitter:
 
 # ── Phase 5 ────────────────────────────────────────────────────────────────────
 
-def _load_existing_applications() -> set:
+def _load_existing_applications(output_dir: Path = None) -> set:
     """Return set of (company_lower, title_lower) already in this month's tracker."""
     month        = datetime.now().strftime("%Y-%m")
-    tracker_path = OUTPUT_DIR / f"Job_Applications_Tracker_{month}.xlsx"
+    tracker_path = (output_dir or OUTPUT_DIR) / f"Job_Applications_Tracker_{month}.xlsx"
     if not tracker_path.exists():
         return set()
     try:
@@ -874,16 +879,29 @@ def phase6_update_tracker(applications: list, output_dir: Path = None) -> Path:
     out_dir = output_dir or OUTPUT_DIR
     out_dir.mkdir(parents=True, exist_ok=True)
     tracker_path = out_dir / f"Job_Applications_Tracker_{month}.xlsx"
-    wb           = openpyxl.Workbook()
-    ws           = wb.active
-    ws.title     = "Applications"
-
     headers = [
         "#", "Date Applied", "Job Title", "Company", "Industry",
         "Location", "Job Posting URL", "Company Website", "Application Portal",
         "Match Score", "Score Reasoning", "Resume Version", "Cover Letter Sent",
         "Status", "Confirmation #", "Notes", "Follow-Up Date", "Response Received",
     ]
+
+    if tracker_path.exists():
+        wb = openpyxl.load_workbook(tracker_path)
+        ws = wb["Applications"] if "Applications" in wb.sheetnames else wb.active
+        ws.title = "Applications"
+        existing_headers = [cell.value for cell in ws[1]]
+        if existing_headers != headers:
+            ws.delete_rows(1)
+            ws.insert_rows(1)
+            for col, hdr in enumerate(headers, 1):
+                ws.cell(row=1, column=col, value=hdr)
+    else:
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Applications"
+        for col, hdr in enumerate(headers, 1):
+            ws.cell(row=1, column=col, value=hdr)
 
     hdr_fill = PatternFill("solid", fgColor="1F4E79")
     hdr_font = Font(color="FFFFFF", bold=True)
@@ -900,7 +918,14 @@ def phase6_update_tracker(applications: list, output_dir: Path = None) -> Path:
         "Error":           PatternFill("solid", fgColor="D9D9D9"),
     }
 
-    for i, app in enumerate(applications, 1):
+    existing_rows = {}
+    for row_idx in range(2, ws.max_row + 1):
+        company = ws.cell(row=row_idx, column=headers.index("Company") + 1).value
+        title = ws.cell(row=row_idx, column=headers.index("Job Title") + 1).value
+        if company and title:
+            existing_rows[(str(company).lower(), str(title).lower())] = row_idx
+
+    def _row_values(app: dict, row_num: int) -> list:
         applied_str = app.get("date_applied", datetime.now().strftime("%m/%d/%Y"))
         try:
             follow_up = (
@@ -909,8 +934,8 @@ def phase6_update_tracker(applications: list, output_dir: Path = None) -> Path:
         except ValueError:
             follow_up = ""
         company_slug = app.get("company", "").lower().replace(" ", "")
-        ws.append([
-            i, applied_str, app.get("title", ""), app.get("company", ""),
+        return [
+            row_num, applied_str, app.get("title", ""), app.get("company", ""),
             "Technology / Semiconductor", app.get("location", ""),
             app.get("application_url", ""), f"https://www.{company_slug}.com",
             app.get("platform", ""), app.get("score", 0),
@@ -919,22 +944,39 @@ def phase6_update_tracker(applications: list, output_dir: Path = None) -> Path:
             "Yes" if app.get("cover_letter_sent") else "No",
             app.get("status", "Applied"), app.get("confirmation", "N/A"),
             app.get("notes", ""), follow_up, "",
-        ])
+        ]
+
+    for app in applications:
+        key = (str(app.get("company", "")).lower(), str(app.get("title", "")).lower())
+        row_idx = existing_rows.get(key)
+        if not row_idx:
+            row_idx = ws.max_row + 1
+            existing_rows[key] = row_idx
+        values = _row_values(app, row_idx - 1)
+        for col, value in enumerate(values, 1):
+            ws.cell(row=row_idx, column=col, value=value)
         fill = status_fills.get(app.get("status", "Applied"), status_fills["Applied"])
         for col in range(1, len(headers) + 1):
-            ws.cell(row=i + 1, column=col).fill = fill
+            ws.cell(row=row_idx, column=col).fill = fill
 
     ws.freeze_panes = "A2"
     for col in ws.columns:
         max_len = max((len(str(cell.value or "")) for cell in col), default=10)
         ws.column_dimensions[get_column_letter(col[0].column)].width = min(max_len + 4, 40)
 
+    if "Dashboard" in wb.sheetnames:
+        del wb["Dashboard"]
     ws_d    = wb.create_sheet("Dashboard")
-    total   = len(applications)
-    applied = sum(1 for a in applications if a.get("status") == "Applied")
-    manual  = sum(1 for a in applications if a.get("status") == "Manual Required")
-    skipped = sum(1 for a in applications if a.get("status") == "Skipped")
-    avg_sc  = sum(a.get("score", 0) for a in applications) / max(total, 1)
+    all_rows = [
+        dict(zip(headers, row))
+        for row in ws.iter_rows(min_row=2, values_only=True)
+        if any(row)
+    ]
+    total   = len(all_rows)
+    applied = sum(1 for a in all_rows if a.get("Status") == "Applied")
+    manual  = sum(1 for a in all_rows if a.get("Status") == "Manual Required")
+    skipped = sum(1 for a in all_rows if a.get("Status") == "Skipped")
+    avg_sc  = sum(float(a.get("Match Score") or 0) for a in all_rows) / max(total, 1)
     for row in [
         ("Metric", "Value"), ("Run Date", date.today().isoformat()),
         ("Total Jobs Evaluated", total), ("Applications Submitted", applied),

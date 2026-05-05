@@ -819,10 +819,10 @@ class PlaywrightSubmitter:
 
 # ── Phase 5 ────────────────────────────────────────────────────────────────────
 
-def _load_existing_applications() -> set:
+def _load_existing_applications(output_dir: Path = None) -> set:
     """Return set of (company_lower, title_lower) already in this month's tracker."""
     month        = datetime.now().strftime("%Y-%m")
-    tracker_path = OUTPUT_DIR / f"Job_Applications_Tracker_{month}.xlsx"
+    tracker_path = (output_dir or OUTPUT_DIR) / f"Job_Applications_Tracker_{month}.xlsx"
     if not tracker_path.exists():
         return set()
     try:

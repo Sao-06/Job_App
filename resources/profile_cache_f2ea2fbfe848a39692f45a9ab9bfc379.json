@@ -1,0 +1,175 @@
+{
+  "degree": "B.S.",
+  "institution": "University of Oklahoma Norman, OK",
+  "year": [
+    "Aug 2024 - Aug 2028"
+  ],
+  "gpa": "4.0",
+  "top_hard_skills_detailed": [
+    {
+      "skill": "Magic Vlsi",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Pulsed Laser Deposition",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Spice",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "GIT",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Python",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Typescript",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "JAVA",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Virtuoso",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Matlab",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Vivado",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Ltspice",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Labview",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Optical Spectroscopy",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "SEM",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "TEM",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "PLD",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Photolithography",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Cadence",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "SOC",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Pandas",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Cleanroom",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Numpy",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "RIE",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "PL",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Lithography",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "MBE",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    }
+  ],
+  "top_hard_skills": [
+    "Magic Vlsi",
+    "Pulsed Laser Deposition",
+    "Spice",
+    "GIT",
+    "Python",
+    "Typescript",
+    "JAVA",
+    "Virtuoso",
+    "Matlab",
+    "Vivado",
+    "Ltspice",
+    "Labview",
+    "Optical Spectroscopy",
+    "SEM",
+    "TEM",
+    "PLD",
+    "Photolithography",
+    "Cadence",
+    "SOC",
+    "Pandas",
+    "Cleanroom",
+    "Numpy",
+    "RIE",
+    "PL",
+    "Lithography",
+    "MBE"
+  ],
+  "target_titles_detailed": [],
+  "target_titles": [],
+  "top_soft_skills": [],
+  "_audit_log": [
+    "retention_audit recovered 26 missing skills: ['Magic Vlsi', 'Pulsed Laser Deposition', 'Spice', 'GIT', 'Python', 'Typescript', 'JAVA', 'Virtuoso', 'Matlab', 'Vivado', 'Ltspice', 'Labview', 'Optical Spectroscopy', 'SEM', 'TEM', 'PLD', 'Photolithography', 'Cadence', 'SOC', 'Pandas', 'Cleanroom', 'Numpy', 'RIE', 'PL', 'Lithography', 'MBE']"
+  ],
+  "experience": []
+}

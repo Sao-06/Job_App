@@ -1,0 +1,354 @@
+{
+  "name": "Sao Aphisith Sithisack",
+  "email": "sao.aphisith.sithisack-1@ou.edu",
+  "linkedin": "linkedin.com/in/saoaphisithsithisack",
+  "phone": "(572) 236-9592",
+  "location": "Norman, OK",
+  "target_titles": [
+    "IC Design",
+    "VLSI",
+    "Analog / Mixed-Signal Design",
+    "Semiconductor Process / Device Engineering",
+    "Photonics / Optoelectronics Engineering",
+    "Nanofabrication / MEMS",
+    "FPGA / Digital Design",
+    "RF / Hardware Engineering",
+    "Embedded Systems / Firmware",
+    "Research Assistant (semiconductor / photonics / device)"
+  ],
+  "top_hard_skills": [
+    "cleanroom photolithography",
+    "reactive ion etching",
+    "pulsed laser deposition",
+    "Python",
+    "Onshape",
+    "JAVA",
+    "Matlab",
+    "Solidworks",
+    "Vivado",
+    "Fusion 360",
+    "FPGA",
+    "GO",
+    "Optical Spectroscopy",
+    "SEM",
+    "TEM",
+    "PLD",
+    "SOC",
+    "Pandas",
+    "Numpy",
+    "RIE",
+    "PL",
+    "MBE"
+  ],
+  "top_soft_skills": [],
+  "education": [
+    {
+      "degree": "B.S.",
+      "institution": "University of Oklahoma Norman, OK",
+      "year": "Aug 2024 - Aug 2028",
+      "gpa": "3.91"
+    }
+  ],
+  "research_experience": [
+    {
+      "title": "Dr. Venkatesan's Semiconductor Research Lab",
+      "company": "University of Oklahoma Norman, OK",
+      "dates": "Jan 2026 - Present",
+      "bullets": [
+        "Fabricate high-aspect-ratio (HAR) micro- and nanostructures using cleanroom-based photolithography, reactive ion etching (RIE), and pulsed laser deposition (PLD)",
+        "Assist in optimizing anisotropic plasma etch parameters (gas chemistry, RF power, pressure) to achieve vertical sidewalls and controlled feature depth",
+        "Support end-to-end process development for HAR structures, including resist patterning, etch selectivity considerations, and post-process inspection",
+        "Document fabrication workflows and experimental results to ensure reproducibility and device characterization readiness"
+      ]
+    },
+    {
+      "title": "Cloud Microphysics Group",
+      "company": "University of Oklahoma Norman, OK",
+      "dates": "Jan 2025 - May 2025",
+      "bullets": [
+        "Modeled cloud microphysical properties and atmospheric profiles using Python, applying numerical methods and statistical analysis",
+        "Analyzed simulation outputs to identify physical trends and evaluate modeling assumptions"
+      ]
+    },
+    {
+      "title": "Light-Matter Interaction Research (Dr. Tischler)",
+      "company": "University of Oklahoma Norman, OK",
+      "dates": "Aug 2025 - Dec 2025",
+      "bullets": [
+        "Conducted literature reviews on light-matter interactions in silicon carbide nanocrystals relevant to wide-bandgap semiconductors",
+        "Gained exposure to optical spectroscopy and pulsed-laser experimental systems"
+      ]
+    }
+  ],
+  "work_experience": [
+    {
+      "title": "Student Learning Center",
+      "company": "University of Oklahoma Norman, OK",
+      "dates": "Aug 2025 - Present",
+      "bullets": [
+        "Mentored 40+ students per semester in Physics I-II, Calculus I-III, and General Chemistry I using structured quantitative problem-solving methods"
+      ]
+    },
+    {
+      "title": "Sooner Competitive Robotics",
+      "company": "University of Oklahoma Norman, OK",
+      "dates": "Jan 2026 - Present",
+      "bullets": [
+        "Designed robot power distribution architecture to ensure stable voltage delivery under dynamic load conditions",
+        "Developed CAD layouts for electrical component placement, wire routing, and mechanical integration"
+      ]
+    },
+    {
+      "title": "United World College Lao PDR National Committee",
+      "company": "Lao PDR National Committee",
+      "dates": "Jul 2024 - Present",
+      "bullets": [
+        "Led fundraising efforts exceeding $2,500+ to subsidize logistics and accommodations for scholarship candidates",
+        "Coordinated communication among alumni, scholars, volunteers, and partner organizations"
+      ]
+    },
+    {
+      "title": "Association of Southeast Asian Nations at OU",
+      "company": "University of Oklahoma Norman, OK",
+      "dates": "Nov 2024 - Present",
+      "bullets": [
+        "Secured $1,000+ in external funding through proposals and outreach to 20+ donors"
+      ]
+    }
+  ],
+  "projects": [],
+  "resume_gaps": [],
+  "critical_analysis": null,
+  "top_hard_skills_detailed": [
+    {
+      "skill": "cleanroom photolithography",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "reactive ion etching",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "pulsed laser deposition",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Python",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Onshape",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "JAVA",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Matlab",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Solidworks",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Vivado",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Fusion 360",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "FPGA",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "GO",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Optical Spectroscopy",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "SEM",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "TEM",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "PLD",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "SOC",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Pandas",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Numpy",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "RIE",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "PL",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "MBE",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    }
+  ],
+  "target_titles_detailed": [
+    {
+      "title": "IC Design",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "VLSI",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "Analog / Mixed-Signal Design",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "Semiconductor Process / Device Engineering",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "Photonics / Optoelectronics Engineering",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "Nanofabrication / MEMS",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "FPGA / Digital Design",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "RF / Hardware Engineering",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "Embedded Systems / Firmware",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "Research Assistant (semiconductor / photonics / device)",
+      "family": "",
+      "evidence": ""
+    }
+  ],
+  "_audit_log": [
+    "retention_audit recovered 18 missing skills: ['Onshape', 'JAVA', 'Matlab', 'Solidworks', 'Vivado', 'Fusion 360', 'FPGA', 'GO', 'Optical Spectroscopy', 'SEM', 'TEM', 'PLD', 'SOC', 'Pandas', 'Numpy', 'RIE', 'PL', 'MBE']"
+  ],
+  "experience": [
+    {
+      "title": "Dr. Venkatesan's Semiconductor Research Lab",
+      "company": "University of Oklahoma Norman, OK",
+      "dates": "Jan 2026 - Present",
+      "bullets": [
+        "Fabricate high-aspect-ratio (HAR) micro- and nanostructures using cleanroom-based photolithography, reactive ion etching (RIE), and pulsed laser deposition (PLD)",
+        "Assist in optimizing anisotropic plasma etch parameters (gas chemistry, RF power, pressure) to achieve vertical sidewalls and controlled feature depth",
+        "Support end-to-end process development for HAR structures, including resist patterning, etch selectivity considerations, and post-process inspection",
+        "Document fabrication workflows and experimental results to ensure reproducibility and device characterization readiness"
+      ]
+    },
+    {
+      "title": "Cloud Microphysics Group",
+      "company": "University of Oklahoma Norman, OK",
+      "dates": "Jan 2025 - May 2025",
+      "bullets": [
+        "Modeled cloud microphysical properties and atmospheric profiles using Python, applying numerical methods and statistical analysis",
+        "Analyzed simulation outputs to identify physical trends and evaluate modeling assumptions"
+      ]
+    },
+    {
+      "title": "Light-Matter Interaction Research (Dr. Tischler)",
+      "company": "University of Oklahoma Norman, OK",
+      "dates": "Aug 2025 - Dec 2025",
+      "bullets": [
+        "Conducted literature reviews on light-matter interactions in silicon carbide nanocrystals relevant to wide-bandgap semiconductors",
+        "Gained exposure to optical spectroscopy and pulsed-laser experimental systems"
+      ]
+    },
+    {
+      "title": "Student Learning Center",
+      "company": "University of Oklahoma Norman, OK",
+      "dates": "Aug 2025 - Present",
+      "bullets": [
+        "Mentored 40+ students per semester in Physics I-II, Calculus I-III, and General Chemistry I using structured quantitative problem-solving methods"
+      ]
+    },
+    {
+      "title": "Sooner Competitive Robotics",
+      "company": "University of Oklahoma Norman, OK",
+      "dates": "Jan 2026 - Present",
+      "bullets": [
+        "Designed robot power distribution architecture to ensure stable voltage delivery under dynamic load conditions",
+        "Developed CAD layouts for electrical component placement, wire routing, and mechanical integration"
+      ]
+    },
+    {
+      "title": "United World College Lao PDR National Committee",
+      "company": "Lao PDR National Committee",
+      "dates": "Jul 2024 - Present",
+      "bullets": [
+        "Led fundraising efforts exceeding $2,500+ to subsidize logistics and accommodations for scholarship candidates",
+        "Coordinated communication among alumni, scholars, volunteers, and partner organizations"
+      ]
+    },
+    {
+      "title": "Association of Southeast Asian Nations at OU",
+      "company": "University of Oklahoma Norman, OK",
+      "dates": "Nov 2024 - Present",
+      "bullets": [
+        "Secured $1,000+ in external funding through proposals and outreach to 20+ donors"
+      ]
+    }
+  ]
+}

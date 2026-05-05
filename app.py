@@ -17,6 +17,7 @@ import queue
 import sys
 import threading
 import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -109,10 +110,14 @@ _S: dict = {
     "citizenship_filter": "exclude_required",
     "use_simplify": True,
     "llm_score_limit": 10,
-    # Resume
+    # Resume — scalar fields kept as the "active primary" copy for pipeline use
     "resume_text": None,
     "latex_source": None,
     "resume_filename": None,
+    # Multi-resume store — list of resume records (see _new_resume_record)
+    "resumes": [],
+    # Set of resume IDs currently being extracted in background threads
+    "extracting_ids": set(),
     # Phase results
     "profile": None,
     "jobs": None,
@@ -133,6 +138,96 @@ _S: dict = {
     "dev_tweaks": {},
     "feedback": [],
 }
+
+# ── Resume helpers ────────────────────────────────────────────────────────────
+
+def _new_resume_record(filename: str, text: str, latex_source=None) -> dict:
+    now = datetime.now().isoformat()
+    return {
+        "id": uuid.uuid4().hex,
+        "filename": filename,
+        "text": text,
+        "latex_source": latex_source,
+        "profile": None,
+        "primary": False,
+        "created_at": now,
+        "updated_at": now,
+    }
+
+def _get_primary_resume() -> dict | None:
+    for r in (_S.get("resumes") or []):
+        if r.get("primary"):
+            return r
+    rs = _S.get("resumes") or []
+    return rs[0] if rs else None
+
+def _get_resume_by_id(rid: str) -> dict | None:
+    for r in (_S.get("resumes") or []):
+        if r["id"] == rid:
+            return r
+    return None
+
+def _sync_primary_scalars(record=None):
+    """Keep backward-compat scalar fields in sync with the primary resume."""
+    pr = record or _get_primary_resume()
+    if pr:
+        _S["resume_text"] = pr["text"]
+        _S["latex_source"] = pr.get("latex_source")
+        _S["resume_filename"] = pr["filename"]
+        _S["profile"] = pr.get("profile")
+        # If the primary already has an extracted profile, mark Phase 1 done
+        if pr.get("profile"):
+            _S["done"].add(1)
+        else:
+            _S["done"].discard(1)
+    else:
+        _S["resume_text"] = None
+        _S["latex_source"] = None
+        _S["resume_filename"] = None
+        _S["profile"] = None
+        _S["done"].discard(1)
+
+def _serialize_resume(r: dict) -> dict:
+    """Produce the per-resume dict returned in /api/state."""
+    p = r.get("profile") or {}
+    is_extracting = r["id"] in (_S.get("extracting_ids") or set())
+    # Pass through the full profile, stripping internal audit metadata keys
+    full_profile = {k: v for k, v in p.items() if not k.startswith("_")} if p else None
+    return {
+        "id": r["id"],
+        "filename": r["filename"],
+        "primary": bool(r.get("primary")),
+        "created_at": r.get("created_at"),
+        "updated_at": r.get("updated_at"),
+        "analyzed": bool(p) and not is_extracting,
+        "extracting": is_extracting,
+        "extract_error": r.get("extract_error"),
+        "profile": full_profile,
+    }
+
+
+def _run_extraction_bg(record: dict) -> None:
+    """Background-thread worker: run Phase 1 for a resume record."""
+    rid = record["id"]
+    _S["extracting_ids"].add(rid)
+    try:
+        prov = _make_provider()
+        preferred = [
+            t.strip()
+            for t in (_S.get("job_titles") or "").split(",")
+            if t.strip() and t.strip().lower() != "engineer"
+        ]
+        result = phase1_ingest_resume(record["text"], prov, preferred_titles=preferred or None)
+        record["profile"] = result
+        record["updated_at"] = datetime.now().isoformat()
+        # If this resume is currently primary, promote its result to global state
+        if record.get("primary"):
+            _S["profile"] = result
+            _S["done"].add(1)
+    except Exception as e:
+        record["extract_error"] = str(e)
+    finally:
+        _S["extracting_ids"].discard(rid)
 
 # ── Provider factory ──────────────────────────────────────────────────────────
 
@@ -376,7 +471,8 @@ def _guess_phase(name: str) -> int:
 @app.post("/api/resume/upload")
 async def upload_resume(file: UploadFile = File(...)):
     import tempfile
-    suffix = Path(file.filename or "resume.pdf").suffix or ".pdf"
+    fname = file.filename or "resume.pdf"
+    suffix = Path(fname).suffix or ".pdf"
     content = await file.read()
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         tmp.write(content)
@@ -387,17 +483,37 @@ async def upload_resume(file: UploadFile = File(...)):
         tmp_path.unlink(missing_ok=True)
     if not text:
         raise HTTPException(400, "Could not extract text from resume")
-    _S["resume_text"] = text
-    _S["latex_source"] = latex
-    _S["resume_filename"] = file.filename
-    return {"ok": True, "filename": file.filename, "length": len(text)}
+
+    record = _new_resume_record(fname, text, latex)
+    resumes = _S.setdefault("resumes", [])
+
+    # First upload → becomes primary; subsequent uploads are non-primary
+    is_first = len(resumes) == 0
+    record["primary"] = is_first
+    resumes.append(record)
+
+    if is_first:
+        _sync_primary_scalars(record)
+
+    # Auto-extract profile in a background thread for every upload
+    t = threading.Thread(target=_run_extraction_bg, args=(record,), daemon=True)
+    t.start()
+
+    return {"ok": True, "filename": fname, "length": len(text), "id": record["id"], "extracting": True}
 
 @app.post("/api/resume/demo")
 def load_demo_resume():
-    _S["resume_text"] = _build_demo_resume()
-    _S["latex_source"] = None
-    _S["resume_filename"] = "demo_resume.txt"
-    return {"ok": True, "filename": "demo_resume.txt"}
+    text = _build_demo_resume()
+    record = _new_resume_record("demo_resume.txt", text, None)
+    resumes = _S.setdefault("resumes", [])
+    is_first = len(resumes) == 0
+    record["primary"] = is_first
+    resumes.append(record)
+    if is_first:
+        _sync_primary_scalars(record)
+    t = threading.Thread(target=_run_extraction_bg, args=(record,), daemon=True)
+    t.start()
+    return {"ok": True, "filename": "demo_resume.txt", "id": record["id"], "extracting": True}
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -448,7 +564,7 @@ def get_state(request: Request):
         "done": list(_S["done"]),
         "error": _S.get("error", {}),
         "elapsed": _S.get("elapsed", {}),
-        "has_resume": bool(_S.get("resume_text")),
+        "has_resume": bool(_S.get("resumes")),
         "resume_filename": _S.get("resume_filename"),
         "mode": _S.get("mode", "demo"),
         "ollama_model": _S.get("ollama_model", "llama3.2"),
@@ -467,15 +583,8 @@ def get_state(request: Request):
         "citizenship_filter": _S.get("citizenship_filter", "exclude_required"),
         "use_simplify": _S.get("use_simplify", True),
         "llm_score_limit": _S.get("llm_score_limit", 10),
-        "profile": {
-            "name": profile.get("name", ""),
-            "email": profile.get("email", ""),
-            "location": profile.get("location", ""),
-            "target_titles": profile.get("target_titles", []),
-            "top_hard_skills": profile.get("top_hard_skills", []),
-            "top_soft_skills": profile.get("top_soft_skills", []),
-            "resume_gaps": profile.get("resume_gaps", []),
-        } if profile else None,
+        # Pass the full profile through — strip internal audit keys only
+        "profile": {k: v for k, v in profile.items() if not k.startswith("_")} if profile else None,
         "job_count": len(_S.get("jobs") or []),
         "scored_summary": {
             "total": len(scored),
@@ -511,16 +620,7 @@ def get_state(request: Request):
         # Auth / session
         "is_dev": is_dev,
         "user": _S.get("user") or ({"email": "dev@localhost", "name": "Developer"} if is_dev else None),
-        # Resume list (synthesised from single-resume state)
-        "resumes": (
-            [{
-                "id": "primary",
-                "filename": _S.get("resume_filename") or "resume.txt",
-                "primary": True,
-                "created_at": None,
-            }]
-            if _S.get("resume_text") else []
-        ),
+        "resumes": [_serialize_resume(r) for r in (_S.get("resumes") or [])],
         # UI state
         "liked_ids": list(_S.get("liked_ids") or []),
         "hidden_ids": list(_S.get("hidden_ids") or []),
@@ -537,6 +637,11 @@ def reset_state():
     _S["elapsed"] = {}
     _S["liked_ids"] = set()
     _S["hidden_ids"] = set()
+    # Re-sync global profile from primary resume (preserves per-resume analyses)
+    pr = _get_primary_resume()
+    if pr and pr.get("profile"):
+        _S["profile"] = pr["profile"]
+        _S["done"].add(1)  # Phase 1 is effectively already done for this resume
     return {"ok": True}
 
 
@@ -606,14 +711,20 @@ async def save_profile(req: Request):
 @app.post("/api/profile/extract")
 async def extract_profile(req: Request):
     body = await req.json()
-    if not _S.get("resume_text"):
+    resume_id = body.get("resume_id", "")
+    target = _get_resume_by_id(resume_id) if resume_id else _get_primary_resume()
+    if not target:
         raise HTTPException(400, "No resume loaded")
     preferred = body.get("preferred_titles")
     def _fn():
         prov = _make_provider()
-        result = phase1_ingest_resume(_S["resume_text"], prov, preferred_titles=preferred or None)
-        _S["profile"] = result
-        _S["done"].add(1)
+        result = phase1_ingest_resume(target["text"], prov, preferred_titles=preferred or None)
+        target["profile"] = result
+        target["updated_at"] = datetime.now().isoformat()
+        # If extracting for the primary, update global profile too
+        if target.get("primary"):
+            _S["profile"] = result
+            _S["done"].add(1)
         return result
     import threading as _t
     err = {}
@@ -629,34 +740,77 @@ async def extract_profile(req: Request):
 # ── Resume extra endpoints ────────────────────────────────────────────────────
 
 @app.get("/api/resume/content")
-def resume_content():
-    return {"text": _S.get("resume_text") or ""}
+def resume_content(id: str = ""):
+    if id:
+        r = _get_resume_by_id(id)
+        return {"text": r["text"] if r else ""}
+    pr = _get_primary_resume()
+    return {"text": pr["text"] if pr else ""}
 
 @app.post("/api/resume/text")
 async def resume_save_text(req: Request):
     body = await req.json()
     text = body.get("text", "")
-    _S["resume_text"] = text
-    _S["done"].discard(1)  # invalidate profile so it gets re-extracted
+    rid = body.get("id", "")
+    now = datetime.now().isoformat()
+    r = _get_resume_by_id(rid) if rid else _get_primary_resume()
+    if r:
+        r["text"] = text
+        r["updated_at"] = now
+        # Editing clears this resume's stored profile so it needs re-extraction
+        r["profile"] = None
+        if r.get("primary"):
+            _S["resume_text"] = text
+            _S["done"].discard(1)
     return {"ok": True}
 
 @app.delete("/api/resume/{resume_id}")
 def resume_delete(resume_id: str):
-    _S["resume_text"] = None
-    _S["latex_source"] = None
-    _S["resume_filename"] = None
-    _S["profile"] = None
-    _S["done"].discard(1)
+    resumes = _S.get("resumes") or []
+    target = _get_resume_by_id(resume_id)
+    if not target:
+        raise HTTPException(404, "Resume not found")
+    was_primary = target.get("primary", False)
+    _S["resumes"] = [r for r in resumes if r["id"] != resume_id]
+    if was_primary:
+        # Pick next resume as primary, or clear everything if none left
+        remaining = _S["resumes"]
+        if remaining:
+            remaining[0]["primary"] = True
+            _sync_primary_scalars(remaining[0])
+            _S["done"].discard(1)
+        else:
+            for k in ("resume_text", "latex_source", "resume_filename", "profile"):
+                _S[k] = None
+            _S["done"].discard(1)
     return {"ok": True}
 
 @app.post("/api/resume/primary/{resume_id}")
 def resume_set_primary(resume_id: str):
+    target = _get_resume_by_id(resume_id)
+    if not target:
+        raise HTTPException(404, "Resume not found")
+    for r in (_S.get("resumes") or []):
+        r["primary"] = r["id"] == resume_id
+    # Sync scalar fields and global profile from the new primary
+    _sync_primary_scalars(target)
+    # Pipeline phases downstream of 1 may be stale if the profile changed
+    _S["done"].discard(1)
     return {"ok": True}
 
 @app.post("/api/resume/rename/{resume_id}")
 async def resume_rename(resume_id: str, req: Request):
     body = await req.json()
-    _S["resume_filename"] = body.get("filename", _S.get("resume_filename"))
+    new_name = body.get("filename", "")
+    if not new_name:
+        raise HTTPException(400, "filename is required")
+    r = _get_resume_by_id(resume_id)
+    if not r:
+        raise HTTPException(404, "Resume not found")
+    r["filename"] = new_name
+    r["updated_at"] = datetime.now().isoformat()
+    if r.get("primary"):
+        _S["resume_filename"] = new_name
     return {"ok": True}
 
 
@@ -858,6 +1012,11 @@ def run_phase1():
             preferred_titles=preferred or None,
         )
         _S["profile"] = result
+        # Persist profile on the primary resume record so it survives primary switches
+        pr = _get_primary_resume()
+        if pr:
+            pr["profile"] = result
+            pr["updated_at"] = datetime.now().isoformat()
         return result
 
     return StreamingResponse(

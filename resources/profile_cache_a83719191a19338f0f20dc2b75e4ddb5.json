@@ -1,0 +1,161 @@
+{
+  "name": "Sao Sithisack",
+  "email": "",
+  "linkedin": "",
+  "github": "",
+  "phone": "",
+  "location": "",
+  "target_titles": [
+    "IC Design / VLSI",
+    "Analog / Mixed-Signal Design",
+    "Semiconductor Process / Device Engineering",
+    "Photonics / Optoelectronics Engineering",
+    "Nanofabrication / MEMS",
+    "FPGA / Digital Design",
+    "RF / Hardware Engineering",
+    "Embedded Systems / Firmware",
+    "Research Assistant (semiconductor / photonics / device)"
+  ],
+  "top_hard_skills": [
+    "Digital Design tools such as SPICE and Xilinx",
+    "Programming languages including MATLAB and C++",
+    "Electroncs systems engineering",
+    "SOC",
+    "RIE",
+    "SEM",
+    "MBE",
+    "STM",
+    "PL",
+    "GO"
+  ],
+  "top_soft.skills": [],
+  "education": [
+    {
+      "degree": "Bachelor of Science - Electrical",
+      "institution": "University of Oklahoma",
+      "year": "",
+      "gpa": ""
+    },
+    {
+      "degree": "Bachelor of Science - Engineering",
+      "institution": "University of Oklahoma",
+      "year": "",
+      "gpa": ""
+    }
+  ],
+  "research_experience": [
+    {},
+    {}
+  ],
+  "work_experience": [],
+  "projects": [],
+  "resume_gaps": [],
+  "critical_analysis": "",
+  "top_hard_skills_detailed": [
+    {
+      "skill": "Digital Design tools such as SPICE and Xilinx",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Programming languages including MATLAB and C++",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Electroncs systems engineering",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "SOC",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "RIE",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "SEM",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "MBE",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "STM",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "PL",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "GO",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    }
+  ],
+  "target_titles_detailed": [
+    {
+      "title": "IC Design / VLSI",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "Analog / Mixed-Signal Design",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "Semiconductor Process / Device Engineering",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "Photonics / Optoelectronics Engineering",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "Nanofabrication / MEMS",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "FPGA / Digital Design",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "RF / Hardware Engineering",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "Embedded Systems / Firmware",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "Research Assistant (semiconductor / photonics / device)",
+      "family": "",
+      "evidence": ""
+    }
+  ],
+  "top_soft_skills": [],
+  "_audit_log": [
+    "retention_audit recovered 7 missing skills: ['SOC', 'RIE', 'SEM', 'MBE', 'STM', 'PL', 'GO']"
+  ],
+  "experience": [
+    {},
+    {}
+  ]
+}

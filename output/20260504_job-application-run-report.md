@@ -1,18 +1,25 @@
 # Job Application Run Report
 **Date:** 2026-05-04
 
-Title: Job Application Summary (plain text)
-Keywords: "job title", "application deadline", "next steps"
-Steps: 1. Include a single line of code that does nothing; instead use markdown to display the job application summary in a brief format.
-  Status: completed with one or more success emails but no job details yet
-  Details: the job description is missing, apply count increased at last week's checkout
-Related tasks: 2. Set up Markdown files for each job listing and applying them later
-  Success email status: "Completed"
-  Next step to go-see next person
-More items: 3. Apply to top 1 (with a deadline) 
-  Total application completed in 05 minutes / +
-  
-Overall: The summary is very close, but the last two steps have yet not been implemented. This might be a good way for users to set reminders and/or report progress later on their lists of remaining jobs at this point.
+Here is a concise job application run summary in plain text:
+
+**Job Application Run Summary**
+
+* Applied for: **0** job opportunities
+* Viewed top matching jobs with best rates:
+ * Software Engineer
+ * Data Scientist
+ * Digital Marketing Specialist
+* Manually handled job materials:
+ + Resumes (0)
+ + Cover letters (0)
+ + Online applications (Manual intervention) - Due to [manual_reasons]
+* Next steps:
+ 1. Review and finalize top 3 job applications for priority submission.
+ 2. Prepare cover letter and attach relevant online application documents.
+ 3. Schedule interviews for shortlisted candidates.
+
+**Record Update:** total_found: 0, applied: applied
 
 ---
 **Tracker:** `Job_Applications_Tracker_2026-05.xlsx`

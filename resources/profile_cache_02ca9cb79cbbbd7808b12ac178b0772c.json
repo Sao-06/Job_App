@@ -1,0 +1,194 @@
+{
+  "name": "",
+  "email": "",
+  "linkedin": "",
+  "github": "",
+  "phone": "",
+  "location": "",
+  "target_titles": [
+    "IC Design / VLSI",
+    "Analog / Mixed-Signal Design",
+    "Semiconductor Process / Device Engineering",
+    "Photonics / Optoelectronics Engineering",
+    "Nanofabrication / MEMS",
+    "FPGA / Digital Design",
+    "RF / Hardware Engineering",
+    "Embedded Systems / Firmware",
+    "Research Assistant (semiconductor / photonics / device)"
+  ],
+  "top_hard_skills": [
+    "Circuit Analysis",
+    "Diode Modeling",
+    "Zener Regulator Design",
+    "CVD",
+    "PL",
+    "TEM"
+  ],
+  "top_soft_schools": [
+    "EE 331: Devices and Circuits I - Formula & Cheat Sheet"
+  ],
+  "education": [
+    {
+      "degree": "",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    }
+  ],
+  "research_experience": [
+    {
+      "title": "",
+      "company": "University",
+      "dates": "",
+      "bullets": []
+    },
+    {
+      "title": "",
+      "company": "University",
+      "dates": "",
+      "bullets": []
+    }
+  ],
+  "work_experience": [
+    {
+      "title": "",
+      "company": "University",
+      "dates": "",
+      "bullets": []
+    },
+    {
+      "title": "",
+      "company": "University",
+      "dates": "",
+      "bullets": []
+    }
+  ],
+  "projects": [
+    {
+      "name": "",
+      "description": "",
+      "skills_used": [
+        "Circuit Analysis",
+        "Diode Modeling"
+      ]
+    },
+    {
+      "name": "",
+      "description": "",
+      "skills_used": [
+        "Zener Regulator Design"
+      ]
+    }
+  ],
+  "resume_gaps": [],
+  "critical_analysis": "",
+  "top_hard_skills_detailed": [
+    {
+      "skill": "Circuit Analysis",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Diode Modeling",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Zener Regulator Design",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "CVD",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "PL",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "TEM",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    }
+  ],
+  "target_titles_detailed": [
+    {
+      "title": "IC Design / VLSI",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "Analog / Mixed-Signal Design",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "Semiconductor Process / Device Engineering",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "Photonics / Optoelectronics Engineering",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "Nanofabrication / MEMS",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "FPGA / Digital Design",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "RF / Hardware Engineering",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "Embedded Systems / Firmware",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "Research Assistant (semiconductor / photonics / device)",
+      "family": "",
+      "evidence": ""
+    }
+  ],
+  "top_soft_skills": [],
+  "_audit_log": [
+    "retention_audit recovered 3 missing skills: ['CVD', 'PL', 'TEM']"
+  ],
+  "experience": [
+    {
+      "title": "",
+      "company": "University",
+      "dates": "",
+      "bullets": []
+    },
+    {
+      "title": "",
+      "company": "University",
+      "dates": "",
+      "bullets": []
+    },
+    {
+      "title": "",
+      "company": "University",
+      "dates": "",
+      "bullets": []
+    },
+    {
+      "title": "",
+      "company": "University",
+      "dates": "",
+      "bullets": []
+    }
+  ]
+}

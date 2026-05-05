@@ -743,46 +743,60 @@ function ResumePage({ state, refresh, setPage }) {
   const [uploading, setUploading] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [editText, setEditText] = useState('');
+  const [selectedId, setSelectedId] = useState(null);  // which row is selected
   const fileRef = useRef(null);
 
   const resumes = state?.resumes || [];
   const primary = resumes.find(r => r.primary) || resumes[0];
+  // Active selection: user-clicked or falls back to primary
+  const selected = resumes.find(r => r.id === selectedId) || primary;
   const has = !!resumes.length;
-  const phase1 = (state?.done || []).includes(1);
-  const p = state?.profile || {};
 
+  // Per-resume profile (not the global pipeline profile)
+  const sp = selected?.profile || null;
+  const isAnalyzed = !!sp;
+
+  // When selected resume changes, reset text + editing state and fetch content
   useEffect(() => {
-    if (primary && !resumeText && !loading) {
-      setLoading(true);
-      api.get('/api/resume/content')
-        .then(res => {
-          setResumeText(res.text);
-          setEditText(res.text);
-        })
-        .catch(() => {})
-        .finally(() => setLoading(false));
-    }
-    if (!primary) {
-      setResumeText('');
-      setEditText('');
-    }
-  }, [primary?.id]);
+    if (!selected) { setResumeText(''); setEditText(''); return; }
+    setIsEditing(false);
+    setResumeText('');
+    setEditText('');
+    setLoading(true);
+    api.get(`/api/resume/content?id=${selected.id}`)
+      .then(res => { setResumeText(res.text); setEditText(res.text); })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [selected?.id]);
 
   const stats = useMemo(() => {
-    if (!phase1) return null;
+    if (!sp) return null;
     return {
-      skills: (p.top_hard_skills || []).length,
-      exp: (p.experience || []).length,
-      gaps: (p.resume_gaps || []).length,
+      skills: (sp.top_hard_skills || []).length,
+      exp: (sp.experience || []).length,
+      gaps: (sp.resume_gaps || []).length,
     };
-  }, [p, phase1]);
+  }, [sp]);
 
   const handleUpload = async (file) => {
     if (!file) return;
     setUploading(true);
     try {
-      await api.upload('/api/resume/upload', file);
+      const result = await api.upload('/api/resume/upload', file);
+      // Auto-select the newly uploaded resume so its analysis panel shows immediately
+      if (result?.id) setSelectedId(result.id);
       refresh();
+      // Poll more frequently while this resume is extracting
+      if (result?.extracting) {
+        const poll = setInterval(async () => {
+          await refresh();
+          // Stop polling once it's no longer extracting
+          const s = await api.get('/api/state').catch(() => null);
+          const r = (s?.resumes || []).find(x => x.id === result.id);
+          if (!r || !r.extracting) clearInterval(poll);
+        }, 2000);
+        setTimeout(() => clearInterval(poll), 120000); // safety cap: 2 min
+      }
     } catch (e) {
       alert(e.message);
     } finally {
@@ -822,9 +836,10 @@ function ResumePage({ state, refresh, setPage }) {
   };
 
   const handleSaveText = async () => {
+    if (!selected) return;
     setLoading(true);
     try {
-      await api.post('/api/resume/text', { id: primary.id, text: editText });
+      await api.post('/api/resume/text', { id: selected.id, text: editText });
       setResumeText(editText);
       setIsEditing(false);
       refresh();
@@ -862,33 +877,55 @@ function ResumePage({ state, refresh, setPage }) {
               <div>Created</div>
               <div></div>
             </div>
-            {has ? resumes.map(r => (
-              <div key={r.id} className="dt-row">
+            {has ? resumes.map(r => {
+              const isSelected = r.id === selected?.id;
+              return (
+              <div key={r.id} className="dt-row"
+                style={{ cursor:'pointer', background: isSelected ? 'var(--accent-d)' : undefined }}
+                onClick={() => setSelectedId(r.id)}>
                 <div className="dt-name">
                   <div className="dt-icon" style={!r.primary ? { background:'var(--bg-3)', color:'var(--t3)' } : {}}>{r.filename.charAt(0).toUpperCase()}</div>
                   <span title={r.filename}>{r.filename.replace(/\.[^.]+$/, '')}</span>
                   {r.primary && <span className="badge b-accent">Primary</span>}
-                  {r.primary && phase1 && <span className="badge b-good">Analyzed</span>}
+                  {r.extracting && <span className="badge b-warn" style={{ display:'inline-flex', alignItems:'center', gap:4 }}><span className="spin" style={{ width:8, height:8, borderWidth:1.5 }}/> Analyzing</span>}
+                  {r.analyzed && !r.extracting && <span className="badge b-good">Analyzed</span>}
+                  {r.extract_error && <span className="badge b-warn" title={r.extract_error}>Failed</span>}
                 </div>
-                <div style={{ color:'var(--t2)' }}>{r.primary ? (state?.profile?.target_titles?.[0] || <span style={{ color:'var(--t3)' }}>—</span>) : <span style={{ color:'var(--t3)' }}>—</span>}</div>
+                <div style={{ color:'var(--t2)', fontSize:12 }}>
+                  {r.profile?.target_titles?.[0] || <span style={{ color:'var(--t3)' }}>—</span>}
+                </div>
+                <div style={{ color:'var(--t3)', fontFamily:'var(--mono)', fontSize:11.5 }}>{r.updated_at ? new Date(r.updated_at).toLocaleDateString() : 'just now'}</div>
                 <div style={{ color:'var(--t3)', fontFamily:'var(--mono)', fontSize:11.5 }}>{r.created_at ? new Date(r.created_at).toLocaleDateString() : 'just now'}</div>
-                <div style={{ color:'var(--t3)', fontFamily:'var(--mono)', fontSize:11.5 }}>{r.created_at ? new Date(r.created_at).toLocaleDateString() : 'just now'}</div>
-                <div>
+                <div onClick={e => e.stopPropagation()}>
                   <ActionMenu items={[
                     { icon:'star', label:'Set as primary', onClick: () => handleSetPrimary(r.id) },
                     { icon:'pencil', label:'Rename', onClick: () => handleRename(r.id, r.filename) },
-                    { icon:'edit-3', label:'Edit text', onClick: () => { setTab('preview'); setIsEditing(true); } },
+                    { icon:'edit-3', label:'Edit text', onClick: () => { setSelectedId(r.id); setTab('preview'); setIsEditing(true); } },
                     { icon:'trash-2', label:'Delete', danger: true, onClick: () => handleDelete(r.id) },
                   ]}/>
                 </div>
               </div>
-            )) : (
+            );}) : (
               <div className="dt-empty">No resumes yet — add one to start matching jobs.</div>
             )}
           </div>
 
-          {primary && (
+          {selected && (
             <div style={{ marginTop:24 }}>
+              {/* Mini header showing which resume is being viewed */}
+              <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:12 }}>
+                <Icon name="file-text" size={14} color="var(--t3)"/>
+                <span style={{ fontSize:12, color:'var(--t2)' }}>
+                  Viewing: <strong style={{ color:'var(--t1)' }}>{selected.filename}</strong>
+                </span>
+                {!selected.primary && (
+                  <button className="btn-ghost" style={{ fontSize:11, padding:'3px 8px', marginLeft:4 }}
+                    onClick={() => handleSetPrimary(selected.id)}>
+                    <Icon name="star" size={11}/> Set as primary
+                  </button>
+                )}
+              </div>
+
               <div className="prof-tabs" style={{ marginBottom:14 }}>
                 <button className={'prof-tab' + (tab==='analysis' ? ' active' : '')} onClick={() => { setTab('analysis'); setIsEditing(false); }}>
                   <Icon name="bar-chart-3" size={13} style={{ marginRight:6 }}/> Analysis
@@ -901,7 +938,7 @@ function ResumePage({ state, refresh, setPage }) {
               {tab === 'preview' && (
                 <div className="data-card fade-in" style={{ padding:0, overflow:'hidden' }}>
                   <div style={{ padding:'10px 16px', background:'var(--bg-2)', borderBottom:'1px solid var(--bdr)', display:'flex', alignItems:'center', justifyContent:'space-between' }}>
-                    <div style={{ fontSize:12, color:'var(--t3)', fontFamily:'var(--mono)' }}>{primary.filename}</div>
+                    <div style={{ fontSize:12, color:'var(--t3)', fontFamily:'var(--mono)' }}>{selected.filename}</div>
                     <div style={{ display:'flex', gap:8 }}>
                       {isEditing ? (
                         <>
@@ -941,18 +978,37 @@ function ResumePage({ state, refresh, setPage }) {
 
               {tab === 'analysis' && (
                 <div className="fade-in">
-                  {!phase1 ? (
+                  {!isAnalyzed ? (
                     <div className="data-card" style={{ padding:40, textAlign:'center' }}>
-                      <div style={{ width:48, height:48, borderRadius:12, background:'var(--bg-3)', display:'flex', alignItems:'center', justifyContent:'center', margin:'0 auto 16px' }}>
-                        <Icon name="sparkles" size={24} color="var(--t4)"/>
-                      </div>
-                      <h3 style={{ marginBottom:8 }}>Not yet analyzed</h3>
-                      <p style={{ color:'var(--t3)', fontSize:13, maxWidth:300, margin:'0 auto 20px' }}>
-                        Run the extraction agent to see a detailed analysis of your skills and improvements.
-                      </p>
-                      <button className="head-cta" onClick={() => setPage('agent')}>
-                        Go to Agent
-                      </button>
+                      {selected.extracting ? (
+                        <>
+                          <span className="spin" style={{ width:28, height:28, borderWidth:3, margin:'0 auto 16px', display:'block' }}/>
+                          <h3 style={{ marginBottom:8 }}>Analyzing resume…</h3>
+                          <p style={{ color:'var(--t3)', fontSize:13, maxWidth:300, margin:'0 auto' }}>
+                            Extracting skills, experience, and target roles. This usually takes 5–30 seconds.
+                          </p>
+                        </>
+                      ) : (
+                        <>
+                          <div style={{ width:48, height:48, borderRadius:12, background:'var(--bg-3)', display:'flex', alignItems:'center', justifyContent:'center', margin:'0 auto 16px' }}>
+                            <Icon name="sparkles" size={24} color="var(--t4)"/>
+                          </div>
+                          <h3 style={{ marginBottom:8 }}>Not yet analyzed</h3>
+                          <p style={{ color:'var(--t3)', fontSize:13, maxWidth:300, margin:'0 auto 20px' }}>
+                            {selected.extract_error
+                              ? `Extraction failed: ${selected.extract_error}`
+                              : 'Click Extract to analyze this resume for skills, gaps, and target roles.'}
+                          </p>
+                          <button className="head-cta" onClick={async () => {
+                            try {
+                              await api.post('/api/profile/extract', { resume_id: selected.id });
+                              refresh();
+                            } catch (e) { alert(e.message); }
+                          }}>
+                            <Icon name="scan-text" size={13} color="#fff"/> Extract this resume
+                          </button>
+                        </>
+                      )}
                     </div>
                   ) : (
                     <div className="settings-grid">
@@ -976,16 +1032,27 @@ function ResumePage({ state, refresh, setPage }) {
                         <div className="set-field">
                           <div className="set-label">Critical Analysis</div>
                           <div className="analysis-text" style={{ fontSize:13, color:'var(--t2)', lineHeight:1.7, marginTop:8, whiteSpace:'pre-wrap' }}>
-                            {p.critical_analysis || "No detailed analysis available yet. Run the extraction agent to generate a deep critique."}
+                            {sp.critical_analysis || 'No detailed analysis available. Run the extraction agent to generate a deep critique.'}
                           </div>
                         </div>
+
+                        {(sp.target_titles || []).length > 0 && (
+                          <div className="set-field" style={{ marginTop:16 }}>
+                            <div className="set-label">Target Roles</div>
+                            <div style={{ display:'flex', flexWrap:'wrap', gap:6, marginTop:8 }}>
+                              {sp.target_titles.map((t, i) => (
+                                <span key={i} className="skill-pill hard">{t}</span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
                       </div>
 
                       <div className="set-sec">
                         <div className="set-sec-h" style={{ color:'var(--warn)' }}><Icon name="alert-circle" size={14}/> Things to Improve</div>
                         {stats.gaps > 0 ? (
                           <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
-                            {p.resume_gaps.map((gap, i) => (
+                            {sp.resume_gaps.map((gap, i) => (
                               <div key={i} className="notice-strip" style={{ background:'rgba(251, 191, 36, 0.05)', borderColor:'rgba(251, 191, 36, 0.2)', color:'var(--warn)', margin:0 }}>
                                 <Icon name="chevron-right" size={12}/>
                                 {gap}
@@ -999,7 +1066,7 @@ function ResumePage({ state, refresh, setPage }) {
                           </div>
                         )}
                         <div className="set-helper" style={{ marginTop:12 }}>
-                          These improvements are identified based on typical ATS requirements for {state?.profile?.target_titles?.[0] || 'technical'} roles.
+                          These improvements are identified based on typical ATS requirements for {sp.target_titles?.[0] || 'technical'} roles.
                         </div>
                       </div>
                     </div>
@@ -2347,13 +2414,18 @@ function App() {
   }, []);
 
   useEffect(() => { refresh(); }, [refresh]);
+
+  // Adaptive polling: 2 s while any resume is extracting, 8 s otherwise
+  const anyExtracting = (state?.resumes || []).some(r => r.extracting);
   useEffect(() => {
-    const id = setInterval(refresh, 8000);
+    const id = setInterval(refresh, anyExtracting ? 2000 : 8000);
     return () => clearInterval(id);
-  }, [refresh]);
+  }, [refresh, anyExtracting]);
 
   useEffect(() => {
     if (!state?.has_resume || state?.scored_summary || prefetchStarted.current || page === 'jobs') return;
+    // Don't kick off Phase 1 SSE if background extraction is already running
+    if (anyExtracting) return;
     prefetchStarted.current = true;
     const id = setTimeout(async () => {
       try {

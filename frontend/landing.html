@@ -8,7 +8,7 @@
 
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
-<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Literata:ital,opsz,wght@0,7..72,400;0,7..72,500;0,7..72,600;0,7..72,700;0,7..72,800;1,7..72,400;1,7..72,500;1,7..72,600;1,7..72,700&family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet"/>
 
 <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
@@ -42,10 +42,10 @@
   --bad-d:     rgba(248,113,113,.12);
   --mono:  'JetBrains Mono', ui-monospace, monospace;
   --sans:  'Manrope', system-ui, sans-serif;
-  --serif: 'DM Serif Display', Georgia, serif;
+  --serif: 'Literata', 'Iowan Old Style', Georgia, serif;
 }
 *,*::before,*::after { box-sizing: border-box; margin: 0; padding: 0 }
-html { scroll-behavior: smooth; font-size: 16px }
+html { scroll-behavior: smooth; font-size: 16px; font-optical-sizing: auto }
 body {
   font-family: var(--sans); background: var(--bg); color: var(--t1);
   -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
@@ -770,6 +770,26 @@ body {
   .nav-link[data-only="md"] { display: none }
   .hero { padding-top: 110px }
 }
+
+/* ── Cursor-follow tilt: cards take JS-set transform every frame, so
+   exclude transform from the CSS transition list to avoid lag, and
+   hint the GPU compositor with will-change. The :hover translateY()
+   rules above are shadowed by the inline transform but kept for
+   reduced-motion users (where the rAF loop is disabled). */
+.fv-resume,
+.provider-card,
+.phase-card,
+.review-card {
+  will-change: transform;
+  transition-property: border-color, background, background-color, box-shadow, opacity, color;
+  transform-origin: center;
+}
+@media (prefers-reduced-motion: reduce) {
+  .fv-resume, .provider-card, .phase-card, .review-card {
+    will-change: auto;
+    transition-property: border-color, background, background-color, box-shadow, opacity, color, transform;
+  }
+}
 </style>
 </head>
 <body>
@@ -913,6 +933,79 @@ function useParallaxTilt({ rest = { ry: -7, rx: 4 }, max = 9, parallax = 14 } = 
       window.removeEventListener('blur', onLeave);
     };
   }, [rest.ry, rest.rx, max, parallax]);
+  return ref;
+}
+
+/* ── useCardCursor — lightweight per-card cursor follow ──────────────
+   Card-relative cursor tracking shared across every registered card.
+   One global mousemove listener, one rAF loop. Each card subscribes
+   with its own tilt amplitude + resting orientation. A smoothstep
+   distance-falloff means cards far from the cursor relax to rest, so
+   the page doesn't feel like every panel is twitching at once. */
+const _cursorCards = new Map();
+let _cursorRaf = 0;
+let _cursorLastX = -9999, _cursorLastY = -9999;
+let _cursorInited = false;
+function _initCursorTracker() {
+  if (_cursorInited) return;
+  _cursorInited = true;
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const tick = () => {
+    _cursorRaf = 0;
+    let still = false;
+    for (const [el, st] of _cursorCards) {
+      const r = el.getBoundingClientRect();
+      const mx = (_cursorLastX - r.left) / r.width;
+      const my = (_cursorLastY - r.top)  / r.height;
+      el.style.setProperty('--mx', mx.toFixed(3));
+      el.style.setProperty('--my', my.toFixed(3));
+      const dx = (mx - 0.5) * 2;
+      const dy = (my - 0.5) * 2;
+      const dist = Math.hypot(dx, dy);
+      const FALLOFF = 2.4;
+      const t = Math.max(0, 1 - dist / FALLOFF);
+      const falloff = t * t * (3 - 2 * t);
+      const tx = Math.max(-1.2, Math.min(1.2, dx)) * falloff;
+      const ty = Math.max(-1.2, Math.min(1.2, dy)) * falloff;
+      st.cx += (tx - st.cx) * st.stiff;
+      st.cy += (ty - st.cy) * st.stiff;
+      const ry = st.restRy + st.cx * st.max;
+      const rx = st.restRx - st.cy * st.max;
+      el.style.transform =
+        `perspective(${st.persp}px) rotateY(${ry.toFixed(2)}deg) rotateX(${rx.toFixed(2)}deg)`;
+      if (Math.abs(tx - st.cx) > 0.0008 || Math.abs(ty - st.cy) > 0.0008) still = true;
+    }
+    if (still) _cursorRaf = requestAnimationFrame(tick);
+  };
+  window.addEventListener('mousemove', (e) => {
+    _cursorLastX = e.clientX;
+    _cursorLastY = e.clientY;
+    if (!_cursorRaf) _cursorRaf = requestAnimationFrame(tick);
+  }, { passive: true });
+}
+function useCardCursor(opts = {}) {
+  const ref = useRef(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    _initCursorTracker();
+    const st = {
+      max:    opts.max    ?? 6,
+      restRy: opts.restRy ?? 0,
+      restRx: opts.restRx ?? 0,
+      persp:  opts.persp  ?? 1400,
+      stiff:  opts.stiff  ?? 0.12,
+      cx: 0, cy: 0,
+    };
+    _cursorCards.set(el, st);
+    // Paint the rest-orientation immediately so cards with non-zero
+    // restRy/restRx (e.g. FvResume's -3°/+2°) show their 3D presence
+    // at idle, before the first mousemove triggers the rAF loop.
+    el.style.transform =
+      `perspective(${st.persp}px) rotateY(${st.restRy}deg) rotateX(${st.restRx}deg)`;
+    return () => { _cursorCards.delete(el); };
+  }, []);
   return ref;
 }
 
@@ -1099,47 +1192,7 @@ function ResumeIntelligenceSection() {
           </SR>
           <SR delay={2}>
             <div className="feature-visual">
-              <div className="fv-resume">
-                <div className="fv-resume-top">
-                  <div className="fv-r-title">Aisha Rahman · resume v3.tex</div>
-                  <span className="dp-chip">AI-verified</span>
-                </div>
-                <div className="fv-r-grid">
-                  <div className="fv-r-score">
-                    <div className="fv-r-num">88</div>
-                    <div className="fv-r-verdict">Strong</div>
-                    <div className="fv-r-meta">Top-decile signal</div>
-                  </div>
-                  <div className="fv-r-tiles">
-                    <div className="fv-r-tile">
-                      <span className="fv-r-tile-v good">67%</span>
-                      <span className="fv-r-tile-l">Quantified</span>
-                      <span className="fv-r-tile-h">10/15</span>
-                    </div>
-                    <div className="fv-r-tile">
-                      <span className="fv-r-tile-v good">71%</span>
-                      <span className="fv-r-tile-l">Action verbs</span>
-                      <span className="fv-r-tile-h">target ≥70</span>
-                    </div>
-                    <div className="fv-r-tile">
-                      <span className="fv-r-tile-v good">8.2</span>
-                      <span className="fv-r-tile-l">Skill density</span>
-                      <span className="fv-r-tile-h">/100w</span>
-                    </div>
-                    <div className="fv-r-tile">
-                      <span className="fv-r-tile-v warn">2</span>
-                      <span className="fv-r-tile-l">Weak phrases</span>
-                      <span className="fv-r-tile-h">replace</span>
-                    </div>
-                  </div>
-                </div>
-                <div className="fv-r-bullet good">
-                  <strong style={{marginRight:6}}>✓</strong> No clichés or buzzwords — substance over polish.
-                </div>
-                <div className="fv-r-bullet bad">
-                  <strong style={{marginRight:6}}>!</strong> "Helped with research" — re-anchor with Engineered/Designed.
-                </div>
-              </div>
+              <FvResume/>
             </div>
           </SR>
         </div>
@@ -1279,24 +1332,7 @@ function ProvidersSection() {
         <div className="provider-grid">
           {cards.map((c, i) => (
             <SR key={c.cls} delay={Math.min(i + 1, 3)}>
-              <div className={`provider-card ${c.cls}${c.recommended ? ' recommended' : ''}`}>
-                <div className="prov-eyebrow">{c.eyebrow}</div>
-                <div className="prov-name">{c.name}</div>
-                <div className="prov-tag">{c.tag}</div>
-                <div className="prov-list">
-                  {c.list.map((li, j) => (
-                    <div key={j} className="prov-li">
-                      <span className="prov-li-mark">
-                        <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                             strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                          <polyline points="20 6 9 17 4 12"/>
-                        </svg>
-                      </span>
-                      <span>{li}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
+              <ProviderCard c={c}/>
             </SR>
           ))}
         </div>
@@ -1334,11 +1370,7 @@ function PipelineSection() {
         <div className="phases-grid">
           {steps.map((s, i) => (
             <SR key={s.t} delay={Math.min((i % 4) + 1, 3)}>
-              <div className="phase-card">
-                <div className="phase-name">{s.t}</div>
-                <div className="phase-desc">{s.d}</div>
-                <span className="phase-time">{s.time}</span>
-              </div>
+              <PhaseCard s={s}/>
             </SR>
           ))}
         </div>
@@ -1389,20 +1421,7 @@ function ReviewsSection() {
         <div className="reviews-grid">
           {reviews.map((r, i) => (
             <SR key={r.n} delay={Math.min((i % 3) + 1, 3)}>
-              <div className="review-card">
-                <span className="review-quote-mark" aria-hidden="true">&ldquo;</span>
-                <div className="review-stars">
-                  {[0,1,2,3,4].map(j => <StarSVG key={j}/>)}
-                </div>
-                <div className="review-quote">{r.q}</div>
-                <div className="review-author">
-                  <div className="review-av">{r.i}</div>
-                  <div>
-                    <div className="review-name">{r.n}</div>
-                    <div className="review-role">{r.r}</div>
-                  </div>
-                </div>
-              </div>
+              <ReviewCard r={r}/>
             </SR>
           ))}
         </div>
@@ -1441,6 +1460,115 @@ function Footer() {
     <footer className="footer">
       Jobs <em>AI</em> · Autonomous job application agent · Built with React + FastAPI
     </footer>
+  );
+}
+
+/* ── Cursor-follow card components ─────────────────────────────────
+   Each window-style card subscribes to the shared cursor tracker.
+   Tilt amplitudes hand-tuned per card density: bigger isolated cards
+   tilt more, dense grids tilt less so the page doesn't twitch. */
+function FvResume() {
+  // Strong response + slight rest tilt so it has 3D presence at idle.
+  const ref = useCardCursor({ max: 9, restRy: -3, restRx: 2, stiff: 0.10 });
+  return (
+    <div ref={ref} className="fv-resume">
+      <div className="fv-resume-top">
+        <div className="fv-r-title">Aisha Rahman · resume v3.tex</div>
+        <span className="dp-chip">AI-verified</span>
+      </div>
+      <div className="fv-r-grid">
+        <div className="fv-r-score">
+          <div className="fv-r-num">88</div>
+          <div className="fv-r-verdict">Strong</div>
+          <div className="fv-r-meta">Top-decile signal</div>
+        </div>
+        <div className="fv-r-tiles">
+          <div className="fv-r-tile">
+            <span className="fv-r-tile-v good">67%</span>
+            <span className="fv-r-tile-l">Quantified</span>
+            <span className="fv-r-tile-h">10/15</span>
+          </div>
+          <div className="fv-r-tile">
+            <span className="fv-r-tile-v good">71%</span>
+            <span className="fv-r-tile-l">Action verbs</span>
+            <span className="fv-r-tile-h">target ≥70</span>
+          </div>
+          <div className="fv-r-tile">
+            <span className="fv-r-tile-v good">8.2</span>
+            <span className="fv-r-tile-l">Skill density</span>
+            <span className="fv-r-tile-h">/100w</span>
+          </div>
+          <div className="fv-r-tile">
+            <span className="fv-r-tile-v warn">2</span>
+            <span className="fv-r-tile-l">Weak phrases</span>
+            <span className="fv-r-tile-h">replace</span>
+          </div>
+        </div>
+      </div>
+      <div className="fv-r-bullet good">
+        <strong style={{marginRight:6}}>✓</strong> No clichés or buzzwords — substance over polish.
+      </div>
+      <div className="fv-r-bullet bad">
+        <strong style={{marginRight:6}}>!</strong> "Helped with research" — re-anchor with Engineered/Designed.
+      </div>
+    </div>
+  );
+}
+
+function ProviderCard({ c }) {
+  // Row of 3 — visible response, faster spring so the row feels alive.
+  const ref = useCardCursor({ max: 7, stiff: 0.13 });
+  return (
+    <div ref={ref} className={`provider-card ${c.cls}${c.recommended ? ' recommended' : ''}`}>
+      <div className="prov-eyebrow">{c.eyebrow}</div>
+      <div className="prov-name">{c.name}</div>
+      <div className="prov-tag">{c.tag}</div>
+      <div className="prov-list">
+        {c.list.map((li, j) => (
+          <div key={j} className="prov-li">
+            <span className="prov-li-mark">
+              <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                   strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="20 6 9 17 4 12"/>
+              </svg>
+            </span>
+            <span>{li}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function PhaseCard({ s }) {
+  // Dense 4-col grid — keep the tilt subtle so the section doesn't jitter.
+  const ref = useCardCursor({ max: 4, stiff: 0.14 });
+  return (
+    <div ref={ref} className="phase-card">
+      <div className="phase-name">{s.t}</div>
+      <div className="phase-desc">{s.d}</div>
+      <span className="phase-time">{s.time}</span>
+    </div>
+  );
+}
+
+function ReviewCard({ r }) {
+  const ref = useCardCursor({ max: 5, stiff: 0.13 });
+  return (
+    <div ref={ref} className="review-card">
+      <span className="review-quote-mark" aria-hidden="true">&ldquo;</span>
+      <div className="review-stars">
+        {[0,1,2,3,4].map(j => <StarSVG key={j}/>)}
+      </div>
+      <div className="review-quote">{r.q}</div>
+      <div className="review-author">
+        <div className="review-av">{r.i}</div>
+        <div>
+          <div className="review-name">{r.n}</div>
+          <div className="review-role">{r.r}</div>
+        </div>
+      </div>
+    </div>
   );
 }
 

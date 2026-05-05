@@ -6,7 +6,7 @@
 <title>Jobs AI — Dashboard</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
-<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Literata:ital,opsz,wght@0,7..72,400;0,7..72,500;0,7..72,600;0,7..72,700;1,7..72,400;1,7..72,500;1,7..72,600&family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet"/>
 <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
@@ -65,7 +65,7 @@
 
   --mono:     'JetBrains Mono', monospace;
   --sans:     'Manrope', system-ui, sans-serif;
-  --serif:    'DM Serif Display', Georgia, serif;
+  --serif:    'Literata', 'Iowan Old Style', Georgia, serif;
   --rail-w:   210px;
 }
 
@@ -185,7 +185,7 @@ input, select, textarea { font-family:var(--sans) }
   letter-spacing: -.3px;
   line-height: 1;
 }
-.brand-name em { color: var(--accent-h); font-style: normal }
+.brand-name em { color: var(--accent-h); font-style: italic; }
 
 /* ── PROMO STRIP ── */
 .promo-cell {
@@ -294,6 +294,39 @@ input, select, textarea { font-family:var(--sans) }
 }
 .head-cta:hover { background: var(--accent-h); transform: translateY(-1px); box-shadow: 0 8px 20px -6px rgba(124,92,255,.7), 0 0 0 1px rgba(34,229,255,.25) }
 .head-cta:disabled { opacity: .5; cursor: not-allowed; transform: none }
+
+/* Refresh confirmation pill — appears for ~3.5s after a refresh completes
+   so the user has a concrete signal that the click did something even when
+   no new rows came back. Two flavors: 'new' (cyan, "+N new") and 'ok'
+   (muted, "Up to date"). Slides in from the left of the button. */
+.refresh-toast {
+  display: inline-flex; align-items: center; gap: 6px;
+  margin-left: 10px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .02em;
+  white-space: nowrap;
+  animation: refresh-toast-in .35s cubic-bezier(.22,1,.36,1);
+  pointer-events: none;
+}
+.refresh-toast.new {
+  color: var(--accent2);
+  background: var(--accent2-d);
+  border: 1px solid var(--accent2-b);
+  box-shadow: 0 0 0 1px rgba(34,229,255,.15), 0 4px 14px -4px rgba(34,229,255,.35);
+}
+.refresh-toast.ok {
+  color: var(--good);
+  background: var(--good-d);
+  border: 1px solid var(--good-b);
+}
+@keyframes refresh-toast-in {
+  from { opacity: 0; transform: translateX(-6px) scale(.95); }
+  to   { opacity: 1; transform: none; }
+}
 
 /* ── PAGE BODY ── */
 .page-body {
@@ -820,6 +853,188 @@ input, select, textarea { font-family:var(--sans) }
 .profile-input:focus { border-color: var(--accent) }
 .profile-textarea { min-height: 110px; resize: vertical; line-height: 1.6 }
 
+/* Native <select> styled to match .profile-input. Custom chevron via
+   inline SVG so the dropdown caret matches the dark theme. Themed
+   variants for dark / light. */
+.profile-select {
+  appearance: none; -webkit-appearance: none; -moz-appearance: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%238186ad' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 14px center;
+  background-size: 14px 14px;
+  padding-right: 38px;
+  cursor: pointer;
+  text-overflow: ellipsis;
+}
+:root[data-theme="light"] .profile-select {
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%236c708e' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>");
+}
+.profile-select option {
+  background: var(--bg-2); color: var(--t1);
+}
+.profile-select option[value=""] { color: var(--t3); }
+
+/* ── CHIP TOGGLE — multi-select control used by Search Preferences ── */
+.chip-toggle-row {
+  display: flex; flex-wrap: wrap; gap: 8px;
+  margin-top: 4px;
+}
+.chip-toggle {
+  appearance: none;
+  font-family: var(--sans); font-size: 14px; font-weight: 500;
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--bdr);
+  background: var(--bg-2);
+  color: var(--t2);
+  cursor: pointer;
+  transition: background .15s, border-color .15s, color .15s, box-shadow .15s;
+  letter-spacing: -.005em;
+}
+.chip-toggle:hover {
+  border-color: var(--bdr2);
+  color: var(--t1);
+}
+.chip-toggle.on {
+  background: var(--accent-d);
+  border-color: var(--accent-b);
+  color: var(--accent-h);
+  box-shadow: inset 0 0 0 1px rgba(124,92,255,.3);
+}
+.chip-toggle.on:hover { background: var(--accent-d); }
+
+/* ── SEARCH PREFERENCES card emphasis on the Personal tab ── */
+.search-prefs {
+  border-color: var(--accent-b);
+  background: linear-gradient(180deg, var(--accent-d) 0%, var(--bg-1) 22%);
+}
+.search-prefs-pill {
+  font-family: var(--mono); font-size: 10.5px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .08em;
+  padding: 3px 8px; border-radius: 6px;
+  color: var(--accent-h);
+  background: var(--accent-d);
+  border: 1px solid var(--accent-b);
+}
+
+/* ────────────────────────────────────────────────────────────────
+   PROFILE LINKS — industry-curated profile sites card.
+   Editorial directory layout: each category is a collapsible row
+   with a tinted icon-square; expanded categories reveal a stack of
+   inputs, each fronted by a brand-colored monogram chip so the site
+   is identifiable at a glance.
+   ──────────────────────────────────────────────────────────────── */
+.profile-links-card { border-color: var(--bdr); }
+.profile-links-count {
+  font-family: var(--mono); font-size: 10.5px; font-weight: 600;
+  letter-spacing: .04em;
+  padding: 3px 8px; border-radius: 6px;
+  color: var(--t3);
+  background: var(--bg-3);
+  border: 1px solid var(--bdr);
+}
+
+.profile-link-group {
+  border-top: 1px solid var(--bdr);
+  margin-top: 4px;
+}
+.profile-link-group:first-of-type { border-top: 0; margin-top: 0; }
+.profile-link-group-head {
+  width: 100%;
+  display: flex; align-items: center; gap: 12px;
+  padding: 14px 4px;
+  background: transparent; border: 0; cursor: pointer;
+  text-align: left;
+  font-family: var(--sans);
+  color: var(--t1);
+  transition: background .15s;
+  border-radius: 7px;
+}
+.profile-link-group-head:hover { background: var(--bg-2); }
+.profile-link-group-icon {
+  width: 28px; height: 28px;
+  border-radius: 7px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--accent-d);
+  color: var(--accent-h);
+  border: 1px solid var(--accent-b);
+  flex-shrink: 0;
+}
+.profile-link-group-name {
+  flex: 1;
+  font-size: 15.5px; font-weight: 600;
+  letter-spacing: -.005em;
+}
+.profile-link-group-count {
+  font-family: var(--mono); font-size: 11.5px; font-weight: 500;
+  color: var(--t3);
+}
+.profile-link-group-chevron {
+  display: inline-flex; align-items: center;
+  color: var(--t3);
+  transition: transform .25s cubic-bezier(.16,1,.3,1), color .15s;
+}
+.profile-link-group.open .profile-link-group-chevron {
+  transform: rotate(180deg);
+  color: var(--accent-h);
+}
+.profile-link-group-body {
+  padding: 4px 4px 18px 4px;
+  animation: pl-group-reveal .35s cubic-bezier(.22,1,.36,1);
+}
+@keyframes pl-group-reveal {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: none; }
+}
+.profile-link-group-desc {
+  font-size: 13.5px; color: var(--t3);
+  line-height: 1.55;
+  margin: 0 0 12px 40px;
+  font-style: italic;
+}
+.profile-link-rows {
+  display: flex; flex-direction: column;
+  gap: 10px;
+}
+.profile-link-row {
+  display: flex; align-items: center; gap: 12px;
+}
+.profile-link-mono {
+  width: 36px; height: 36px;
+  flex-shrink: 0;
+  border-radius: 9px;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-family: var(--mono);
+  font-size: 12px; font-weight: 700;
+  letter-spacing: .02em;
+  text-transform: uppercase;
+  box-shadow: 0 1px 0 rgba(255,255,255,.05) inset, 0 4px 10px -6px rgba(0,0,0,.4);
+  user-select: none;
+}
+.profile-link-row-body {
+  flex: 1;
+  display: flex; flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.profile-link-row-label {
+  font-size: 13px; font-weight: 500;
+  color: var(--t2);
+  letter-spacing: -.005em;
+}
+.profile-link-input {
+  font-size: 14.5px;
+  padding: 9px 12px;
+  font-family: var(--mono);
+}
+.profile-link-input::placeholder {
+  color: var(--t4);
+  font-style: italic;
+}
+@media (max-width: 720px) {
+  .profile-link-group-desc { margin-left: 0; }
+}
+
 /* Skill / role pills used across Profile + Resume Analysis */
 .skill-pill {
   display: inline-flex; align-items: center;
@@ -933,6 +1148,40 @@ input, select, textarea { font-family:var(--sans) }
 .agent-meter-stat b {
   font-family: var(--mono); font-size: 18px; font-weight: 600; color: var(--t1);
   letter-spacing: -.005em;
+}
+
+/* Phase 2 cap dial — sits between the meter and the phase list. Mirrors
+   set-range/set-helper styling so it reads as a sibling of the Settings
+   page sliders without importing those classes' positioning. */
+.agent-tune {
+  background: var(--bg-2); border: 1px solid var(--bdr); border-radius: 12px;
+  padding: 14px 16px; margin: 14px 0 10px;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.agent-tune-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+}
+.agent-tune-label {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-family: var(--mono); font-size: 11px; font-weight: 500;
+  text-transform: uppercase; letter-spacing: .14em; color: var(--t3);
+}
+.agent-tune-val {
+  display: inline-flex; align-items: baseline; gap: 6px;
+  font-family: var(--mono);
+}
+.agent-tune-val b {
+  font-size: 22px; font-weight: 700; color: var(--accent-h); letter-spacing: -.02em;
+}
+.agent-tune-val i {
+  font-style: normal; font-size: 10.5px; text-transform: uppercase; letter-spacing: .14em;
+  color: var(--t3); font-weight: 500;
+}
+.agent-tune-range { width: 100%; }
+.agent-tune-range:disabled { opacity: .55; cursor: not-allowed; }
+.agent-tune-helper {
+  font-size: 12.5px; line-height: 1.5; color: var(--t3);
+  font-family: var(--sans);
 }
 
 /* Phase list */
@@ -1322,6 +1571,140 @@ input, select, textarea { font-family:var(--sans) }
   background: var(--bg-2); color: var(--accent-h); font-size: 15.5px; text-decoration: none;
 }
 .detail-file:hover { background: var(--accent-d) }
+
+/* ── Phase 4 — tailored-resume cards (jobright.ai-style preview) ─────── */
+.tr-list { display: flex; flex-direction: column; gap: 14px }
+.tr-card {
+  background: var(--bg-1);
+  border: 1px solid var(--bdr);
+  border-radius: 12px;
+  overflow: hidden;
+  transition: border-color .18s ease;
+}
+.tr-card:hover { border-color: var(--bdr2) }
+.tr-card-err { border-color: var(--bad-b); background: var(--bad-d) }
+
+.tr-head {
+  display: flex; align-items: center; justify-content: space-between;
+  width: 100%; padding: 14px 16px;
+  background: none; border: none; cursor: pointer; text-align: left;
+  border-bottom: 1px solid transparent;
+  transition: background .15s ease, border-color .15s ease;
+}
+.tr-head:hover { background: var(--bg-2) }
+.tr-head[aria-expanded="true"] { border-bottom-color: var(--bdr) }
+.tr-head-l { display: flex; align-items: center; gap: 12px; min-width: 0 }
+.tr-head-titles { min-width: 0 }
+.tr-head-co { font-size: 16px; font-weight: 600; color: var(--t1); letter-spacing: -.01em }
+.tr-head-role { font-size: 13.5px; color: var(--t3); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 360px }
+.tr-head-r { display: flex; align-items: center; gap: 16px; flex-shrink: 0 }
+
+.tr-stat { display: flex; flex-direction: column; align-items: flex-end; gap: 2px }
+.tr-stat i { font-style: normal; font-family: var(--mono); font-size: 10px; font-weight: 600; color: var(--t3); text-transform: uppercase; letter-spacing: .12em }
+.tr-stat b { font-family: var(--mono); font-size: 18px; font-weight: 700; color: var(--t1); letter-spacing: -.02em; display: inline-flex; align-items: center; gap: 6px }
+.tr-stat-ats b { font-size: 14.5px; gap: 5px }
+.tr-ats-num { color: var(--t2) }
+.tr-ats-after { color: var(--t1) }
+.tr-ats-arrow { color: var(--t4); font-size: 12px }
+.tr-ats-delta {
+  font-size: 11.5px; font-weight: 600; padding: 1px 6px; border-radius: 4px;
+  background: var(--bg-3); margin-left: 2px;
+}
+.tr-ats-delta.good { background: var(--good-d); color: var(--good); border: 1px solid var(--good-b) }
+.tr-ats-delta.bad  { background: var(--bad-d);  color: var(--bad);  border: 1px solid var(--bad-b) }
+.tr-chev { display: inline-flex; color: var(--t3); padding-left: 4px }
+
+.tr-err-note {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 16px; font-size: 13.5px; color: var(--bad);
+  background: var(--bad-d); border-top: 1px solid var(--bad-b);
+}
+
+.tr-body { padding: 4px 16px 18px; display: flex; flex-direction: column; gap: 16px }
+.tr-sec { display: flex; flex-direction: column; gap: 10px; padding-top: 14px; border-top: 1px solid var(--bdr) }
+.tr-sec:first-child { border-top: none; padding-top: 8px }
+.tr-sec-h {
+  display: flex; align-items: center; gap: 8px;
+  font-family: var(--mono); font-size: 11.5px; font-weight: 600;
+  color: var(--accent-h); text-transform: uppercase; letter-spacing: .12em;
+}
+.tr-sec-h em { font-style: normal; margin-left: auto; color: var(--t3); font-weight: 500; letter-spacing: .04em }
+
+/* Skills comparison table */
+.tr-cmp { display: flex; flex-direction: column; border: 1px solid var(--bdr); border-radius: 8px; overflow: hidden }
+.tr-cmp-row {
+  display: grid; grid-template-columns: 1.4fr 0.7fr 0.9fr;
+  gap: 12px; align-items: center;
+  padding: 9px 13px; border-bottom: 1px solid var(--bdr);
+  font-size: 13.5px;
+}
+.tr-cmp-row:last-child { border-bottom: none }
+.tr-cmp-row.tr-cmp-head {
+  background: var(--bg-2); color: var(--t3); font-family: var(--mono);
+  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em;
+}
+.tr-cmp-row.hit  { background: rgba(61,255,154,.04) }
+.tr-cmp-row.miss { background: rgba(255,77,109,.05) }
+.tr-cmp-kw { color: var(--t1); font-weight: 500 }
+.tr-cmp-act.keep { color: var(--good); font-size: 12.5px }
+.tr-cmp-act.add  { color: var(--bad);  font-size: 12.5px; font-weight: 500 }
+.tr-pill {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 8px; border-radius: 10px; font-size: 11.5px; font-weight: 500;
+  font-family: var(--mono); letter-spacing: .04em;
+}
+.tr-pill-good { background: var(--good-d); color: var(--good); border: 1px solid var(--good-b) }
+.tr-pill-bad  { background: var(--bad-d);  color: var(--bad);  border: 1px solid var(--bad-b) }
+
+/* Skill / gap chips */
+.tr-chips { display: flex; flex-wrap: wrap; gap: 6px }
+.tr-chip {
+  display: inline-flex; padding: 4px 10px; border-radius: 6px;
+  font-size: 12.5px; font-weight: 500;
+  background: var(--bg-2); color: var(--t2); border: 1px solid var(--bdr);
+}
+.tr-chip-top { background: var(--accent-d); color: var(--accent-h); border-color: var(--accent-b) }
+.tr-chip-gap { background: var(--warn-d); color: var(--warn); border-color: var(--warn-b) }
+
+/* Per-role tailored bullets */
+.tr-roles { display: flex; flex-direction: column; gap: 14px }
+.tr-role { background: var(--bg-2); border: 1px solid var(--bdr); border-radius: 8px; padding: 12px 14px }
+.tr-role-h { font-size: 13.5px; font-weight: 600; color: var(--t1); margin-bottom: 6px }
+.tr-role-bullets { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px }
+.tr-role-bullets li { font-size: 13.5px; color: var(--t2); line-height: 1.55 }
+
+.tr-cl {
+  background: var(--bg-2); border: 1px solid var(--bdr); border-radius: 8px;
+  padding: 14px 16px; font-family: var(--sans); font-size: 13.5px; line-height: 1.6;
+  color: var(--t2); white-space: pre-wrap; max-height: 280px; overflow-y: auto;
+}
+
+/* Action row */
+.tr-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px }
+.tr-dl {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 8px 14px; border-radius: 8px;
+  font-size: 13.5px; font-weight: 500; text-decoration: none;
+  background: var(--bg-2); border: 1px solid var(--bdr); color: var(--t1);
+  transition: background .15s ease, border-color .15s ease;
+}
+.tr-dl:hover { background: var(--bg-3); border-color: var(--bdr2); text-decoration: none }
+.tr-dl-primary {
+  background: var(--accent); border-color: var(--accent); color: #fff;
+  box-shadow: 0 4px 14px -6px rgba(124,92,255,.55);
+}
+.tr-dl-primary:hover { background: var(--accent-h); border-color: var(--accent-h) }
+.tr-dl-ghost { background: none; color: var(--t3); border-color: transparent }
+.tr-dl-ghost:hover { background: var(--bg-2); color: var(--t1); border-color: var(--bdr) }
+
+@media (max-width: 720px) {
+  .tr-head { flex-direction: column; align-items: flex-start; gap: 10px }
+  .tr-head-r { width: 100%; justify-content: space-between }
+  .tr-head-role { max-width: none }
+  .tr-cmp-row { grid-template-columns: 1fr; gap: 4px }
+  .tr-cmp-row.tr-cmp-head { display: none }
+  .tr-cmp-mark { justify-self: start }
+}
 .report-pre {
   background: var(--bg); border: 1px solid var(--bdr); border-radius: 8px;
   padding: 16px; font-family: var(--mono); font-size: 14.5px; line-height: 1.8;
@@ -1453,9 +1836,9 @@ input, select, textarea { font-family:var(--sans) }
   padding: 3px 9px; border-radius: 20px; font-size: 14px;
   background: var(--bg-3); border: 1px solid var(--bdr); color: var(--t3);
 }
-.job-footer { display: flex; align-items: center; justify-content: space-between }
-.job-app-count { font-size: 14px; color: var(--t4) }
-.job-footer-actions { display: flex; align-items: center; gap: 6px }
+.job-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px }
+.job-app-count { font-size: 14px; color: var(--t4); flex-shrink: 0 }
+.job-footer-actions { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 6px; row-gap: 6px }
 .job-score-col {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   padding: 16px 20px; border-left: 1px solid var(--bdr); flex-shrink: 0; gap: 4px;
@@ -1584,6 +1967,81 @@ input, select, textarea { font-family:var(--sans) }
   border-radius: 7px; font-size: 14.5px; cursor: pointer; transition: background .12s;
 }
 .fd-clear-row:hover { background: rgba(248,113,113,.14) }
+
+/* ── Industry / facet filter additions ── */
+.fd-pop.fd-wide { width: 360px }
+.fd-section-h {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 6px 4px; font-size: 11.5px; color: var(--t3);
+  text-transform: uppercase; letter-spacing: .08em; font-weight: 600;
+}
+.fd-section-h > span { display: inline-flex; align-items: center; gap: 6px }
+.fd-mini-link {
+  background: none; border: none; cursor: pointer; padding: 2px 6px;
+  font-size: 11.5px; font-weight: 600; color: var(--bad); border-radius: 5px;
+  text-transform: uppercase; letter-spacing: .08em; transition: background .12s;
+}
+.fd-mini-link:hover { background: rgba(248,113,113,.1) }
+.fd-mini-meta {
+  font-style: normal; font-size: 11.5px; color: var(--t4);
+  text-transform: none; letter-spacing: 0;
+}
+.fd-chips-row {
+  display: flex; flex-wrap: wrap; gap: 4px;
+  padding: 0 4px 4px;
+}
+.fd-active-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 4px 7px 4px 8px; border-radius: 999px;
+  background: var(--accent-d); color: var(--accent-h);
+  border: 1px solid var(--accent-b);
+  font-size: 12.5px; font-weight: 500; cursor: pointer;
+  transition: background .12s, color .12s;
+}
+.fd-active-chip:hover { background: rgba(248,113,113,.15); color: var(--bad); border-color: rgba(248,113,113,.35) }
+.fd-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 4px;
+  max-height: 320px; overflow-y: auto; padding: 2px;
+}
+.fd-grid::-webkit-scrollbar { width: 5px }
+.fd-grid::-webkit-scrollbar-thumb { background: var(--bdr2); border-radius: 3px }
+.fd-tile {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px; border-radius: 8px;
+  border: 1px solid var(--bdr); background: var(--bg-2);
+  text-align: left; cursor: pointer; position: relative;
+  transition: border-color .12s, background .12s, transform .08s;
+}
+.fd-tile:hover { background: var(--bg-3); border-color: var(--bdr2); transform: translateY(-1px) }
+.fd-tile.on {
+  background: var(--accent-d); border-color: var(--accent-b); color: var(--accent-h);
+  box-shadow: 0 0 0 1px var(--accent-b) inset;
+}
+.fd-tile-ico {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; border-radius: 6px;
+  background: var(--bg-3); color: var(--t2); flex-shrink: 0;
+  border: 1px solid var(--bdr);
+}
+.fd-tile.on .fd-tile-ico {
+  background: rgba(94,106,210,.25); color: var(--accent-h);
+  border-color: rgba(94,106,210,.45);
+}
+.fd-tile-body { display: flex; flex-direction: column; gap: 1px; flex: 1; min-width: 0 }
+.fd-tile-lbl { font-size: 13px; font-weight: 600; color: var(--t1); line-height: 1.15;
+               overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.fd-tile.on .fd-tile-lbl { color: var(--accent-h) }
+.fd-tile-meta {
+  font-family: var(--mono); font-size: 10.5px; color: var(--t4);
+  text-transform: uppercase; letter-spacing: .06em;
+}
+.fd-tile.on .fd-tile-meta { color: var(--accent-h); opacity: .82 }
+.fd-tile-tick {
+  position: absolute; top: 6px; right: 6px;
+  width: 16px; height: 16px; border-radius: 50%;
+  background: var(--accent-h); color: #0b0d1a;
+  display: inline-flex; align-items: center; justify-content: center;
+}
 
 /* ── RIGHT RAIL CARDS ── */
 .rcard {
@@ -3464,14 +3922,143 @@ code { font-family: var(--mono); font-size: 14px; background: var(--bg-3); paddi
 .plan-cta-ghost {
   background: rgba(255,255,255,.03); color: var(--t2); cursor: default;
 }
+/* ── Upgrade CTA ─────────────────────────────────────────────────────────
+   The plan-page Pro button is the single most consequential click on the
+   site, so it gets unique treatment: a continuously flowing 7-stop
+   chromatic gradient, a diagonal light sweep that scans every ~5s, a
+   throbbing chromatic halo, an animated zap glyph, and a hover that
+   accelerates everything. All effects use existing brand tokens.
+   Respects prefers-reduced-motion. */
 .plan-cta-pro {
-  border: none; color: #fff;
-  background: linear-gradient(135deg, #7c5cff 0%, #ff3d9a 60%, #22e5ff 130%);
-  box-shadow: 0 12px 30px -10px rgba(124,92,255,.65), inset 0 1px 0 rgba(255,255,255,.22);
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  border: none;
+  color: #fff;
+  font-weight: 700;
+  letter-spacing: .015em;
+  padding: 13px 18px;
+  background: linear-gradient(
+    110deg,
+    #7c5cff   0%,
+    #a78bff  16%,
+    #ff3d9a  38%,
+    #ff6a45  56%,
+    #ffd23d  70%,
+    #22e5ff  86%,
+    #7c5cff 100%
+  );
+  background-size: 240% 240%;
+  background-position: 0% 50%;
+  /* Stacked drop-shadow halo composes OUTSIDE the button's overflow-clipped
+     paint box, unlike a pseudo-element. Three colored layers blur into a
+     chromatic aura that throbs via the cta-halo keyframes. */
+  filter:
+    drop-shadow(0 0  6px rgba(124,  92, 255, .55))
+    drop-shadow(0 0 12px rgba(255,  61, 154, .35))
+    drop-shadow(0 0 22px rgba(34,  229, 255, .25));
+  animation:
+    cta-flow 5.5s ease-in-out infinite,
+    cta-halo 2.6s ease-in-out infinite;
+  box-shadow:
+    0 14px 32px -10px rgba(124, 92, 255, .5),
+    inset 0  1px 0 rgba(255, 255, 255, .42),
+    inset 0 -1px 0 rgba(0, 0, 0, .14);
+  transition:
+    transform .22s cubic-bezier(.16, 1, .3, 1),
+    box-shadow .3s ease;
 }
+/* Diagonal shimmer that scans across the face. Clipped to button bounds
+   by the parent's overflow:hidden. */
+.plan-cta-pro::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    100deg,
+    transparent           30%,
+    rgba(255,255,255,.55) 48%,
+    rgba(255,255,255,.92) 50%,
+    rgba(255,255,255,.55) 52%,
+    transparent           70%
+  );
+  transform: translateX(-130%);
+  animation: cta-sweep 4.8s cubic-bezier(.5, 0, .2, 1) infinite;
+  pointer-events: none;
+  mix-blend-mode: overlay;
+  z-index: 0;
+}
+/* Inner top-edge gloss highlight — adds dimensionality without clipping. */
+.plan-cta-pro::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(180deg, rgba(255,255,255,.18) 0%, rgba(255,255,255,0) 50%);
+  pointer-events: none;
+  z-index: 0;
+}
+/* Keep text + icon above both pseudos. */
+.plan-cta-pro > * { position: relative; z-index: 1; }
+.plan-cta-pro .ic { animation: cta-zap 2.6s ease-in-out infinite; transform-origin: center; }
+
 .plan-cta-pro:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 18px 40px -12px rgba(255,61,154,.7), 0 0 0 1px rgba(34,229,255,.4), inset 0 1px 0 rgba(255,255,255,.28);
+  transform: translateY(-2px) scale(1.02);
+  /* Both gradient and halo speed up on hover; halo also intensifies. */
+  animation-duration: 2s, 1.4s;
+  filter:
+    drop-shadow(0 0  8px rgba(124,  92, 255, .7))
+    drop-shadow(0 0 18px rgba(255,  61, 154, .55))
+    drop-shadow(0 0 32px rgba(34,  229, 255, .45))
+    saturate(1.18) brightness(1.06);
+  box-shadow:
+    0 22px 50px -12px rgba(255, 61, 154, .55),
+    0   0    0 1.5px rgba(34, 229, 255, .55),
+    inset 0  1px 0 rgba(255, 255, 255, .5),
+    inset 0 -1px 0 rgba(0, 0, 0, .14);
+}
+.plan-cta-pro:hover::before { animation-duration: 1.6s; }
+.plan-cta-pro:hover .ic     { animation-duration: 1.1s; }
+.plan-cta-pro:active        { transform: translateY(0) scale(.992); transition-duration: .08s; }
+
+@keyframes cta-flow {
+  0%, 100% { background-position:   0% 50%; }
+  50%      { background-position: 100% 50%; }
+}
+@keyframes cta-sweep {
+  0%, 22%  { transform: translateX(-130%); }
+  62%      { transform: translateX( 130%); }
+  100%     { transform: translateX( 130%); }
+}
+/* Halo throb — same drop-shadow stack at higher intensity at the midpoint. */
+@keyframes cta-halo {
+  0%, 100% {
+    filter:
+      drop-shadow(0 0  6px rgba(124,  92, 255, .55))
+      drop-shadow(0 0 12px rgba(255,  61, 154, .35))
+      drop-shadow(0 0 22px rgba(34,  229, 255, .25));
+  }
+  50% {
+    filter:
+      drop-shadow(0 0 10px rgba(124,  92, 255, .75))
+      drop-shadow(0 0 20px rgba(255,  61, 154, .55))
+      drop-shadow(0 0 32px rgba(34,  229, 255, .45));
+  }
+}
+@keyframes cta-zap {
+  0%, 100% { transform: rotate(0)     scale(1);     filter: drop-shadow(0 0 0 transparent); }
+  35%      { transform: rotate(-9deg) scale(1.18);  filter: drop-shadow(0 0 6px rgba(255,255,255,.85)); }
+  55%      { transform: rotate( 9deg) scale(1.18); }
+  75%      { transform: rotate(0)     scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .plan-cta-pro,
+  .plan-cta-pro::before,
+  .plan-cta-pro .ic {
+    animation: none !important;
+  }
+  .plan-cta-pro::before { transform: translateX(0); opacity: 0; }
 }
 .plan-cta-sent {
   margin-top: auto;
@@ -3824,6 +4411,87 @@ code { font-family: var(--mono); font-size: 14px; background: var(--bg-3); paddi
 @media (max-width: 600px) {
   .ask-drawer { width: 100vw }
 }
+
+/* ── Tailor drawer (per-job on-demand resume) ────────────────────────────── */
+.tailor-drawer {
+  width: min(680px, 96vw);
+}
+.tailor-drawer .ask-head {
+  background: linear-gradient(180deg, rgba(124, 92, 255, .14), rgba(124, 92, 255, .02));
+}
+.tailor-body {
+  flex: 1; overflow-y: auto;
+  padding: 18px 18px 24px;
+  display: flex; flex-direction: column; gap: 16px;
+  scroll-behavior: smooth;
+}
+.tailor-body::-webkit-scrollbar { width: 4px }
+.tailor-body::-webkit-scrollbar-thumb { background: rgba(255,255,255,.08); border-radius: 4px }
+
+.tailor-loading {
+  display: flex; flex-direction: column; gap: 14px;
+  padding: 20px 18px;
+  border: 1px solid var(--bdr);
+  border-radius: 12px;
+  background:
+    linear-gradient(180deg, rgba(124,92,255,.05), transparent 65%),
+    var(--bg-2);
+}
+.tailor-loading-eyebrow {
+  display: inline-flex; align-items: center; gap: 10px;
+  font-family: var(--mono); font-size: 11px; font-weight: 700;
+  letter-spacing: .12em; text-transform: uppercase;
+  color: var(--accent2);
+}
+.tailor-loading-hint {
+  font-size: 13px; line-height: 1.55; color: var(--t3);
+}
+.tailor-steps {
+  list-style: none; margin: 4px 0 0; padding: 0;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.tailor-steps li {
+  display: inline-flex; align-items: center; gap: 9px;
+  font-size: 12.5px; color: var(--t2);
+  opacity: 0;
+  animation: tailor-step-in .55s cubic-bezier(.16,1,.3,1) forwards;
+}
+.tailor-steps li svg { color: var(--accent2); opacity: .85 }
+@keyframes tailor-step-in {
+  from { opacity: 0; transform: translateX(-6px) }
+  to   { opacity: 1; transform: translateX(0) }
+}
+
+.tailor-error {
+  display: flex; align-items: flex-start; gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--bad-b); border-radius: 12px;
+  background: var(--bad-d);
+  color: var(--bad);
+}
+.tailor-error svg { flex-shrink: 0; margin-top: 2px }
+.tailor-error-h {
+  font-size: 13px; font-weight: 700; color: var(--t1);
+  margin-bottom: 2px; letter-spacing: -.005em;
+}
+.tailor-error-msg {
+  font-size: 12.5px; color: var(--t3); line-height: 1.5;
+}
+
+.tailor-result { display: flex; flex-direction: column; gap: 14px }
+.tailor-result .tr-card { border-color: var(--bdr2) }
+
+.btn-tailor {
+  border-color: var(--accent-b);
+  color: var(--accent2);
+  background: var(--accent-d);
+}
+.btn-tailor:hover {
+  background: var(--accent2-d);
+  color: var(--t1);
+  border-color: var(--accent2-b);
+}
+.btn-tailor svg { color: var(--accent2) }
 
 /* RESPONSIVE */
 @media (max-width: 1180px) {

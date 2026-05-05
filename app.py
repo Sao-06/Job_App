@@ -28,9 +28,26 @@ if hasattr(sys.stderr, "buffer"):
 
 import uvicorn
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 
 from pipeline.config import OUTPUT_DIR, RESOURCES_DIR
+
+# Auth helpers — imported lazily so missing bcrypt doesn't crash the server
+try:
+    from auth_utils import hash_password, verify_password
+except ImportError:
+    def hash_password(pw): return pw
+    def verify_password(pw, h): return pw == h
+
+# Simple user store backed by SQLite
+try:
+    from session_store import SQLiteSessionStore
+    _user_store = SQLiteSessionStore(
+        OUTPUT_DIR / "jobs_ai_sessions.sqlite3",
+        default_state_factory=dict,
+    )
+except Exception:
+    _user_store = None
 from pipeline.phases import (
     phase1_ingest_resume,
     phase2_discover_jobs,
@@ -108,6 +125,13 @@ _S: dict = {
     "done": set(),
     "error": {},
     "elapsed": {},
+    # Auth
+    "user": None,
+    # UI state
+    "liked_ids": set(),
+    "hidden_ids": set(),
+    "dev_tweaks": {},
+    "feedback": [],
 }
 
 # ── Provider factory ──────────────────────────────────────────────────────────
@@ -397,7 +421,12 @@ async def update_config(req: Request):
 # ── State ─────────────────────────────────────────────────────────────────────
 
 @app.get("/api/state")
-def get_state():
+def get_state(request: Request):
+    # Localhost connections are always treated as developer sessions
+    client_host = getattr(request.client, "host", "") if request.client else ""
+    is_local = client_host in ("127.0.0.1", "::1", "localhost")
+    is_dev = is_local or bool(_S.get("force_dev_mode"))
+
     profile = _S.get("profile") or {}
     scored  = _S.get("scored") or []
     thr     = _S.get("threshold", 75)
@@ -479,6 +508,23 @@ def get_state():
             for a in (_S.get("applications") or [])
         ],
         "output_files": files,
+        # Auth / session
+        "is_dev": is_dev,
+        "user": _S.get("user") or ({"email": "dev@localhost", "name": "Developer"} if is_dev else None),
+        # Resume list (synthesised from single-resume state)
+        "resumes": (
+            [{
+                "id": "primary",
+                "filename": _S.get("resume_filename") or "resume.txt",
+                "primary": True,
+                "created_at": None,
+            }]
+            if _S.get("resume_text") else []
+        ),
+        # UI state
+        "liked_ids": list(_S.get("liked_ids") or []),
+        "hidden_ids": list(_S.get("hidden_ids") or []),
+        "dev_tweaks": _S.get("dev_tweaks") or {},
     }
 
 @app.post("/api/reset")

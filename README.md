@@ -4,6 +4,14 @@ An autonomous, 7-phase Python agent that reads your resume, searches for matchin
 
 Three backends are supported with no architecture changes: **Anthropic Claude** (highest quality), **local Ollama** (free, private), and **Demo mode** (zero cost, zero setup, works offline).
 
+## Developer Tools & Debugging
+The platform includes an integrated Dev Ops console for administration and customer support:
+- **User Inspection:** View session states, raw resume text, and full job-match JSON for any user.
+- **Feedback System:** Users can submit feedback, which appears in the Dev Ops console with real-time "NEW" badging.
+- **Impersonation:** Developers can "View as User" to assist with debugging or profile issues directly in the browser.
+- **Access Control:** All dev tools are protected by session-based authorization. Developers can toggle between "Developer" and "Customer" modes using the test button in the Dev Ops header.
+- **Diagnostic CLI:** Safe, restricted CLI commands (git, db status) can be run from the Dev Ops console.
+
 ---
 
 ## Table of Contents

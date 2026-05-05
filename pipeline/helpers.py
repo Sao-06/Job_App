@@ -179,6 +179,77 @@ def filter_jobs_by_education(jobs: list, user_education_levels,
     return kept
 
 
+# ── Cross-industry job-family inference ──────────────────────────────────────
+# Title-keyword buckets used to attach a coarse `category` label at ingest.
+# The cold (no-profile) feed balances results across these so a brand-new
+# visitor sees a true cross-section instead of one industry's roles.
+#
+# Order matters — first hit wins. We list the more-specific buckets first
+# so e.g. "data scientist" doesn't get bucketed under "engineering" simply
+# because the title contains "engineer".
+
+_CATEGORY_KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
+    ("healthcare",   ("nurse", "physician", "rn ", "lpn ", "doctor",
+                      "medical assistant", "pharmacy", "clinical",
+                      "therapist", "radiology", "dental", "patient")),
+    ("legal",        ("paralegal", "attorney", "lawyer", "counsel",
+                      "compliance officer", "litigation")),
+    ("education",    ("teacher", "professor", "instructor", "tutor",
+                      "curriculum", "principal", "school ", "preschool")),
+    ("design",       ("designer", "ux", "ui ", "art director",
+                      "creative director", "illustrator", "copywriter",
+                      "brand designer")),
+    ("marketing",    ("marketing", "brand ", "social media", "growth ",
+                      "seo", "content writer", "communications",
+                      "public relations")),
+    ("sales",        ("account executive", " ae ", "sales rep", "sales ",
+                      "business development", " bdr ", " sdr ",
+                      "customer success")),
+    ("finance",      ("accountant", "auditor", "controller", "actuar",
+                      "investment", " finance ", "financial analyst",
+                      "treasurer", "bookkeeper")),
+    ("hr",           ("recruiter", "talent acquisition", "people ops",
+                      "human resources", "hrbp")),
+    ("consulting",   ("consultant", "consulting")),
+    ("operations",   ("operations", "logistics", "supply chain",
+                      "warehouse", "procurement", "fulfillment")),
+    ("data",         ("data scientist", "data analyst", "data engineer",
+                      "machine learning", "ml engineer", "ai engineer",
+                      "research scientist")),
+    ("product",      ("product manager", "program manager",
+                      "project manager", "product owner")),
+    ("engineering",  ("software engineer", "swe", "developer",
+                      "engineer", "engineering", "fpga", "hardware",
+                      "firmware", "devops", "site reliability",
+                      "qa engineer", "test engineer")),
+    ("support",      ("customer service", "customer support",
+                      "support specialist", "help desk", "service desk")),
+    ("public_sector",("policy", "public administration", "government",
+                      "civic", "federal ")),
+    ("trades",       ("technician", "electrician", "mechanic",
+                      "plumber", "machinist", "welder", "installer")),
+    ("media",        ("journalist", "editor", "producer", "videographer",
+                      "podcast")),
+]
+
+_GENERAL_CATEGORY = "general"
+
+
+def infer_job_category(job: dict) -> str:
+    """Return a coarse job-family label (engineering, sales, marketing,
+    healthcare, finance, design, …) from the title and description.
+    Falls back to ``"general"`` when nothing matches.
+    """
+    title = (job.get("title") or "").lower()
+    desc = (job.get("description") or "").lower()
+    text = " " + title + " " + desc[:400] + " "
+    for label, keywords in _CATEGORY_KEYWORDS:
+        for kw in keywords:
+            if kw in text:
+                return label
+    return _GENERAL_CATEGORY
+
+
 def infer_experience_level(job: dict) -> str:
     """Infer experience level from job title and description."""
     title = job.get("title", "").lower()

@@ -24,15 +24,14 @@ from datetime import datetime
 from pathlib import Path
 from collections.abc import MutableMapping
 
-# Load .env if python-dotenv is available. Must run before any os.environ.get("…") read.
-# We try both the directory containing app.py AND its parent — users sometimes drop
-# `.env` next to the cloned repo folder rather than next to the source files.
+# Load .env if python-dotenv is available. Must run before any os.environ.get("…")
+# read. find_dotenv() walks up from this file's directory, so it picks up `.env`
+# whether the user dropped it next to app.py OR in the repo root one level up.
 try:
-    from dotenv import load_dotenv
-    _here = Path(__file__).resolve().parent
-    for _candidate in (_here / ".env", _here.parent / ".env"):
-        if _candidate.exists():
-            load_dotenv(_candidate, override=False)
+    from dotenv import load_dotenv, find_dotenv
+    _env_file = find_dotenv(filename=".env", usecwd=False)
+    if _env_file:
+        load_dotenv(_env_file, override=False)
 except ImportError:
     pass
 
@@ -46,7 +45,7 @@ import uvicorn
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 
-from pipeline.config import OUTPUT_DIR, RESOURCES_DIR
+from pipeline.config import OUTPUT_DIR, RESOURCES_DIR, DATA_DIR, DB_PATH
 
 # Auth helpers — imported lazily so missing bcrypt doesn't crash the server
 try:
@@ -86,6 +85,16 @@ _STATE_COOKIE = "jobs_ai_session"
 _SESSION_SWITCH_HEADER = "x-jobs-ai-session-switch"
 # Fallback cache used only when the SQLite store is unavailable.
 _AUTH_SESSIONS_FALLBACK: dict[str, dict] = {}
+
+
+# Set to "1" / "true" / "yes" in production to mark auth cookies Secure so
+# browsers reject them over plain HTTP. Leave unset in local dev (HTTP).
+_COOKIE_SECURE = os.environ.get("PRODUCTION", "").lower() in ("1", "true", "yes")
+
+_EMAIL_RE = __import__("re").compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+def _is_valid_email(email: str) -> bool:
+    return bool(email) and bool(_EMAIL_RE.match(email))
 
 
 def _auth_token_save(token: str, user_payload: dict) -> None:
@@ -131,12 +140,45 @@ def frontend_static(filename: str):
         raise HTTPException(404, "Not found")
     return FileResponse(p)
 
+_OUTPUT_FILE_BLOCKED_SUFFIXES = {
+    # Anything that looks like a database, key store, or raw config — these
+    # never belong to a user-facing artifact and must never be served, even
+    # if a future bug accidentally drops one inside OUTPUT_DIR.
+    ".sqlite", ".sqlite3", ".sqlite3-wal", ".sqlite3-shm",
+    ".db", ".db-wal", ".db-shm",
+    ".env", ".pem", ".key", ".crt", ".p12", ".pfx",
+    ".json", ".yaml", ".yml",
+}
+
+# User-facing artifact extensions the static-file route is *allowed* to
+# return. Everything else 404s. Keep this short and intentional.
+_OUTPUT_FILE_ALLOWED_SUFFIXES = {
+    ".pdf", ".tex", ".docx", ".txt", ".md", ".log",
+    ".xlsx", ".xls", ".csv",
+    ".png", ".jpg", ".jpeg", ".svg", ".gif", ".webp",
+    ".html", ".htm",
+}
+
+
 @app.get("/output/{path:path}")
 def serve_output_file(path: str, request: Request):
     root = OUTPUT_DIR.resolve()
     p = (root / path).resolve()
+    # Reject anything that resolves outside OUTPUT_DIR — the standard
+    # path-traversal guard.
     if root != p and root not in p.parents:
-        raise HTTPException(403, "File access denied")
+        raise HTTPException(404, "Not found")
+
+    # Reject by suffix BEFORE we check existence so an attacker can't probe
+    # which sensitive files are present. Note .sqlite3-wal etc. are checked
+    # via the trailing-component string because Path.suffix only catches
+    # the final segment after the last dot.
+    name_lower = p.name.lower()
+    if any(name_lower.endswith(suf) for suf in _OUTPUT_FILE_BLOCKED_SUFFIXES):
+        raise HTTPException(404, "Not found")
+    if p.suffix.lower() not in _OUTPUT_FILE_ALLOWED_SUFFIXES:
+        raise HTTPException(404, "Not found")
+
     session_root = (root / "sessions").resolve()
     if p == session_root or session_root in p.parents:
         # Per-session files require auth and a session-id match. Without
@@ -154,6 +196,16 @@ def serve_output_file(path: str, request: Request):
         raise HTTPException(404, "File not found")
     return FileResponse(p)
 
+# ── Server-side Ollama config ────────────────────────────────────────────────
+# OLLAMA_URL: env-driven so deployments can point at a different host (e.g. a
+#   beefier Tailnet machine). On the production RPi this resolves to the RPi's
+#   own Ollama daemon, NOT the visiting user's laptop.
+# DEFAULT_OLLAMA_MODEL: which model new sessions get + which model the boot-time
+#   auto-pull ensures is on disk.
+OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434").rstrip("/")
+DEFAULT_OLLAMA_MODEL = os.environ.get("DEFAULT_OLLAMA_MODEL", "ministral-3:14b-cloud")
+
+
 # ── Session state ─────────────────────────────────────────────────────────────
 
 def _default_state() -> dict:
@@ -161,7 +213,7 @@ def _default_state() -> dict:
     # LLM backend
     "mode": "ollama",
     "api_key": "",
-    "ollama_model": "llama3.2",
+    "ollama_model": DEFAULT_OLLAMA_MODEL,
     # Search / apply settings
     "threshold": 75,
     "job_titles": "Engineer",
@@ -244,7 +296,8 @@ class _SessionStateProxy(MutableMapping):
 _S = _SessionStateProxy()
 
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-_store_db = OUTPUT_DIR / "jobs_ai_sessions.sqlite3"
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+_store_db = DB_PATH
 try:
     _session_store = SQLiteSessionStore(_store_db, default_state_factory=_default_state)
 except Exception:
@@ -341,10 +394,12 @@ def _is_local_request(request: Request) -> bool:
 
 
 def _load_session_state(session_id: str) -> dict:
-    if _session_store is None:
-        loaded = _memory_sessions.get(session_id) or _default_state()
-    else:
-        loaded = _session_store.get_state(session_id)
+    # Anonymous sessions live in memory. Authenticated sessions live in SQLite.
+    # Try memory first; if missing, peek SQLite (read-only — never INSERT a
+    # row for an anonymous session, otherwise it shows up as a ghost user).
+    loaded = _memory_sessions.get(session_id)
+    if loaded is None and _session_store is not None:
+        loaded = _session_store.peek_state(session_id)
     state = _default_state()
     state.update(loaded or {})
     state["done"] = set(state.get("done") or [])
@@ -369,8 +424,12 @@ def _save_bound_state(state: dict = None, session_id: str = None) -> None:
     if not sid:
         return
     payload = state or _S.current()
+    # Only persist sessions that belong to an authenticated user. Anonymous
+    # sessions (pre-login OAuth state, fresh visits) are kept in memory so
+    # they never create ghost rows in the SQLite users/sessions tables.
+    has_user = bool((payload.get("user") or {}).get("id")) or bool((payload.get("user") or {}).get("email"))
     with _session_lock(sid):
-        if _session_store is None:
+        if _session_store is None or not has_user:
             _memory_sessions[sid] = payload
             return
         _session_store.save_state(sid, payload)
@@ -459,11 +518,11 @@ async def session_state_middleware(request: Request, call_next):
     switched_session_id = response.headers.get(_SESSION_SWITCH_HEADER)
     if switched_session_id:
         del response.headers[_SESSION_SWITCH_HEADER]
-        response.set_cookie(_STATE_COOKIE, switched_session_id, httponly=True, samesite="lax")
+        response.set_cookie(_STATE_COOKIE, switched_session_id, httponly=True, samesite="lax", secure=_COOKIE_SECURE)
         return response
     current_session_id = _S.session_id() or request_session_id
     if is_new or current_session_id != request_session_id:
-        response.set_cookie(_STATE_COOKIE, current_session_id, httponly=True, samesite="lax")
+        response.set_cookie(_STATE_COOKIE, current_session_id, httponly=True, samesite="lax", secure=_COOKIE_SECURE)
     # Skip the post-response state save for read-only endpoints. /api/state in
     # particular is polled every 8 s and used to clobber `google_oauth_state` set
     # by a concurrent /api/auth/google request — load happens before the OAuth
@@ -549,18 +608,52 @@ def _serialize_resume(r: dict) -> dict:
     }
 
 
+def _kick_extraction(record: dict, *, force: bool = False) -> None:
+    """Mark *record* as extracting on the bound session and spawn the
+    background thread. Centralizes the thread-launch boilerplate that
+    upload/demo/text-edit/primary-switch endpoints all need."""
+    _S["extracting_ids"].add(record["id"])
+    threading.Thread(
+        target=_run_extraction_bg,
+        args=(record, _S.current(), _S.session_id()),
+        kwargs={"force": force},
+        daemon=True,
+    ).start()
+
+
 def _run_extraction_bg(record: dict, state: dict, session_id: str | None,
                        force: bool = False) -> None:
+    """Background resume extraction.
+
+    Critical correctness invariant: the persisted save at the end MUST
+    operate on the LATEST state from storage, not the stale `state` dict
+    the caller passed in. Otherwise this thread silently undoes any
+    /api/reset, /api/resume/{id} delete, or rapid re-upload that
+    happened during the LLM call. Concretely: the thread captured a
+    reference to `state` at spawn time; by the time extraction returns
+    seconds-to-minutes later, that dict may no longer represent the
+    user's current session — but blindly saving it would clobber the DB.
+    """
     import traceback as _tb
     _bind_thread_state(state, session_id)
     rid = record["id"]
     lock = _session_lock(session_id)
+
+    # Mark as extracting on the dict the spawner can still observe (so the
+    # next /api/state poll shows the spinner) AND persist that to the DB
+    # so anyone reading the store also sees we're working.
     with lock:
         ids = state.get("extracting_ids")
         if not isinstance(ids, set):
             ids = set(ids or [])
             state["extracting_ids"] = ids
         ids.add(rid)
+        _save_bound_state(state, session_id)
+
+    # Run the actual LLM call OUTSIDE the lock — it's slow and we don't
+    # want to block other requests on the same session.
+    extraction_result = None
+    extraction_error: str | None = None
     try:
         prov = _make_provider()
         preferred = [
@@ -568,73 +661,88 @@ def _run_extraction_bg(record: dict, state: dict, session_id: str | None,
             for t in (state.get("job_titles") or "").split(",")
             if t.strip() and t.strip().lower() != "engineer"
         ]
-        result = phase1_ingest_resume(
+        extraction_result = phase1_ingest_resume(
             record["text"], prov,
             preferred_titles=preferred or None,
             force=force,
-            ollama_model=_ollama_model_for_insights(),
         )
-        with lock:
-            # Re-resolve the record from state in case the user uploaded
-            # another resume or deleted this one mid-extraction.
-            current = next(
-                (r for r in (state.get("resumes") or []) if r.get("id") == rid),
-                None,
+    except Exception as e:
+        extraction_error = str(e)
+        print(f"[resume extraction] {rid} failed: {_tb.format_exc()}", flush=True)
+
+    # Apply the result against the LATEST persisted state. Skip the write
+    # entirely if the resume is gone (deleted, or wiped by /api/reset).
+    with lock:
+        latest = _load_session_state(session_id) if session_id else state
+        target = next(
+            (r for r in (latest.get("resumes") or []) if r.get("id") == rid),
+            None,
+        )
+        if target is None:
+            print(
+                f"[resume extraction] {rid} dropped — resume no longer in session "
+                f"(reset or deletion during extraction)",
+                flush=True,
             )
-            target = current or record
-            target["profile"] = result
+            # Also clear the stale extracting flag from the in-memory state
+            # the spawner is still holding, in case it's still consulted.
+            ids = state.get("extracting_ids")
+            if isinstance(ids, set):
+                ids.discard(rid)
+            return
+
+        if extraction_result is not None:
+            target["profile"] = extraction_result
             target["updated_at"] = datetime.now().isoformat()
             target.pop("extract_error", None)
             # When the freshly-extracted resume is the primary, push every
             # scalar derived from it (profile, resume_text, latex_source,
-            # filename, done flag) so the Profile page reflects the new data
-            # without the user having to click anything.
+            # filename, done flag) so the Profile page reflects the new
+            # data without the user having to click anything.
             if target.get("primary"):
-                state["resume_text"] = target["text"]
-                state["latex_source"] = target.get("latex_source")
-                state["resume_filename"] = target["filename"]
-                state["profile"] = result
-                if result:
-                    state["done"].add(1)
-    except Exception as e:
-        with lock:
-            current = next(
-                (r for r in (state.get("resumes") or []) if r.get("id") == rid),
-                None,
-            )
-            target = current or record
-            target["extract_error"] = str(e)
-            print(f"[resume extraction] {rid} failed: {_tb.format_exc()}", flush=True)
-    finally:
-        with lock:
-            ids = state.get("extracting_ids")
-            if isinstance(ids, set):
-                ids.discard(rid)
-        _save_bound_state(state, session_id)
+                latest["resume_text"] = target["text"]
+                latest["latex_source"] = target.get("latex_source")
+                latest["resume_filename"] = target["filename"]
+                latest["profile"] = extraction_result
+                done = latest.get("done")
+                if not isinstance(done, set):
+                    done = set(done or [])
+                done.add(1)
+                latest["done"] = done
+        elif extraction_error is not None:
+            target["extract_error"] = extraction_error
+
+        # Drop our id from extracting_ids in the latest state.
+        ids_latest = latest.get("extracting_ids")
+        if not isinstance(ids_latest, set):
+            ids_latest = set(ids_latest or [])
+        ids_latest.discard(rid)
+        latest["extracting_ids"] = ids_latest
+
+        _save_bound_state(latest, session_id)
+
+        # Mirror the change into the spawner's in-memory dict so any
+        # subsequent reads from this thread (or an unfortunate cached
+        # reference) see consistent values. Safe: we hold the lock.
+        for k in ("resumes", "resume_text", "latex_source", "resume_filename",
+                  "profile", "done", "extracting_ids"):
+            if k in latest:
+                state[k] = latest[k]
 
 
-def _ollama_model_for_insights() -> str:
-    """Model used for the resume-insight verification step.
-
-    Always returns a model name so Demo / Anthropic users still get the LLM
-    double-check when a local Ollama daemon is reachable. Connection errors
-    are caught inside `verify_with_ollama`, which falls back to heuristic
-    insights when the daemon is offline.
-    """
-    return _S.get("ollama_model") or "llama3.2"
 # ── Provider factory ──────────────────────────────────────────────────────────
 
 def _make_provider():
     from pipeline.providers import DemoProvider, AnthropicProvider, OllamaProvider
-    mode = _S.get("mode", "demo")
+    mode = _S.get("mode", "ollama")
     if mode == "demo":
         return DemoProvider()
     if mode == "ollama":
-        return OllamaProvider(model=_S.get("ollama_model", "llama3.2"))
-    key = _S.get("api_key", "")
-    if key:
-        os.environ["ANTHROPIC_API_KEY"] = key
-    return AnthropicProvider()
+        return OllamaProvider(model=_S.get("ollama_model", DEFAULT_OLLAMA_MODEL))
+    # Pass the key directly to avoid mutating os.environ — a process-global that
+    # would race when multiple concurrent sessions use different API keys.
+    key = _S.get("api_key", "") or os.environ.get("ANTHROPIC_API_KEY", "")
+    return AnthropicProvider(api_key=key or None)
 
 # ── SSE helper ────────────────────────────────────────────────────────────────
 
@@ -964,13 +1072,7 @@ async def upload_resume(request: Request, file: UploadFile = File(...)):
     if is_first:
         _sync_primary_scalars(record)
 
-    # Pre-mark extracting so the very next /api/state poll sees the badge.
-    _S["extracting_ids"].add(record["id"])
-
-    # Auto-extract profile in a background thread for every upload
-    t = threading.Thread(target=_run_extraction_bg, args=(record, _S.current(), _S.session_id()), daemon=True)
-    t.start()
-
+    _kick_extraction(record)
     return {"ok": True, "filename": fname, "length": len(text), "id": record["id"], "extracting": True}
 
 @app.post("/api/resume/demo")
@@ -984,27 +1086,30 @@ def load_demo_resume(request: Request):
     resumes.append(record)
     if is_first:
         _sync_primary_scalars(record)
-    _S["extracting_ids"].add(record["id"])
-    t = threading.Thread(target=_run_extraction_bg, args=(record, _S.current(), _S.session_id()), daemon=True)
-    t.start()
+    _kick_extraction(record)
     return {"ok": True, "filename": "demo_resume.txt", "id": record["id"], "extracting": True}
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
 @app.post("/api/config")
 async def update_config(req: Request):
+    auth_user = _require_auth_user(req)
     body = await req.json()
-    # Plan gate: switching the LLM provider to Anthropic requires Pro. Devs with
-    # is_developer=1 (or LOCAL_DEV_BYPASS=1 on localhost) bypass so dev workflows
-    # aren't blocked.
-    if body.get("mode") == "anthropic":
-        auth_user = _auth_token_lookup(req.cookies.get(_AUTH_COOKIE, ""))
-        plan = (auth_user or {}).get("plan_tier") or "free"
-        if plan != "pro" and not _is_underlying_dev_request(req):
-            return JSONResponse(
-                {"ok": False, "error": "Claude requires the Pro plan", "code": "plan_required"},
-                status_code=402,
-            )
+    # Plan gates — devs bypass all of them.
+    plan = (auth_user or {}).get("plan_tier") or "free"
+    is_dev = _is_underlying_dev_request(req)
+    if body.get("mode") == "anthropic" and plan != "pro" and not is_dev:
+        return JSONResponse(
+            {"ok": False, "error": "Claude requires the Pro plan", "code": "plan_required"},
+            status_code=402,
+        )
+    if (body.get("ollama_model")
+            and str(body["ollama_model"]).lower().endswith("cloud")
+            and plan != "pro" and not is_dev):
+        return JSONResponse(
+            {"ok": False, "error": "Cloud models require the Pro plan", "code": "plan_required"},
+            status_code=402,
+        )
     for k in (
         "mode", "api_key", "ollama_model",
         "threshold", "job_titles", "location",
@@ -1173,7 +1278,7 @@ def get_state(request: Request):
         "resume_filename": _S.get("resume_filename"),
         "mode": _S.get("mode", "ollama"),
         "light_mode": bool(_S.get("light_mode")),
-        "ollama_model": _S.get("ollama_model", "llama3.2"),
+        "ollama_model": _S.get("ollama_model", DEFAULT_OLLAMA_MODEL),
         "threshold": _S.get("threshold", 75),
         "job_titles": _S.get("job_titles", ""),
         "location": _S.get("location", "United States"),
@@ -1219,9 +1324,11 @@ def get_state(request: Request):
         "plan_tier": (auth_user or {}).get("plan_tier", "free"),
         "is_pro": (auth_user or {}).get("plan_tier") == "pro",
 
-        # Don't synthesize a fake user from is_dev — uploads require a real auth_user,
-        # so a synthesized one would let the frontend bypass login and then 401 on upload.
-        "user": auth_user or _S.get("user"),
+        # Only return a user when the auth token in the request cookie is valid.
+        # Falling back to _S.get("user") (session state) lets stale sessions appear
+        # logged-in even after the token is gone, causing silent 401s on every
+        # write endpoint while the frontend shows no sign-in option.
+        "user": auth_user,
         "resumes": [_serialize_resume(r) for r in (_S.get("resumes") or [])],
 
         # UI state
@@ -1231,7 +1338,8 @@ def get_state(request: Request):
     }
 
 @app.post("/api/reset")
-def reset_state():
+def reset_state(request: Request):
+    _require_auth_user(request)
     # Preserve auth + provider/UI prefs so the user stays logged in and configured
     preserved = {
         k: _S.get(k) for k in (
@@ -1248,18 +1356,13 @@ def reset_state():
         if v is not None:
             state[k] = v
 
-    # Wipe generated output files for this session (resumes, trackers, reports)
-    try:
-        out_dir = _session_output_dir()
-        if out_dir.exists():
-            for f in out_dir.iterdir():
-                if f.is_file():
-                    try:
-                        f.unlink()
-                    except Exception:
-                        pass
-    except Exception:
-        pass
+    # Wipe generated output files for this session (resumes, trackers, reports).
+    # rmtree+mkdir is simpler than per-file unlink and tolerates Windows file
+    # handles still in use mid-extraction.
+    import shutil
+    out_dir = _session_output_dir()
+    shutil.rmtree(out_dir, ignore_errors=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
     return {"ok": True}
 
 
@@ -1296,8 +1399,8 @@ async def auth_login(req: Request):
         _tb.print_exc()
         return JSONResponse({"ok": False, "error": f"Login failed: {exc}"}, status_code=500)
     resp = JSONResponse({"ok": True, "user": {"email": user["email"]}})
-    resp.set_cookie(_AUTH_COOKIE, token, httponly=True, samesite="lax")
-    resp.set_cookie(_STATE_COOKIE, app_session_id, httponly=True, samesite="lax")
+    resp.set_cookie(_AUTH_COOKIE, token, httponly=True, samesite="lax", secure=_COOKIE_SECURE)
+    resp.set_cookie(_STATE_COOKIE, app_session_id, httponly=True, samesite="lax", secure=_COOKIE_SECURE)
     resp.headers[_SESSION_SWITCH_HEADER] = app_session_id
     return resp
 
@@ -1311,6 +1414,8 @@ async def auth_signup(req: Request):
     password = body.get("password") or ""
     if not email or len(password) < 6:
         return JSONResponse({"ok": False, "error": "Valid email and password (≥6 chars) required"})
+    if not _is_valid_email(email):
+        return JSONResponse({"ok": False, "error": "Please enter a valid email address."})
     if _user_store is None:
         return JSONResponse({"ok": False, "error": "Auth store unavailable"})
     try:
@@ -1328,21 +1433,63 @@ async def auth_signup(req: Request):
         _tb.print_exc()
         return JSONResponse({"ok": False, "error": f"Signup failed: {exc}"}, status_code=500)
     resp = JSONResponse({"ok": True, "user": {"email": email}})
-    resp.set_cookie(_AUTH_COOKIE, token, httponly=True, samesite="lax")
-    resp.set_cookie(_STATE_COOKIE, app_session_id, httponly=True, samesite="lax")
+    resp.set_cookie(_AUTH_COOKIE, token, httponly=True, samesite="lax", secure=_COOKIE_SECURE)
+    resp.set_cookie(_STATE_COOKIE, app_session_id, httponly=True, samesite="lax", secure=_COOKIE_SECURE)
     resp.headers[_SESSION_SWITCH_HEADER] = app_session_id
     return resp
 
 @app.post("/api/auth/logout")
 def auth_logout(request: Request):
+    # Drop the bearer token from the DB. Failures here are non-fatal: even
+    # if the row can't be deleted, we still want the response to clear the
+    # cookies so the client side stops sending them.
     token = request.cookies.get(_AUTH_COOKIE, "")
     if token:
-        _auth_token_delete(token)
-    app_session_id = _start_session()
+        try:
+            _auth_token_delete(token)
+        except Exception:
+            import traceback as _tb
+            _tb.print_exc()
+
+    # Allocate a fresh anonymous session-id. If anything blows up in the
+    # session layer we still respond OK with cleared cookies — the
+    # primary contract of /api/auth/logout is "make the client signed out",
+    # not "create a perfect new session".
+    app_session_id = ""
+    try:
+        app_session_id = _start_session() or ""
+    except Exception:
+        import traceback as _tb
+        _tb.print_exc()
+        app_session_id = uuid.uuid4().hex
+
     resp = JSONResponse({"ok": True})
-    resp.delete_cookie(_AUTH_COOKIE)
-    resp.set_cookie(_STATE_COOKIE, app_session_id, httponly=True, samesite="lax")
-    resp.headers[_SESSION_SWITCH_HEADER] = app_session_id
+    # IMPORTANT: delete_cookie must mirror the path / samesite / secure /
+    # httponly attributes the cookie was originally SET with. If they
+    # don't match, browsers ignore the delete and keep the original
+    # cookie alive — the user appears "still logged in" even after a 200.
+    # We also explicitly overwrite with an expired value as a belt-and-
+    # suspenders so older or non-spec-compliant clients still drop it.
+    resp.delete_cookie(
+        _AUTH_COOKIE, path="/", samesite="lax",
+        secure=_COOKIE_SECURE, httponly=True,
+    )
+    resp.set_cookie(
+        _AUTH_COOKIE, "", max_age=0, expires=0, path="/",
+        samesite="lax", secure=_COOKIE_SECURE, httponly=True,
+    )
+    # Same defensive deletion of any dev-impersonation cookie so the user
+    # can't accidentally remain in someone else's session post-logout.
+    resp.delete_cookie(
+        _DEV_IMPERSONATE_COOKIE, path="/", samesite="lax",
+        secure=_COOKIE_SECURE, httponly=True,
+    )
+    resp.set_cookie(
+        _STATE_COOKIE, app_session_id, httponly=True,
+        samesite="lax", secure=_COOKIE_SECURE,
+    )
+    if app_session_id:
+        resp.headers[_SESSION_SWITCH_HEADER] = app_session_id
     return resp
 
 @app.get("/api/auth/google")
@@ -1429,8 +1576,8 @@ def auth_google_callback(request: Request, code: str = "", state: str = ""):
             file=sys.stderr,
         )
         resp = RedirectResponse("/app")
-        resp.set_cookie(_AUTH_COOKIE, token, httponly=True, samesite="lax")
-        resp.set_cookie(_STATE_COOKIE, app_session_id, httponly=True, samesite="lax")
+        resp.set_cookie(_AUTH_COOKIE, token, httponly=True, samesite="lax", secure=_COOKIE_SECURE)
+        resp.set_cookie(_STATE_COOKIE, app_session_id, httponly=True, samesite="lax", secure=_COOKIE_SECURE)
         resp.headers[_SESSION_SWITCH_HEADER] = app_session_id
         return resp
     except Exception as exc:
@@ -1444,12 +1591,14 @@ def auth_google_callback(request: Request, code: str = "", state: str = ""):
 # ── Profile ───────────────────────────────────────────────────────────────────
 
 @app.get("/api/profile")
-def get_profile():
+def get_profile(request: Request):
+    _require_auth_user(request)
     return _S.get("profile") or {}
 
 @app.post("/api/profile")
-async def save_profile(req: Request):
-    body = await req.json()
+async def save_profile(request: Request):
+    _require_auth_user(request)
+    body = await request.json()
     if _S.get("profile"):
         _S["profile"].update(body)
     else:
@@ -1457,8 +1606,9 @@ async def save_profile(req: Request):
     return {"ok": True}
 
 @app.post("/api/profile/extract")
-async def extract_profile(req: Request):
-    body = await req.json()
+async def extract_profile(request: Request):
+    _require_auth_user(request)
+    body = await request.json()
     resume_id = body.get("resume_id", "")
     target = _get_resume_by_id(resume_id) if resume_id else _get_primary_resume()
     if not target:
@@ -1476,23 +1626,70 @@ async def extract_profile(req: Request):
         _S["profile"] = None
         _S["done"].discard(1)
 
-    # Mark extracting in the request thread so the middleware-saved state
-    # already reflects it before the worker thread is even scheduled.
-    _S["extracting_ids"].add(target["id"])
-
-    threading.Thread(
-        target=_run_extraction_bg,
-        args=(target, _S.current(), _S.session_id()),
-        kwargs={"force": force},
-        daemon=True,
-    ).start()
+    _kick_extraction(target, force=force)
     return {"ok": True, "extracting": True, "resume_id": target["id"]}
+
+
+@app.get("/api/profile/diagnose")
+def diagnose_profile(request: Request, id: str = ""):
+    """Diagnostic: run the heuristic extractor on the active resume and
+    return its raw output WITHOUT calling the LLM. Used to debug why a
+    Profile-page section came back empty — hit this endpoint and look at
+    each section to see exactly what the regex/parsing pass found.
+    """
+    _require_auth_user(request)
+    target = _get_resume_by_id(id) if id else _get_primary_resume()
+    if not target:
+        raise HTTPException(400, "No resume loaded")
+    text = target.get("text") or ""
+    if not text.strip():
+        return {
+            "ok": False,
+            "error": "Resume preview text is empty — PDF extraction may have failed.",
+            "filename": target.get("filename", ""),
+            "text_length": 0,
+        }
+
+    from pipeline.profile_extractor import scan_profile, heuristic_summary
+    from pipeline.providers import DemoProvider
+
+    p = scan_profile(text)
+    sections = DemoProvider._split_sections(text)
+    section_summary = {
+        k: {"line_count": len(v), "preview": (v[0] if v else "")[:120]}
+        for k, v in sections.items()
+    }
+    return {
+        "ok": True,
+        "filename": target.get("filename", ""),
+        "text_length": len(text),
+        "summary": heuristic_summary(p),
+        "sections_detected": section_summary,
+        "fields": {
+            "name": p.get("name"),
+            "email": p.get("email"),
+            "phone": p.get("phone"),
+            "linkedin": p.get("linkedin"),
+            "github": p.get("github"),
+            "location": p.get("location"),
+            "summary": p.get("summary"),
+            "target_titles": p.get("target_titles"),
+            "top_hard_skills": p.get("top_hard_skills"),
+            "top_soft_skills": p.get("top_soft_skills"),
+            "education": p.get("education"),
+            "experience": p.get("experience"),
+            "research_experience": p.get("research_experience"),
+            "projects": p.get("projects"),
+            "resume_gaps": p.get("resume_gaps"),
+        },
+    }
 
 
 # ── Resume extra endpoints ────────────────────────────────────────────────────
 
 @app.get("/api/resume/content")
-def resume_content(id: str = ""):
+def resume_content(request: Request, id: str = ""):
+    _require_auth_user(request)
     if id:
         r = _get_resume_by_id(id)
         return {"text": r["text"] if r else ""}
@@ -1500,24 +1697,32 @@ def resume_content(id: str = ""):
     return {"text": pr["text"] if pr else ""}
 
 @app.post("/api/resume/text")
-async def resume_save_text(req: Request):
-    body = await req.json()
-    text = body.get("text", "")
+async def resume_save_text(request: Request):
+    _require_auth_user(request)
+    body = await request.json()
+    text = (body.get("text") or "").strip()
     rid = body.get("id", "")
+    if not text:
+        raise HTTPException(400, "Resume text cannot be empty")
     now = datetime.now().isoformat()
     r = _get_resume_by_id(rid) if rid else _get_primary_resume()
-    if r:
-        r["text"] = text
-        r["updated_at"] = now
-        # Editing clears this resume's stored profile so it needs re-extraction
-        r["profile"] = None
-        if r.get("primary"):
-            _S["resume_text"] = text
-            _S["done"].discard(1)
-    return {"ok": True}
+    if not r:
+        raise HTTPException(404, "Resume not found")
+    r["text"] = text
+    r["updated_at"] = now
+    r["profile"] = None
+    if r.get("primary"):
+        _S["resume_text"] = text
+        _S["latex_source"] = None
+        _S["done"].discard(1)
+        _S["profile"] = None
+    # Re-run extraction so the edited / pasted resume is fully analyzed.
+    _kick_extraction(r, force=True)
+    return {"ok": True, "id": r["id"], "extracting": True}
 
 @app.delete("/api/resume/{resume_id}")
-def resume_delete(resume_id: str):
+def resume_delete(resume_id: str, request: Request):
+    _require_auth_user(request)
     resumes = _S.get("resumes") or []
     target = _get_resume_by_id(resume_id)
     if not target:
@@ -1538,7 +1743,8 @@ def resume_delete(resume_id: str):
     return {"ok": True}
 
 @app.post("/api/resume/primary/{resume_id}")
-def resume_set_primary(resume_id: str):
+def resume_set_primary(resume_id: str, request: Request):
+    _require_auth_user(request)
     target = _get_resume_by_id(resume_id)
     if not target:
         raise HTTPException(404, "Resume not found")
@@ -1569,17 +1775,13 @@ def resume_set_primary(resume_id: str):
         and target["id"] not in (_S.get("extracting_ids") or set())
     )
     if needs_extraction:
-        _S["extracting_ids"].add(target["id"])
-        threading.Thread(
-            target=_run_extraction_bg,
-            args=(target, _S.current(), _S.session_id()),
-            daemon=True,
-        ).start()
+        _kick_extraction(target)
 
     return {"ok": True, "extracting": needs_extraction or not target.get("profile")}
 
 @app.post("/api/resume/rename/{resume_id}")
 async def resume_rename(resume_id: str, req: Request):
+    _require_auth_user(req)
     body = await req.json()
     new_name = body.get("filename", "")
     if not new_name:
@@ -1597,8 +1799,9 @@ async def resume_rename(resume_id: str, req: Request):
 # ── Jobs actions ─────────────────────────────────────────────────────────────
 
 @app.post("/api/jobs/action")
-async def jobs_action(req: Request):
-    body = await req.json()
+async def jobs_action(request: Request):
+    _require_auth_user(request)
+    body = await request.json()
     action = body.get("action", "")
     job_id = body.get("job_id", "")
     if action == "like":
@@ -1616,10 +1819,15 @@ async def jobs_action(req: Request):
 
 
 def _find_job_by_id(job_id: str) -> dict | None:
-    """Look up a job by id across the session's known job lists.
+    """Look up a job by id across the session's known job lists, then fall
+    back to the persistent ingested-jobs store.
 
-    Frontend ids are computed as ``f"{company}|{title}"`` when the underlying
-    record has no explicit id, so we match against both forms.
+    Frontend ids come in two flavors:
+      • ``f"{company}|{title}"`` for in-session demo / scored jobs that lack
+        a stable id;
+      • a hash from ``pipeline.job_repo._job_id(canonical_url)`` for jobs
+        served by ``GET /api/jobs/feed`` (the persistent store).
+    Both are handled.
     """
     if not job_id:
         return None
@@ -1633,14 +1841,19 @@ def _find_job_by_id(job_id: str) -> dict | None:
             jid = j.get("id") or f"{j.get('company', '')}|{j.get('title', '')}"
             if jid == job_id:
                 return j
-    # Also try the persistent job_postings store (post-ingest worker path)
-    try:
-        from pipeline import job_repo
-        rec = job_repo.get_job(job_id) if hasattr(job_repo, "get_job") else None
-        if rec:
-            return rec
-    except Exception:
-        pass
+    # Fall back to the persistent job_postings store. /api/jobs/feed serves
+    # jobs from here; their ids are hashes of canonical_url, not co|title,
+    # so the in-session pools above will never match them.
+    if _session_store is not None:
+        try:
+            from pipeline import job_repo
+            with _session_store.connect() as conn:
+                rec = job_repo.get_job(conn, job_id)
+            if rec:
+                return rec
+        except Exception as exc:
+            print(f"[ask atlas] job_repo lookup failed for {job_id!r}: {type(exc).__name__}: {exc}",
+                  file=sys.stderr)
     return None
 
 
@@ -1754,6 +1967,7 @@ async def jobs_ask(req: Request):
     Body: { job_id: str, message: str, history?: [{role, content}, ...] }
     Returns: { reply: str, mode: str, job: { co, role } }
     """
+    _require_auth_user(req)
     body = await req.json()
     job_id = (body.get("job_id") or "").strip()
     message = (body.get("message") or "").strip()
@@ -1779,7 +1993,7 @@ async def jobs_ask(req: Request):
             trimmed.append({"role": role, "content": content})
     trimmed.append({"role": "user", "content": message})
 
-    mode = _S.get("mode", "demo")
+    mode = _S.get("mode", "ollama")
     try:
         provider = _make_provider()
         reply = provider.chat(system, trimmed, max_tokens=1024)
@@ -1797,6 +2011,248 @@ async def jobs_ask(req: Request):
             "role": job.get("title") or job.get("role") or "",
         },
     }
+
+
+# ── Atlas — career-wide chat (broad context, streaming) ──────────────────────
+
+
+def _build_atlas_career_prompt(state: dict) -> str:
+    """Build a system prompt that gives Atlas the user's full career snapshot:
+    profile, target titles, all discovered jobs (capped), top-scored matches,
+    submitted applications, and the most recent run-report excerpt.
+
+    Atlas's job is to be a strategist for THIS user's overall search — not a
+    single job. Be specific, cite real numbers, name real companies.
+    """
+    def _short(text: str, n: int = 1200) -> str:
+        text = (text or "").strip()
+        return (text[:n] + "…") if len(text) > n else text
+
+    profile = state.get("profile") or {}
+    jobs = state.get("jobs") or []
+    scored = state.get("scored") or []
+    apps = state.get("applications") or []
+    report = state.get("report") or ""
+
+    p_lines: list[str] = []
+    for label, key in [
+        ("Name", "name"), ("Email", "email"), ("Location", "location"),
+        ("Target titles", "target_titles"),
+        ("Top hard skills", "top_hard_skills"),
+        ("Top soft skills", "top_soft_skills"),
+        ("Education", "education"),
+        ("Years of experience", "years_experience"),
+        ("Resume gaps", "resume_gaps"),
+    ]:
+        v = profile.get(key)
+        if not v:
+            continue
+        if isinstance(v, (list, tuple, set)):
+            items = []
+            for entry in list(v)[:8]:
+                if isinstance(entry, dict):
+                    items.append(entry.get("title") or entry.get("name") or entry.get("school") or str(entry))
+                else:
+                    items.append(str(entry))
+            p_lines.append(f"{label}: {', '.join(s for s in items if s)}")
+        else:
+            p_lines.append(f"{label}: {v}")
+    profile_block = "\n".join(p_lines) or "(no profile loaded)"
+
+    # Compact per-job line: role, score (if scored), short URL host.
+    def _job_line(j: dict, with_score: bool = False) -> str:
+        co = (j.get("company") or j.get("co") or "").strip()
+        role = (j.get("title") or j.get("role") or "").strip()
+        loc = (j.get("location") or j.get("loc") or "").strip()
+        score = j.get("score")
+        bits = [f"{co} — {role}" if co or role else "(unknown role)"]
+        if loc:
+            bits.append(loc)
+        if with_score and score is not None:
+            bits.append(f"score {score}")
+        return " · ".join(bits)
+
+    discovered_total = len(jobs)
+    discovered_block = (
+        f"Total discovered: {discovered_total}\n"
+        + "\n".join(f"  • {_job_line(j)}" for j in jobs[:14])
+    ) if jobs else "(none discovered yet — Phase 2 not run)"
+
+    passed = sorted(
+        [j for j in scored if (j.get("filter_status") == "passed")],
+        key=lambda x: x.get("score", 0),
+        reverse=True,
+    )
+    if passed:
+        scored_block = (
+            f"Passed scoring: {len(passed)} of {len(scored)}\n"
+            + "\n".join(f"  • {_job_line(j, with_score=True)}" for j in passed[:10])
+        )
+    else:
+        scored_block = "(no scored matches yet — Phase 3 not run)"
+
+    if apps:
+        applied = [a for a in apps if a.get("status") == "Applied"]
+        manual  = [a for a in apps if a.get("status") == "Manual Required"]
+        skipped = [a for a in apps if a.get("status") == "Skipped"]
+        apps_block = (
+            f"Applied: {len(applied)} · Manual: {len(manual)} · Skipped: {len(skipped)}\n"
+            + "\n".join(
+                f"  • [{a.get('status', '?')}] {_job_line(a, with_score=True)}"
+                + (f"  conf={a.get('confirmation')}" if a.get("confirmation") and a.get("confirmation") != "N/A" else "")
+                for a in apps[:12]
+            )
+        )
+    else:
+        apps_block = "(no applications submitted yet — Phase 5 not run)"
+
+    report_block = _short(str(report or ""), n=1500) or "(no run report yet — Phase 7 not run)"
+
+    threshold = state.get("threshold") or 75
+    mode = state.get("mode") or "anthropic"
+
+    return (
+        "You are Atlas, the user's personal career strategist and job-search companion. "
+        "You have direct visibility into their resume profile, the jobs they've discovered, "
+        "how those jobs were scored against their skills, which applications they've submitted, "
+        "and the most recent pipeline run-report. Speak directly to the user (\"you\").\n\n"
+        "Your job is to be the world's expert on THIS user's job search. Be specific: cite real "
+        "companies and roles from the data below by name; quote their actual top skills; reference "
+        "their score threshold and applied/manual counts when relevant. Avoid generic career advice "
+        "that could apply to anyone. If you don't have the data to answer well (e.g. a phase hasn't "
+        "run yet), say so plainly and suggest which phase to run.\n\n"
+        "Tone: direct, warm but not gushing, brief. 2 to 5 short paragraphs unless the user asks for "
+        "a list. Use plain text. Never invent facts not in the data below.\n\n"
+        f"Score threshold for auto-eligibility: {threshold}/100.   Provider mode: {mode}.\n\n"
+        "==================== USER PROFILE ====================\n"
+        f"{profile_block}\n"
+        "================== DISCOVERED JOBS (Phase 2) =========\n"
+        f"{discovered_block}\n"
+        "================== TOP-SCORED MATCHES (Phase 3) ======\n"
+        f"{scored_block}\n"
+        "================== APPLICATIONS (Phase 5) ============\n"
+        f"{apps_block}\n"
+        "================== RUN REPORT (Phase 7, excerpt) =====\n"
+        f"{report_block}\n"
+        "======================================================="
+    )
+
+
+def _stream_provider_chat(provider, system: str, messages: list, max_tokens: int = 1024):
+    """Yield text deltas for any of our three provider types."""
+    from pipeline.providers import AnthropicProvider, OllamaProvider, DemoProvider
+
+    if isinstance(provider, AnthropicProvider):
+        clean = [
+            {"role": m["role"], "content": str(m.get("content", ""))}
+            for m in (messages or [])
+            if m.get("role") in ("user", "assistant") and (m.get("content") or "").strip()
+        ]
+        if not clean:
+            return
+        with provider.client.messages.stream(
+            model=provider.model,
+            max_tokens=max_tokens,
+            system=system or "",
+            messages=clean,
+        ) as stream:
+            for text in stream.text_stream:
+                if text:
+                    yield text
+        return
+
+    if isinstance(provider, OllamaProvider):
+        try:
+            from openai import OpenAI
+        except ImportError:
+            yield "(openai package missing — pip install openai to enable Ollama chat)"
+            return
+        oc = OpenAI(base_url=f"{provider.OLLAMA_URL}/v1", api_key="ollama", timeout=180)
+        msgs: list = []
+        if system:
+            msgs.append({"role": "system", "content": str(system)})
+        for m in (messages or []):
+            if m.get("role") in ("user", "assistant") and (m.get("content") or "").strip():
+                msgs.append({"role": m["role"], "content": str(m["content"])})
+        if len(msgs) == (1 if system else 0):
+            return
+        resp = oc.chat.completions.create(
+            model=provider.model, messages=msgs,
+            max_tokens=max_tokens, stream=True,
+        )
+        for chunk in resp:
+            try:
+                delta = chunk.choices[0].delta.content if chunk.choices else None
+            except (AttributeError, IndexError):
+                delta = None
+            if delta:
+                yield delta
+        return
+
+    if isinstance(provider, DemoProvider):
+        # Demo mode has no live LLM — fall back to the canned reply, streamed word-by-word.
+        text = provider.chat(system, messages, max_tokens=max_tokens)
+        for word in text.split():
+            yield word + " "
+        return
+
+    # Unknown provider — fall back to a single non-streamed reply.
+    yield provider.chat(system, messages, max_tokens=max_tokens)
+
+
+@app.post("/api/atlas/chat/stream")
+async def atlas_chat_stream(req: Request):
+    """Stream a career-wide Atlas reply via SSE.
+
+    Body: { message: str, history?: [{role, content}, ...] }
+    Emits: data: {type:"delta",text:"..."} repeatedly, then {type:"done"} or {type:"error"}.
+    """
+    _require_auth_user(req)
+    body = await req.json()
+    message = (body.get("message") or "").strip()
+    history = body.get("history") or []
+    if not message:
+        raise HTTPException(400, "Empty message")
+
+    state_snapshot = _S.current()
+    session_id = _S.session_id()
+    system = _build_atlas_career_prompt(state_snapshot)
+
+    trimmed: list[dict] = []
+    for turn in history[-12:]:
+        if not isinstance(turn, dict):
+            continue
+        role = turn.get("role")
+        content = (turn.get("content") or "").strip()
+        if role in ("user", "assistant") and content:
+            trimmed.append({"role": role, "content": content})
+    trimmed.append({"role": "user", "content": message})
+
+    mode = state_snapshot.get("mode", "ollama")
+
+    def _gen():
+        # Re-bind state inside the generator's thread (StreamingResponse runs the
+        # body on a worker), matching the pattern used by the phase SSE helpers.
+        _bind_thread_state(state_snapshot, session_id)
+        yield _sse({"type": "start", "mode": mode})
+        try:
+            provider = _make_provider()
+            empty = True
+            for delta in _stream_provider_chat(provider, system, trimmed, max_tokens=1024):
+                if delta:
+                    empty = False
+                    yield _sse({"type": "delta", "text": delta})
+            if empty:
+                yield _sse({"type": "delta", "text": "(no response — provider returned nothing)"})
+            yield _sse({"type": "done", "mode": mode})
+        except Exception as exc:
+            yield _sse({"type": "error", "message": f"{type(exc).__name__}: {exc}"})
+
+    return StreamingResponse(
+        _gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ── New job feed (R2) ────────────────────────────────────────────────────────
@@ -1845,6 +2301,7 @@ def jobs_feed(request: Request):
       since_id    — return rows whose last_seen_at > the given id's
                     last_seen_at (used for the 25s polling tick).
     """
+    _require_auth_user(request)
     if _session_store is None:
         return {"jobs": [], "next_cursor": None, "total_estimate": 0,
                 "warning": "session store unavailable"}
@@ -1951,8 +2408,9 @@ async def jobs_source_status_force(request: Request):
 # ── Feedback ──────────────────────────────────────────────────────────────────
 
 @app.post("/api/feedback")
-async def submit_feedback(req: Request):
-    body = await req.json()
+async def submit_feedback(request: Request):
+    _require_auth_user(request)
+    body = await request.json()
     msg = (body.get("message") or "").strip()
     if not msg:
         raise HTTPException(400, "Message is required")
@@ -1988,15 +2446,14 @@ def _is_underlying_dev_request(request: Request) -> bool:
     view. Without this, a dev who flips `Test as Customer` would be
     locked out of every /api/dev/* endpoint and have no way back.
     """
+    _DEV_EMAIL = "jonnyliu4@gmail.com"
     auth_user = _auth_token_lookup(request.cookies.get(_AUTH_COOKIE, ""))
     if auth_user and auth_user.get("id") and _user_store is not None:
         fresh = _user_store.get_user_by_id(auth_user["id"])
         if fresh and bool(fresh.get("is_developer")):
             return True
-    if os.environ.get("LOCAL_DEV_BYPASS") == "1":
-        host = getattr(request.client, "host", "") if request.client else ""
-        if host in ("127.0.0.1", "::1", "localhost"):
-            return True
+    if auth_user and auth_user.get("email", "").lower() == _DEV_EMAIL:
+        return True
     return False
 
 
@@ -2062,8 +2519,8 @@ def dev_overview(request: Request):
             "output_files": len(out_files),
             "session_files": len(sessions),
             "session_db_mb": round(
-                (OUTPUT_DIR / "jobs_ai_sessions.sqlite3").stat().st_size / 1e6, 2
-            ) if (OUTPUT_DIR / "jobs_ai_sessions.sqlite3").exists() else 0,
+                DB_PATH.stat().st_size / 1e6, 2
+            ) if DB_PATH.exists() else 0,
             "disk_free_gb": round(disk.free / 1e9, 1),
             "tweaks": _S.get("dev_tweaks") or {},
         },
@@ -2112,13 +2569,17 @@ def dev_impersonate(session_id: str, request: Request):
         raise HTTPException(403, "Developer access denied")
     _load_session_state(session_id)
     response = JSONResponse({"ok": True})
-    response.set_cookie(_DEV_IMPERSONATE_COOKIE, session_id, httponly=True, samesite="lax")
+    response.set_cookie(_DEV_IMPERSONATE_COOKIE, session_id, httponly=True, samesite="lax", secure=_COOKIE_SECURE)
     return response
 
 @app.post("/api/dev/session/stop-impersonating")
 def dev_stop_impersonate(request: Request):
     response = JSONResponse({"ok": True})
-    response.delete_cookie(_DEV_IMPERSONATE_COOKIE)
+    # Mirror the attrs used in dev_impersonate's set_cookie above.
+    response.delete_cookie(
+        _DEV_IMPERSONATE_COOKIE, path="/", samesite="lax",
+        secure=_COOKIE_SECURE, httponly=True,
+    )
     return response
 
 @app.post("/api/dev/session/{session_id}/feedback/read")
@@ -2145,7 +2606,7 @@ async def dev_cli(request: Request):
     command = body.get("command", "")
     import subprocess
     output_dir = str(OUTPUT_DIR)
-    db_path = str(OUTPUT_DIR / "jobs_ai_sessions.sqlite3")
+    db_path = str(DB_PATH)
 
     def _recent_outputs() -> str:
         if not os.path.isdir(output_dir):
@@ -2201,8 +2662,8 @@ def dev_runtime_get(request: Request):
         "runtime": dict(_RUNTIME),
         "env": {
             "anthropic_key_present": bool(os.environ.get("ANTHROPIC_API_KEY")),
-            "local_dev_bypass": os.environ.get("LOCAL_DEV_BYPASS") == "1",
-            "ollama_url": os.environ.get("OLLAMA_URL", "http://localhost:11434"),
+            "ollama_url": OLLAMA_URL,
+            "default_ollama_model": DEFAULT_OLLAMA_MODEL,
             "smtp_configured": all(os.environ.get(k) for k in ("SMTP_HOST", "SMTP_USER", "SMTP_PASS")),
         },
         "session": {
@@ -2329,7 +2790,6 @@ def run_phase1():
         result = phase1_ingest_resume(
             _S["resume_text"], prov,
             preferred_titles=preferred or None,
-            ollama_model=_ollama_model_for_insights(),
         )
         _S["profile"] = result
         # Persist profile on the primary resume record so it survives primary switches
@@ -2604,97 +3064,236 @@ def phase2_cache_clear():
 
 # ── Ollama helpers ────────────────────────────────────────────────────────────
 
-@app.get("/api/ollama/status")
-def ollama_status():
+
+# Tracks any in-flight Ollama model pull (server-side) so the UI can render a
+# live progress indicator and other users see the same status. OLLAMA_URL and
+# DEFAULT_OLLAMA_MODEL are hoisted near the top of the file because
+# _default_state() references DEFAULT_OLLAMA_MODEL at module-init time.
+_OLLAMA_PULLS: dict[str, dict] = {}
+_OLLAMA_PULL_LOCK = threading.Lock()
+
+
+def _ollama_models_snapshot() -> dict:
+    """Best-effort: list the models currently pulled on the server's Ollama."""
     import urllib.request as _ur
     import json as _json
-    model = _S.get("ollama_model", "llama3.2")
     try:
-        resp = _ur.urlopen("http://localhost:11434/api/tags", timeout=3)
+        resp = _ur.urlopen(f"{OLLAMA_URL}/api/tags", timeout=3)
         data = _json.loads(resp.read().decode())
-        models = data.get("models", [])
-        local_names = [m.get("name", "") for m in models]
-        local_bases = {n.split(":")[0] for n in local_names}
-        req_base = model.split(":")[0]
-        pulled = (model in local_names) or (req_base in local_bases)
-        # Build rich model list with metadata
-        model_list = [
-            {
-                "name":   m.get("name", ""),
-                "size_gb": round(m.get("size", 0) / 1e9, 1),
-                "family": m.get("details", {}).get("family", ""),
-                "params": m.get("details", {}).get("parameter_size", ""),
-            }
-            for m in models
-        ]
+        models = data.get("models", []) or []
         return {
-            "running": True, "pulled": pulled, "model": model,
-            "available": sorted(local_bases),
-            "models": model_list,
+            "running": True,
+            "names": [m.get("name", "") for m in models],
+            "bases": {n.split(":")[0] for n in (m.get("name", "") for m in models)},
+            "models": [
+                {
+                    "name":    m.get("name", ""),
+                    "size_gb": round(m.get("size", 0) / 1e9, 1),
+                    "family":  m.get("details", {}).get("family", ""),
+                    "params":  m.get("details", {}).get("parameter_size", ""),
+                }
+                for m in models
+            ],
         }
-    except Exception as e:
-        return {"running": False, "pulled": False, "model": model, "available": [], "models": [], "error": str(e)}
+    except Exception as exc:
+        return {"running": False, "names": [], "bases": set(), "models": [], "error": str(exc)}
+
+
+def _is_model_pulled(model: str, snapshot: dict | None = None) -> bool:
+    snap = snapshot if snapshot is not None else _ollama_models_snapshot()
+    if not snap.get("running"):
+        return False
+    if model in snap["names"]:
+        return True
+    base = model.split(":")[0]
+    return base in snap["bases"]
+
+
+def _ollama_pull_via_api(model: str):
+    """Pull a model via Ollama's HTTP /api/pull — no `ollama` CLI needed.
+
+    Yields parsed JSON progress dicts as Ollama emits them. Designed to be
+    consumed both by the SSE endpoint (live UI updates) and the background
+    boot-time auto-puller (status tracking only).
+    """
+    import urllib.request as _ur
+    import json as _json
+    body = _json.dumps({"name": model, "stream": True}).encode()
+    req = _ur.Request(
+        f"{OLLAMA_URL}/api/pull",
+        data=body,
+        headers={"Content-Type": "application/json"},
+    )
+    # No timeout — model pulls can run for many minutes.
+    with _ur.urlopen(req) as resp:
+        for line in resp:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                yield _json.loads(line.decode())
+            except _json.JSONDecodeError:
+                continue
+
+
+def _begin_background_pull(model: str) -> dict:
+    """Start a background pull for `model` if one isn't already running.
+
+    Returns the (possibly already-existing) pull-state dict so callers can
+    poll progress.
+    """
+    with _OLLAMA_PULL_LOCK:
+        existing = _OLLAMA_PULLS.get(model)
+        if existing and existing.get("status") in ("starting", "pulling"):
+            return existing
+        state = {
+            "model":    model,
+            "status":   "starting",
+            "started":  time.time(),
+            "percent":  0,
+            "stage":    "",
+            "error":    None,
+            "completed": None,
+        }
+        _OLLAMA_PULLS[model] = state
+
+    def _runner():
+        try:
+            state["status"] = "pulling"
+            for evt in _ollama_pull_via_api(model):
+                # Ollama emits {"status": "pulling manifest" / "downloading X" /
+                # "verifying digest" / "success", ...} with optional
+                # "completed"/"total" byte counters.
+                state["stage"] = str(evt.get("status") or "")
+                completed = evt.get("completed")
+                total = evt.get("total")
+                if isinstance(completed, (int, float)) and isinstance(total, (int, float)) and total > 0:
+                    state["percent"] = max(0, min(100, int(completed / total * 100)))
+                if "error" in evt and evt["error"]:
+                    raise RuntimeError(str(evt["error"]))
+                if state["stage"] == "success":
+                    state["percent"] = 100
+                    break
+            state["status"] = "done"
+            state["completed"] = time.time()
+        except Exception as exc:
+            state["status"] = "error"
+            state["error"] = f"{type(exc).__name__}: {exc}"
+            state["completed"] = time.time()
+
+    threading.Thread(target=_runner, daemon=True, name=f"ollama-pull-{model}").start()
+    return state
+
+
+@app.on_event("startup")
+def _ensure_default_ollama_model() -> None:
+    """At app boot: if Ollama is reachable but the default model isn't pulled,
+    kick off a background pull so users hitting Settings see the model ready
+    (or at least 'pulling') instead of an empty dropdown."""
+
+    def _boot_pull():
+        # Wait briefly for the server to be ready and for transient network blips.
+        time.sleep(2)
+        snap = _ollama_models_snapshot()
+        if not snap.get("running"):
+            print(f"[ollama] not reachable at {OLLAMA_URL} — skipping auto-pull")
+            return
+        if _is_model_pulled(DEFAULT_OLLAMA_MODEL, snap):
+            print(f"[ollama] default model {DEFAULT_OLLAMA_MODEL!r} already pulled")
+            return
+        print(f"[ollama] auto-pulling default model {DEFAULT_OLLAMA_MODEL!r} from {OLLAMA_URL}")
+        _begin_background_pull(DEFAULT_OLLAMA_MODEL)
+
+    threading.Thread(target=_boot_pull, daemon=True, name="ollama-boot-pull").start()
+
+
+@app.get("/api/ollama/status")
+def ollama_status():
+    model = _S.get("ollama_model", DEFAULT_OLLAMA_MODEL) or DEFAULT_OLLAMA_MODEL
+    snap = _ollama_models_snapshot()
+    pulled = _is_model_pulled(model, snap)
+    pull_state = _OLLAMA_PULLS.get(model)
+    return {
+        "running":   snap.get("running", False),
+        "pulled":    pulled,
+        "model":     model,
+        "host":      OLLAMA_URL,
+        "is_server": True,    # tells the SPA this is server-side, not user-local
+        "available": sorted(snap.get("bases", set()) or []),
+        "models":    snap.get("models", []),
+        "pull":      pull_state,   # {status, percent, stage, error} if a pull is in progress
+        "error":     snap.get("error"),
+    }
+
+
+@app.post("/api/ollama/ensure")
+def ollama_ensure():
+    """Idempotent: ensure the session-configured model is pulled. If it's
+    already pulled, no-op. Otherwise kick off a background pull and return
+    the pull-state so the UI can poll."""
+    model = (_S.get("ollama_model") or DEFAULT_OLLAMA_MODEL).strip() or DEFAULT_OLLAMA_MODEL
+    snap = _ollama_models_snapshot()
+    if not snap.get("running"):
+        return {"ok": False, "reason": "ollama_unreachable", "host": OLLAMA_URL, "error": snap.get("error")}
+    if _is_model_pulled(model, snap):
+        return {"ok": True, "model": model, "already_pulled": True}
+    state = _begin_background_pull(model)
+    return {"ok": True, "model": model, "already_pulled": False, "pull": state}
 
 
 @app.get("/api/ollama/pull")
 def ollama_pull():
-    import subprocess
-    model = _S.get("ollama_model", "llama3.2")
+    """Stream a model pull via Ollama's HTTP /api/pull — works wherever the
+    Ollama daemon is reachable, no `ollama` CLI binary required on the server.
+    Also registers the pull in the global tracker so other clients see status.
+    """
+    model = _S.get("ollama_model", DEFAULT_OLLAMA_MODEL) or DEFAULT_OLLAMA_MODEL
+
+    # Reflect this pull in the shared tracker so /api/ollama/status sees it.
+    with _OLLAMA_PULL_LOCK:
+        _OLLAMA_PULLS[model] = {
+            "model": model, "status": "pulling", "started": time.time(),
+            "percent": 0, "stage": "starting", "error": None, "completed": None,
+        }
+    tracker = _OLLAMA_PULLS[model]
 
     def _stream():
-        yield _sse({"type": "start", "model": model})
-        proc = None
+        yield _sse({"type": "start", "model": model, "host": OLLAMA_URL})
         try:
-            try:
-                proc = subprocess.Popen(
-                    ["ollama", "pull", model],
-                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                    text=True, bufsize=1,
-                )
-            except FileNotFoundError:
-                yield _sse({"type": "error", "message": "ollama not found on PATH — install from ollama.com"})
-                return
-            try:
-                for line in proc.stdout:
-                    line = line.rstrip()
-                    if line:
-                        yield _sse({"type": "log", "line": line})
-            except GeneratorExit:
-                # Client disconnected — terminate the pull instead of leaking it.
-                raise
-            try:
-                proc.wait(timeout=15)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait(timeout=5)
-                yield _sse({"type": "error", "message": "ollama pull timed out after streaming finished"})
-                return
-            if proc.returncode == 0:
-                yield _sse({"type": "done", "model": model})
-            else:
+            for evt in _ollama_pull_via_api(model):
+                stage = str(evt.get("status") or "")
+                completed = evt.get("completed")
+                total = evt.get("total")
+                pct = None
+                if isinstance(completed, (int, float)) and isinstance(total, (int, float)) and total > 0:
+                    pct = max(0, min(100, int(completed / total * 100)))
+                # Mirror into shared tracker
+                tracker["stage"] = stage
+                if pct is not None:
+                    tracker["percent"] = pct
+                if "error" in evt and evt["error"]:
+                    raise RuntimeError(str(evt["error"]))
                 yield _sse({
-                    "type": "error",
-                    "message": f"ollama pull exited with code {proc.returncode}",
+                    "type": "log",
+                    "line": stage + (f" — {pct}%" if pct is not None else ""),
+                    "stage": stage,
+                    "percent": pct,
                 })
+                if stage == "success":
+                    break
+            tracker["status"] = "done"
+            tracker["percent"] = 100
+            tracker["completed"] = time.time()
+            yield _sse({"type": "done", "model": model})
         except GeneratorExit:
+            # Client disconnected. Don't kill the in-flight HTTP pull —
+            # it's safe to let Ollama keep going and complete in the background.
             raise
         except Exception as exc:
-            yield _sse({"type": "error", "message": str(exc)})
-        finally:
-            if proc is not None and proc.poll() is None:
-                try:
-                    proc.terminate()
-                    try:
-                        proc.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        proc.kill()
-                except Exception:
-                    pass
-            if proc is not None and proc.stdout is not None:
-                try:
-                    proc.stdout.close()
-                except Exception:
-                    pass
+            tracker["status"] = "error"
+            tracker["error"] = f"{type(exc).__name__}: {exc}"
+            tracker["completed"] = time.time()
+            yield _sse({"type": "error", "message": tracker["error"]})
 
     return StreamingResponse(
         _stream(),

@@ -17,7 +17,7 @@ import os
 from datetime import datetime
 from typing import Iterator
 
-from .base import RawJob, is_remote_location
+from .base import RawJob, is_remote_location, GENERAL_QUERIES, QueryRotator
 from .registry import register
 from ._http import http_post_json
 
@@ -28,24 +28,18 @@ class JoobleSource:
     timeout_seconds = 15
 
     PAGE_SIZE = 20
-    MAX_PAGES = 8                   # 8 × 20 × len(QUERIES) ≈ 1600 jobs/cycle
-
-    QUERIES = (
-        ("engineer", "United States"),
-        ("software engineer", "United States"),
-        ("hardware engineer", "United States"),
-        ("data scientist", "United States"),
-        ("machine learning", "United States"),
-        ("fpga", "United States"),
-    )
+    MAX_PAGES = 4
+    QUERY_BATCH = 8
 
     def __init__(self, api_key: str):
         self.api_key = api_key
         self.url = f"https://jooble.org/api/{api_key}"
+        self.rotator = QueryRotator(GENERAL_QUERIES, batch_size=self.QUERY_BATCH)
 
     def fetch(self, since: datetime | None) -> Iterator[RawJob]:
         seen: set[str] = set()
-        for keywords, location in self.QUERIES:
+        for keywords in self.rotator.next_batch():
+            location = "United States"
             for page in range(1, self.MAX_PAGES + 1):
                 data = http_post_json(self.url, {
                     "keywords": keywords,

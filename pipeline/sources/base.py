@@ -19,6 +19,7 @@ from ..helpers import (
     infer_experience_level,
     infer_education_required,
     infer_citizenship_required,
+    infer_job_category,
 )
 from ..job_repo import canonical_url as _canonical_url
 
@@ -81,6 +82,7 @@ def infer_metadata(job: dict) -> dict:
     out["experience_level"]     = infer_experience_level(job)
     out["education_required"]   = infer_education_required(job)
     out["citizenship_required"] = infer_citizenship_required(job)
+    out["job_category"]         = infer_job_category(job)
     return out
 
 
@@ -96,3 +98,70 @@ def host_of(url: str) -> str:
         return urlparse(url).netloc.lower()
     except Exception:
         return ""
+
+
+# ── Cross-industry query catalogue (used by keyed APIs) ──────────────────────
+# Roughly 6 entries per major job family. Keyed sources iterate a *batch*
+# of these per cycle (via :class:`QueryRotator`) so we cover the full set
+# over a few cycles instead of burning quota on every cycle.
+
+GENERAL_QUERIES: tuple[str, ...] = (
+    # Engineering / tech
+    "software engineer", "data scientist", "machine learning",
+    "fpga", "hardware engineer", "qa engineer", "devops",
+    # Finance / accounting
+    "accountant", "financial analyst", "investment banking",
+    "controller", "auditor",
+    # Sales
+    "account executive", "sales representative", "business development",
+    "sales manager", "customer success",
+    # Marketing
+    "marketing manager", "brand manager", "social media",
+    "content marketing", "growth marketing",
+    # Product / project
+    "product manager", "project manager", "program manager",
+    # Design / creative
+    "ux designer", "graphic designer", "art director", "copywriter",
+    # Healthcare-adjacent
+    "registered nurse", "medical assistant", "pharmacy technician",
+    "clinical research",
+    # Education
+    "teacher", "professor", "curriculum",
+    # HR / people ops
+    "human resources", "recruiter", "talent acquisition",
+    # Legal
+    "paralegal", "legal counsel", "compliance",
+    # Operations / supply / trades
+    "operations manager", "logistics", "supply chain",
+    "warehouse", "electrician", "mechanic",
+    # Customer service
+    "customer service", "support specialist",
+    # Public sector
+    "policy analyst", "public administration",
+)
+
+
+class QueryRotator:
+    """Rotates through a long list of queries N at a time across calls.
+
+    Lets a keyed source cover dozens of job families without burning
+    its daily quota on every cycle.
+    """
+
+    def __init__(self, queries, *, batch_size: int):
+        self.queries = list(queries) or [""]
+        self.batch = max(1, int(batch_size))
+        self._cursor = 0
+
+    def next_batch(self) -> list[str]:
+        n = len(self.queries)
+        if n == 0:
+            return []
+        start = self._cursor % n
+        end = start + self.batch
+        if end <= n:
+            batch = self.queries[start:end]
+        else:
+            batch = self.queries[start:] + self.queries[: end - n]
+        self._cursor = (self._cursor + self.batch) % n
+        return batch

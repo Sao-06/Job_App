@@ -21,9 +21,12 @@ class RemotiveSource:
     cadence_seconds = 25 * 60
     timeout_seconds = 15
 
+    # Remotive's category slugs — see https://remotive.com/api/remote-jobs?category=
     CATEGORIES = (
         "software-dev", "data", "devops", "design", "qa",
-        "product", "all-others", "marketing",
+        "product", "marketing", "sales", "business",
+        "customer-support", "writing", "finance-legal",
+        "human-resources", "all-others",
     )
 
     def fetch(self, since: datetime | None) -> Iterator[RawJob]:

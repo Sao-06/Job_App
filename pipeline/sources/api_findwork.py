@@ -18,7 +18,7 @@ import os
 from datetime import datetime
 from typing import Iterator
 
-from .base import RawJob, is_remote_location
+from .base import RawJob, is_remote_location, GENERAL_QUERIES, QueryRotator
 from .registry import register
 from ._http import http_get_json
 
@@ -31,22 +31,17 @@ class FindworkSource:
     cadence_seconds = 30 * 60
     timeout_seconds = 15
 
-    MAX_PAGES = 10
-    SEARCH_TERMS = (
-        "engineer",
-        "hardware",
-        "fpga",
-        "machine learning",
-        "data",
-    )
+    MAX_PAGES = 4
+    QUERY_BATCH = 8
 
     def __init__(self, api_key: str):
         self.api_key = api_key
         self.headers = {"Authorization": f"Token {api_key}"}
+        self.rotator = QueryRotator(GENERAL_QUERIES, batch_size=self.QUERY_BATCH)
 
     def fetch(self, since: datetime | None) -> Iterator[RawJob]:
         seen: set[str] = set()
-        for term in self.SEARCH_TERMS:
+        for term in self.rotator.next_batch():
             url: str | None = _BASE
             params: dict | None = {"search": term, "sort_by": "date", "order": "desc"}
             for _page in range(self.MAX_PAGES):

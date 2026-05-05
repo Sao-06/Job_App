@@ -40,8 +40,16 @@ class HimalayasSource:
     timeout_seconds = 12
 
     QUERIES = (
-        "engineer", "software engineer", "hardware", "data",
-        "product", "design", "fpga", "machine learning",
+        # Tech
+        "software engineer", "data scientist", "machine learning",
+        # Sales / customer-facing
+        "account executive", "sales", "customer success",
+        # Marketing / content
+        "marketing", "content", "brand",
+        # Ops / PM / design
+        "product manager", "project manager", "designer", "operations",
+        # Finance / HR / legal / education
+        "accountant", "recruiter", "legal", "teacher", "consultant",
     )
     BATCH = 50
 

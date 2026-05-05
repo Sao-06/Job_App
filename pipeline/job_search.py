@@ -59,6 +59,7 @@ class JobDTO:
     experience_level: str
     education_required: str
     citizenship_required: str
+    job_category: str
     posted_at: str | None
     source: str
     score: float = 0.0           # final ranking score [0..1]
@@ -267,6 +268,39 @@ def _dedupe_by_listing(ranked: list[tuple[float, tuple]]) -> list[tuple[float, t
     return out
 
 
+def _diversify_by_category(ranked: list[tuple[float, tuple]],
+                            *, max_per_round: int = 2) -> list[tuple[float, tuple]]:
+    """Round-robin over coarse job categories (engineering, sales,
+    marketing, healthcare, finance, …) so a brand-new visitor with no
+    profile sees a true cross-industry sample on page 1 instead of an
+    all-tech wall.
+
+    Order within each round is by the bucket's top-scored entry. Tech-
+    heavy buckets stay in the rotation longer because they have more
+    inventory, but they no longer monopolize the first 30 cards.
+    """
+    if not ranked:
+        return []
+    from collections import OrderedDict
+    buckets: "OrderedDict[str, list]" = OrderedDict()
+    for score, row in ranked:
+        cat = (row[12] or "general").strip().lower() or "general"
+        buckets.setdefault(cat, []).append((score, row))
+    ordered_buckets = sorted(
+        buckets.values(),
+        key=lambda b: (-b[0][0], b[0][1][12] or ""),
+    )
+    out: list[tuple[float, tuple]] = []
+    max_round = max(len(b) for b in ordered_buckets)
+    take = max(1, int(max_per_round))
+    for r0 in range(0, max_round, take):
+        for bucket in ordered_buckets:
+            for offset in range(take):
+                if r0 + offset < len(bucket):
+                    out.append(bucket[r0 + offset])
+    return out
+
+
 def _diversify_by_company(ranked: list[tuple[float, tuple]],
                           *, max_per_round: int = 1) -> list[tuple[float, tuple]]:
     """Round-robin layout: each round pulls one (or up to *max_per_round*)
@@ -318,9 +352,10 @@ _DEFAULT_PER_ROUND = 1
 
 
 def _row_to_dto(row: tuple, score: float) -> JobDTO:
-    # row is the full SELECT — drop trailing bm25_score column (always present).
+    # Row layout matches the SELECT in `search()` and `newer_than()` —
+    # 14 leading columns + bm25_score column (always present).
     (jid, url, source, company, title, location, remote, reqs_json,
-     salary, exp, edu, cit, posted_at) = row[:13]
+     salary, exp, edu, cit, category, posted_at) = row[:14]
     reqs = json.loads(reqs_json) if reqs_json else []
     return JobDTO(
         id=jid, url=url, source=source, company=company, title=title,
@@ -329,6 +364,7 @@ def _row_to_dto(row: tuple, score: float) -> JobDTO:
         experience_level=exp or "unknown",
         education_required=edu or "unknown",
         citizenship_required=cit or "unknown",
+        job_category=category or "general",
         posted_at=posted_at,
         score=round(float(score), 4),
     )
@@ -404,7 +440,7 @@ def search(*, conn: sqlite3.Connection,
         SELECT jp.id, jp.canonical_url, jp.source, jp.company, jp.title,
                jp.location, jp.remote, jp.requirements_json, jp.salary_range,
                jp.experience_level, jp.education_required,
-               jp.citizenship_required, jp.posted_at,
+               jp.citizenship_required, jp.job_category, jp.posted_at,
                {bm25_select}
           FROM job_postings jp
           {join_fts}
@@ -430,7 +466,7 @@ def search(*, conn: sqlite3.Connection,
     for row, bm in zip(pool, bm25_scores):
         reqs = json.loads(row[7]) if row[7] else []
         sk_ov = _skill_overlap(profile_skills, reqs)
-        fr    = _freshness(row[12])
+        fr    = _freshness(row[13])              # posted_at column
         tm    = _title_match(profile_titles, row[4])
         if not fts_q and not profile_skills and not profile_titles:
             # No personalization signals at all — sort by recency only.
@@ -439,13 +475,23 @@ def search(*, conn: sqlite3.Connection,
             final = (0.55 * bm) + (0.20 * sk_ov) + (0.15 * fr) + (0.10 * tm)
         ranked.append((final, row))
 
-    ranked.sort(key=lambda x: (-x[0], x[1][12] or "", x[1][0]))
+    ranked.sort(key=lambda x: (-x[0], x[1][13] or "", x[1][0]))
 
     # Drop cross-source / multi-city duplicates so the same listing can't
     # appear three times under different URLs. Runs BEFORE the company
     # round-robin so each bucket already contains unique listings.
     if dedupe:
         ranked = _dedupe_by_listing(ranked)
+
+    # Cold (no-profile) feed gets an additional category-balancing pass
+    # so a brand-new visitor sees a true cross-section: round 1 takes the
+    # best entry from each of {engineering, sales, marketing, healthcare,
+    # finance, …}, round 2 the second-best, etc. Once the user has a
+    # profile we trust the BM25 + skill_overlap signals to surface what
+    # they actually want, so we skip this layer.
+    profile_terms_present = bool(profile_skills or profile_titles or fts_q)
+    if not profile_terms_present and ranked:
+        ranked = _diversify_by_category(ranked, max_per_round=2)
 
     # Round-robin layout — interleaves companies so a single dominant
     # employer can't take over the top page. Round 1 = best from each
@@ -505,8 +551,8 @@ def newer_than(*, conn: sqlite3.Connection, top_id: str, limit: int = 30) -> lis
         """
         SELECT id, canonical_url, source, company, title, location, remote,
                requirements_json, salary_range, experience_level,
-               education_required, citizenship_required, posted_at,
-               0.0 AS bm25_score
+               education_required, citizenship_required, job_category,
+               posted_at, 0.0 AS bm25_score
           FROM job_postings
          WHERE deleted = 0 AND last_seen_at > ?
          ORDER BY last_seen_at DESC

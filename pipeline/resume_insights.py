@@ -1,7 +1,7 @@
 """
 pipeline/resume_insights.py
 ───────────────────────────
-Real (non-hardcoded) resume scanner + optional Ollama verification.
+Real (non-hardcoded) resume scanner + optional AI verification.
 
 The scanner reads the resume *preview text* and computes deterministic
 metrics: word/bullet counts, quantification rate, action-verb usage,
@@ -9,13 +9,15 @@ weak-phrase frequency, section coverage, skill density, etc. From those
 metrics it derives strengths, red flags, and targeted suggestions, and
 writes a content-aware critical narrative.
 
-When an Ollama model is reachable, `verify_with_ollama` then sends the
-heuristic findings + a resume excerpt to the local LLM and asks it to
+When the active LLM provider (Anthropic, Ollama, or any future BaseProvider
+subclass that implements `chat`) is reachable, `verify_with_provider` sends
+the heuristic findings + a resume excerpt to the model and asks it to
 double-check each item, drop inaccurate observations, surface 1-3
 insights only an experienced reviewer would catch, and rewrite the
-narrative to reference specific lines from the resume. The Ollama pass
-is best-effort — when the daemon is offline or returns malformed JSON,
-the heuristic output is shown as-is.
+narrative to reference specific lines from the resume. The verification
+pass is best-effort — when the model is offline / errors / returns
+malformed JSON, the heuristic output is shown as-is with a neutral
+"AI verification unavailable" note.
 """
 
 from __future__ import annotations
@@ -30,7 +32,10 @@ from .config import console
 
 
 INSIGHTS_VERSION = 1
-OLLAMA_URL = "http://localhost:11434"
+# Server-side Ollama in production (RPi); localhost in dev. Honour OLLAMA_URL
+# so the same code works whether Ollama is on this host or another Tailnet box.
+import os as _os
+OLLAMA_URL = _os.environ.get("OLLAMA_URL", "http://localhost:11434").rstrip("/")
 
 
 # ── Action-verb / weak-language vocabularies ──────────────────────────────────
@@ -441,7 +446,7 @@ def _baseline_narrative(m: dict, strengths: list[str], red_flags: list[str],
     return "\n\n".join([p1, p2, p3, p4])
 
 
-# ── Ollama verification ───────────────────────────────────────────────────────
+# ── Provider-agnostic verification ────────────────────────────────────────────
 
 def _coerce_str_list(value: Any, limit: int = 8) -> list[str]:
     if not isinstance(value, list):
@@ -493,157 +498,98 @@ def _extract_json_object(raw: str) -> dict | None:
     return None
 
 
-def _probe_ollama(timeout: float = 3.0) -> tuple[bool, list[str], str]:
-    """Best-effort liveness probe.
-
-    Returns ``(running, available_model_names, error_message)``. ``running``
-    is True iff the daemon answered ``GET /api/tags`` with a parseable body.
-    """
-    try:
-        req = urllib.request.Request(f"{OLLAMA_URL}/api/tags", method="GET")
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            data = json.loads(resp.read().decode("utf-8", errors="replace"))
-    except urllib.error.HTTPError as e:
-        return False, [], f"Ollama returned HTTP {e.code} from /api/tags"
-    except (urllib.error.URLError, TimeoutError, OSError, ConnectionError) as e:
-        return False, [], f"Ollama daemon not reachable on {OLLAMA_URL} ({e.__class__.__name__})"
-    except (ValueError, json.JSONDecodeError):
-        return False, [], "Ollama responded but /api/tags body was not JSON"
-    names = [m.get("name", "") for m in (data.get("models") or []) if m.get("name")]
-    return True, names, ""
-
-
-def _pick_pulled_model(requested: str, available: list[str]) -> str | None:
-    """Pick a model name that is actually pulled.
-
-    Tries (in order): exact match, base-tag match (``llama3.2`` ↔ ``llama3.2:latest``),
-    then the first locally available model. Returns ``None`` only when nothing is pulled.
-    """
-    if not available:
-        return None
-    if requested in available:
-        return requested
-    req_base = requested.split(":")[0]
-    for name in available:
-        if name.split(":")[0] == req_base:
-            return name
-    # Prefer a known-good chat model when picking a fallback for the user.
-    preferred_order = ("llama3.2", "llama3.1", "llama3", "mistral", "qwen2.5", "gemma3", "gemma2")
-    bases = {n.split(":")[0]: n for n in available}
-    for fav in preferred_order:
-        if fav in bases:
-            return bases[fav]
-    return available[0]
-
-
-def verify_with_ollama(resume_text: str, insights: dict, model: str,
-                       timeout: float = 60.0) -> dict:
-    """Send heuristic insights to Ollama and ask it to verify+enrich.
-
-    Always returns a dict. On success, the dict carries some of:
-    ``strengths``, ``red_flags``, ``suggestions``, ``narrative``,
-    ``verification_notes``, and ``_used_model``. On failure, the dict carries
-    ``_error`` (short code) and ``_message`` (human-readable diagnostic) so
-    the caller can surface a precise reason instead of falsely claiming the
-    daemon is offline.
-    """
-    # ── 1. Probe daemon ───────────────────────────────────────────────────
-    running, available, probe_err = _probe_ollama(timeout=3.0)
-    if not running:
-        return {"_error": "offline", "_message": probe_err or "Ollama is not running"}
-    if not available:
-        return {
-            "_error": "no_models",
-            "_message": "Ollama is running but no models are pulled — run `ollama pull llama3.2`.",
-        }
-
-    # ── 2. Pick a model that's actually local ─────────────────────────────
-    pick = _pick_pulled_model(model, available)
-    if not pick:
-        return {
-            "_error": "no_models",
-            "_message": "No usable Ollama models found locally.",
-        }
-
+def _verifier_prompt(resume_text: str, insights: dict) -> str:
+    """The verification prompt — provider-agnostic, asked of any LLM."""
     metrics_for_prompt = {k: v for k, v in (insights.get("metrics") or {}).items()
                          if k != "sections"}
-    payload = {
-        "model": pick,
-        "messages": [{
-            "role": "user",
-            "content": (
-                "You are a senior technical resume reviewer. A heuristic scanner "
-                "produced the analysis below from a candidate's resume. Your job:\n"
-                "  1. VERIFY each item — silently DROP any inaccurate/misleading entries.\n"
-                "  2. ADD 1-3 sharp insights only an experienced human reviewer would catch "
-                "(specific evidence from the resume, not generic advice).\n"
-                "  3. REWRITE the narrative as 3-4 specific paragraphs, "
-                "referencing actual phrases from the resume.\n\n"
-                "Return ONLY a JSON object with these keys:\n"
-                "  strengths        : array of strings\n"
-                "  red_flags        : array of strings\n"
-                "  suggestions      : array of strings\n"
-                "  narrative        : string (3-4 paragraphs, blank line between)\n"
-                "  verification_notes : one short sentence describing what you "
-                "changed vs. the heuristic.\n\n"
-                f"Heuristic metrics:\n{json.dumps(metrics_for_prompt, indent=2)}\n\n"
-                f"Heuristic strengths: {json.dumps(insights.get('strengths') or [])}\n"
-                f"Heuristic red_flags: {json.dumps(insights.get('red_flags') or [])}\n"
-                f"Heuristic suggestions: {json.dumps(insights.get('suggestions') or [])}\n"
-                f"Heuristic narrative:\n{insights.get('narrative', '')}\n\n"
-                f"Resume excerpt (first 3000 chars):\n{(resume_text or '')[:3000]}"
-            ),
-        }],
-        "stream": False,
-    }
+    return (
+        "You are a senior technical resume reviewer. A heuristic scanner "
+        "produced the analysis below from a candidate's resume. Your job:\n"
+        "  1. VERIFY each item — silently DROP any inaccurate/misleading entries.\n"
+        "  2. ADD 1-3 sharp insights only an experienced human reviewer would catch "
+        "(specific evidence from the resume, not generic advice).\n"
+        "  3. REWRITE the narrative as 3-4 specific paragraphs, "
+        "referencing actual phrases from the resume.\n\n"
+        "Return ONLY a JSON object with these keys:\n"
+        "  strengths        : array of strings\n"
+        "  red_flags        : array of strings\n"
+        "  suggestions      : array of strings\n"
+        "  narrative        : string (3-4 paragraphs, blank line between)\n"
+        "  verification_notes : one short sentence describing what you "
+        "changed vs. the heuristic.\n\n"
+        f"Heuristic metrics:\n{json.dumps(metrics_for_prompt, indent=2)}\n\n"
+        f"Heuristic strengths: {json.dumps(insights.get('strengths') or [])}\n"
+        f"Heuristic red_flags: {json.dumps(insights.get('red_flags') or [])}\n"
+        f"Heuristic suggestions: {json.dumps(insights.get('suggestions') or [])}\n"
+        f"Heuristic narrative:\n{insights.get('narrative', '')}\n\n"
+        f"Resume excerpt (first 3000 chars):\n{(resume_text or '')[:3000]}"
+    )
 
-    # ── 3. Chat completion ────────────────────────────────────────────────
+
+def verify_with_provider(resume_text: str, insights: dict, provider) -> dict:
+    """Ask the active LLM provider to verify + enrich the heuristic insights.
+
+    Returns either:
+      - a dict with `strengths`, `red_flags`, `suggestions`, `narrative`,
+        `verification_notes` populated from the LLM response (success), OR
+      - a dict with `_error` (short code) and `_message` (neutral, non-
+        provider-branded explanation) describing why verification was skipped.
+
+    The provider name is intentionally not surfaced in the return value or
+    log output — callers should report a uniform "AI verification" status to
+    the user regardless of which backend produced (or failed to produce) it.
+    """
+    if provider is None:
+        return {"_error": "no_provider", "_message": "AI verification unavailable."}
+
+    chat_fn = getattr(provider, "chat", None)
+    if not callable(chat_fn):
+        return {"_error": "no_provider", "_message": "AI verification unavailable."}
+
+    prompt = _verifier_prompt(resume_text or "", insights)
+
     try:
-        body = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            f"{OLLAMA_URL}/v1/chat/completions",
-            data=body, method="POST",
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": "Bearer ollama",
-            },
-        )
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            raw = resp.read().decode("utf-8", errors="replace")
-    except urllib.error.HTTPError as e:
-        # 404 here usually means the chosen model wasn't actually loadable.
+        # Try with strict JSON mode first; fall back to plain text on TypeError
+        # (older provider implementations didn't accept the kwarg).
         try:
-            err_body = e.read().decode("utf-8", errors="replace")[:240]
-        except Exception:
-            err_body = ""
-        msg = f"Ollama returned HTTP {e.code} for model `{pick}`"
-        if err_body:
-            msg += f" — {err_body}"
-        return {"_error": "http_error", "_message": msg}
-    except (TimeoutError,) as e:
-        return {"_error": "timeout", "_message": f"Ollama request timed out after {int(timeout)}s using `{pick}`. Try a smaller model."}
-    except (urllib.error.URLError, OSError, ConnectionError) as e:
-        return {"_error": "request_failed", "_message": f"Ollama request failed: {e.__class__.__name__}: {e}"}
-    except Exception as exc:
-        console.print(f"  [yellow]Ollama verification skipped: {exc}[/yellow]")
-        return {"_error": "exception", "_message": f"Unexpected error talking to Ollama: {exc}"}
+            raw = chat_fn(
+                "You are a strict, careful resume reviewer. Reply with JSON only.",
+                [{"role": "user", "content": prompt}],
+                max_tokens=1500,
+                json_mode=True,
+            )
+        except TypeError:
+            raw = chat_fn(
+                "You are a strict, careful resume reviewer. Reply with JSON only.",
+                [{"role": "user", "content": prompt}],
+                max_tokens=1500,
+            )
+    except (TimeoutError,) as exc:
+        return {"_error": "timeout",
+                "_message": "AI verification timed out — showing heuristic findings."}
+    except (ConnectionError, OSError) as exc:
+        return {"_error": "offline",
+                "_message": "AI verification unavailable — showing heuristic findings."}
+    except NotImplementedError:
+        return {"_error": "no_provider",
+                "_message": "AI verification not supported by the current provider."}
+    except Exception as exc:                                              # noqa: BLE001
+        # Print to the server console only; don't leak provider/error
+        # specifics into the user-facing notes.
+        console.print(f"  [dim]AI verification skipped: {exc.__class__.__name__}[/dim]")
+        return {"_error": "request_failed",
+                "_message": "AI verification unavailable — showing heuristic findings."}
 
-    # ── 4. Parse envelope + JSON content ──────────────────────────────────
-    try:
-        envelope = json.loads(raw)
-        message = (envelope.get("choices") or [{}])[0].get("message", {}) or {}
-        content = message.get("content") or ""
-    except (ValueError, json.JSONDecodeError, KeyError, IndexError):
-        return {"_error": "parse_envelope", "_message": "Ollama response envelope was malformed."}
+    if not isinstance(raw, str) or not raw.strip():
+        return {"_error": "empty_response",
+                "_message": "AI verification returned an empty response — showing heuristic findings."}
 
-    parsed = _extract_json_object(content)
+    parsed = _extract_json_object(raw)
     if not parsed:
-        return {
-            "_error": "parse_content",
-            "_message": f"Ollama (`{pick}`) returned non-JSON content. Try a stronger model: `ollama pull llama3.2`.",
-        }
+        return {"_error": "parse_content",
+                "_message": "AI verification returned unreadable output — showing heuristic findings."}
 
-    out: dict[str, Any] = {"_used_model": pick}
+    out: dict[str, Any] = {}
     strengths = _coerce_str_list(parsed.get("strengths"))
     red_flags = _coerce_str_list(parsed.get("red_flags"))
     suggestions = _coerce_str_list(parsed.get("suggestions"))
@@ -660,28 +606,39 @@ def verify_with_ollama(resume_text: str, insights: dict, model: str,
     if isinstance(notes, str) and notes.strip():
         out["verification_notes"] = notes.strip()
 
-    # If the JSON parsed but contained nothing useful, treat it as a soft failure
-    # so the UI doesn't go quiet.
-    if len(out) == 1:  # only _used_model
-        return {
-            "_error": "empty_response",
-            "_message": f"Ollama (`{pick}`) returned valid JSON with no usable fields.",
-            "_used_model": pick,
-        }
+    if not out:
+        return {"_error": "empty_response",
+                "_message": "AI verification returned no usable fields — showing heuristic findings."}
     return out
+
+
+# Back-compat shim. Older callers passed `ollama_model: str`. We no longer
+# care which provider runs the verification, so return a neutral error.
+def verify_with_ollama(*_args, **_kwargs) -> dict:                        # noqa: ARG001
+    return {"_error": "deprecated",
+            "_message": "AI verification unavailable — showing heuristic findings."}
 
 
 # ── Public entry point ────────────────────────────────────────────────────────
 
 def analyze_resume(resume_text: str, profile: dict,
-                   ollama_model: str | None = None) -> dict:
-    """Compute deterministic insights, then optionally verify with Ollama.
+                   provider=None,
+                   ollama_model: str | None = None) -> dict:                  # noqa: ARG001
+    """Compute deterministic insights, then optionally verify with the
+    active LLM provider.
 
     Always returns a dict shaped:
       {
         version, overall_score, metrics, strengths, red_flags, suggestions,
         narrative, verified_by, verification_notes,
       }
+
+    `verified_by` is one of:
+      - ``"heuristic"`` — no provider attempted, or verification failed.
+      - ``"ai"``        — an LLM provider successfully verified the findings.
+
+    The `ollama_model` kwarg is accepted for back-compat with older callers
+    but ignored; verification now uses whatever provider the caller passed in.
     """
     profile = profile or {}
     metrics = _scan_metrics(resume_text or "", profile)
@@ -703,20 +660,20 @@ def analyze_resume(resume_text: str, profile: dict,
         "verification_notes": "",
     }
 
-    if ollama_model:
-        verified = verify_with_ollama(resume_text or "", insights, ollama_model)
+    if provider is not None and hasattr(provider, "chat"):
+        verified = verify_with_provider(resume_text or "", insights, provider)
         if verified and "_error" not in verified:
             for key in ("strengths", "red_flags", "suggestions",
                         "narrative", "verification_notes"):
                 if key in verified:
                     insights[key] = verified[key]
-            used = verified.get("_used_model") or ollama_model
-            insights["verified_by"] = f"ollama:{used}"
+            insights["verified_by"] = "ai"
         else:
-            err  = (verified or {}).get("_error", "unknown")
-            note = (verified or {}).get("_message",
-                "Ollama unavailable or returned an unreadable response — showing heuristic findings.")
-            insights["verification_notes"] = note
-            insights["verification_error"] = err
+            # Verification failed. The heuristic output is already a complete,
+            # valid analysis — don't surface an apology in the user-facing
+            # verification_notes. Keep the error code only for diagnostics
+            # (the UI ignores it; dev-mode can still inspect it).
+            insights["verification_notes"] = ""
+            insights["verification_error"] = (verified or {}).get("_error", "unknown")
 
     return insights

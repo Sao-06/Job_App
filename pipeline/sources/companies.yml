@@ -9,6 +9,7 @@
 #   - apply.workable.com/<slug>        → workable
 
 greenhouse:
+  # Tech
   - airbnb
   - airtable
   - anthropic
@@ -71,7 +72,53 @@ greenhouse:
   - wish
   - zoom
   - zscaler
+  # Finance / fintech
+  - nubank
+  - betterment
+  - chime
+  - affirm
+  # Consumer / DTC / media
+  - peloton
+  - glossier
+  - buzzfeed
+  - axios
+  - disney
+  - hellofresh        # 380 postings — heavy ops/marketing/sales mix
+  - sweetgreen
+  - faire
+  # Health / wellness
+  - tia
+  # Education
+  - udemy
+  - outschool
+  # Consulting
+  - thoughtworks
 
-lever: []
-ashby: []
-workable: []
+lever:
+  - mistral          # ~158 active postings
+  - palantir         # ~238
+  - spotify          # ~193
+  - highspot
+  - benchsci
+  - clari
+
+ashby:
+  - linear
+  - posthog
+  - ramp             # ~115
+  - openai           # ~670
+  - perplexity
+  - replit
+  - langchain
+  - runway
+  - suno
+  - cursor
+  - pinecone
+  - watershed
+  - substack
+  - decagon          # ~97
+  - pika
+  - hightouch
+
+workable:
+  - lyst

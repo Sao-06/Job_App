@@ -28,6 +28,7 @@ const api = {
     });
   },
   delete: url => fetch(url, { method:'DELETE' }).then(async r => {
+    if (r.status === 204) return { ok: true };
     const data = await r.json();
     if (!r.ok) throw new Error(data.detail || data.error || data.message || 'API Error');
     return data;
@@ -163,6 +164,154 @@ function Icon({ name, size=16, color='currentColor', style={} }) {
     window.lucide.createIcons({ nodes:[el] });
   }, [name, size, color]);
   return <span ref={ref} className="ic" style={{ width:size, height:size, ...style }}/>;
+}
+
+/* ── Inline Markdown renderer ──────────────────────────────────────────
+   Handles the subset of Markdown the Anthropic / Ollama responses use:
+     # / ## / ### headings
+     - / *   bullet lists       1. 2. 3. ordered lists
+     **bold**  __bold__          *italic*  _italic_
+     `code`                       ```code blocks```
+     [text](url)                  raw http(s)://… links
+     > blockquote                 paragraph breaks on blank lines
+
+   No external dep — the SPA is Babel-transpiled in-browser, so we keep
+   it small. Streaming partial messages render incrementally because the
+   parser is pure (no state outside the input string).
+*/
+function _mdInlineSpans(text, keyPrefix) {
+  // Inline pass: code, bold, italic, links. Token-by-token so we don't
+  // accidentally bold inside code spans.
+  const out = [];
+  let cursor = 0;
+  let key = 0;
+  const push = (node) => out.push(typeof node === 'string'
+    ? <React.Fragment key={`${keyPrefix}-${key++}`}>{node}</React.Fragment>
+    : React.cloneElement(node, { key: `${keyPrefix}-${key++}` }));
+
+  // Match (in order of priority): inline `code`, **bold**/__bold__,
+  //   *italic*/_italic_, [text](url), bare URL.
+  const RE = /(`[^`]+`)|(\*\*[^*\n]+?\*\*|__[^_\n]+?__)|(\*[^*\s][^*\n]*?\*|_[^_\s][^_\n]*?_)|(\[[^\]]+\]\(https?:\/\/[^\s)]+\))|(https?:\/\/[^\s)]+)/g;
+  let m;
+  while ((m = RE.exec(text)) !== null) {
+    if (m.index > cursor) push(text.slice(cursor, m.index));
+    if (m[1]) {
+      push(<code className="md-code">{m[1].slice(1, -1)}</code>);
+    } else if (m[2]) {
+      const inner = m[2].startsWith('**') ? m[2].slice(2, -2) : m[2].slice(2, -2);
+      push(<strong>{inner}</strong>);
+    } else if (m[3]) {
+      const inner = m[3].slice(1, -1);
+      push(<em>{inner}</em>);
+    } else if (m[4]) {
+      const lm = m[4].match(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/);
+      if (lm) push(<a href={lm[2]} target="_blank" rel="noopener noreferrer">{lm[1]}</a>);
+    } else if (m[5]) {
+      push(<a href={m[5]} target="_blank" rel="noopener noreferrer">{m[5]}</a>);
+    }
+    cursor = m.index + m[0].length;
+  }
+  if (cursor < text.length) push(text.slice(cursor));
+  return out;
+}
+
+function Markdown({ text }) {
+  if (!text) return null;
+  const lines = String(text).replace(/\r\n/g, '\n').split('\n');
+  const blocks = [];
+  let i = 0;
+  let blockIdx = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+
+    // Skip blank lines (paragraph separators)
+    if (!line.trim()) { i++; continue; }
+
+    // Fenced code block ``` … ```
+    if (/^```/.test(line)) {
+      const lang = line.replace(/^```/, '').trim();
+      const buf = [];
+      i++;
+      while (i < lines.length && !/^```/.test(lines[i])) {
+        buf.push(lines[i]); i++;
+      }
+      if (i < lines.length) i++;     // consume closing fence
+      blocks.push(
+        <pre key={`b${blockIdx++}`} className="md-pre">
+          <code className={lang ? `md-lang-${lang}` : undefined}>{buf.join('\n')}</code>
+        </pre>
+      );
+      continue;
+    }
+
+    // Headings: # / ## / ### / ####
+    const h = line.match(/^(#{1,4})\s+(.+?)\s*#*\s*$/);
+    if (h) {
+      const level = h[1].length;
+      const Tag = `h${Math.min(6, level + 1)}`;   // h2..h5 inside chat bubble
+      blocks.push(
+        <Tag key={`b${blockIdx++}`} className={`md-h md-h${level}`}>
+          {_mdInlineSpans(h[2], `b${blockIdx}`)}
+        </Tag>
+      );
+      i++; continue;
+    }
+
+    // Blockquote run (> text, > text, …)
+    if (/^>\s?/.test(line)) {
+      const buf = [];
+      while (i < lines.length && /^>\s?/.test(lines[i])) {
+        buf.push(lines[i].replace(/^>\s?/, '')); i++;
+      }
+      blocks.push(
+        <blockquote key={`b${blockIdx++}`} className="md-quote">
+          {_mdInlineSpans(buf.join(' '), `b${blockIdx}`)}
+        </blockquote>
+      );
+      continue;
+    }
+
+    // Unordered list (- foo / * foo) — peel off contiguous lines
+    if (/^\s*[-*]\s+/.test(line)) {
+      const items = [];
+      while (i < lines.length && /^\s*[-*]\s+/.test(lines[i])) {
+        const t = lines[i].replace(/^\s*[-*]\s+/, '');
+        items.push(<li key={`li${i}`}>{_mdInlineSpans(t, `li${i}`)}</li>);
+        i++;
+      }
+      blocks.push(<ul key={`b${blockIdx++}`} className="md-ul">{items}</ul>);
+      continue;
+    }
+
+    // Ordered list (1. foo / 2. foo)
+    if (/^\s*\d+\.\s+/.test(line)) {
+      const items = [];
+      while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])) {
+        const t = lines[i].replace(/^\s*\d+\.\s+/, '');
+        items.push(<li key={`oli${i}`}>{_mdInlineSpans(t, `oli${i}`)}</li>);
+        i++;
+      }
+      blocks.push(<ol key={`b${blockIdx++}`} className="md-ol">{items}</ol>);
+      continue;
+    }
+
+    // Paragraph: collect contiguous non-blank, non-list, non-heading lines
+    const buf = [line];
+    i++;
+    while (i < lines.length
+        && lines[i].trim()
+        && !/^```|^#{1,4}\s|^\s*[-*]\s|^\s*\d+\.\s|^>/.test(lines[i])) {
+      buf.push(lines[i]); i++;
+    }
+    blocks.push(
+      <p key={`b${blockIdx++}`} className="md-p">
+        {_mdInlineSpans(buf.join(' '), `b${blockIdx}`)}
+      </p>
+    );
+  }
+
+  return <div className="md">{blocks}</div>;
 }
 
 /* ── Brand glyph (original design) ── */
@@ -732,7 +881,248 @@ function TipCard({ state }) {
   );
 }
 
-function Dashboard({ state, setPage }) {
+/* ── Home — Resume Intelligence panel ────────────────────────────────────── */
+function ResumeIntelligencePanel({ profile, resumes, setPage, refresh }) {
+  const insights = profile?.insights || null;
+  const m = insights?.metrics || {};
+  const score = insights ? Math.max(0, Math.min(100, Math.round(insights.overall_score || 0))) : null;
+  const verified = insights && insights.verified_by && insights.verified_by !== 'heuristic';
+
+  // Big-number ring config (sized for the home dossier card).
+  const R = 62, CIRC = 2 * Math.PI * R;
+  const off = score == null ? CIRC : CIRC - (CIRC * score / 100);
+  const ringColor = score == null ? 'var(--t4)'
+                  : score >= 80 ? 'var(--good)'
+                  : score >= 60 ? 'var(--accent-h)'
+                  : score >= 40 ? 'var(--warn)'
+                                : 'var(--bad)';
+  const verdict = score == null ? 'Awaiting scan'
+                : score >= 85 ? 'Strong'
+                : score >= 70 ? 'Solid'
+                : score >= 55 ? 'Promising'
+                : score >= 40 ? 'Needs work'
+                              : 'Reach';
+  const verdictColor = ringColor;
+  const subline = score == null
+    ? 'Drop a resume to see your living dossier.'
+    : score >= 85 ? 'Top-decile signal — refine the specifics.'
+    : score >= 70 ? 'Above the bar; close the last few gaps.'
+    : score >= 55 ? 'Has the bones; sharpen impact and verbs.'
+    : score >= 40 ? 'Quantification + action verbs are the unlock.'
+                  : 'Restructure: numbers, action verbs, sections.';
+
+  const tiles = [
+    { lbl: 'Quantified',   v: m.quantified_pct  != null ? `${m.quantified_pct}%`  : '—',
+      hint: 'numeric impact', tone: m.quantified_pct  >= 60 ? 'good' : m.quantified_pct  >= 40 ? 'warn' : 'bad' },
+    { lbl: 'Action verbs', v: m.action_verb_pct != null ? `${m.action_verb_pct}%` : '—',
+      hint: 'strong leads',   tone: m.action_verb_pct >= 70 ? 'good' : m.action_verb_pct >= 50 ? 'warn' : 'bad' },
+    { lbl: 'Skill density', v: m.skill_density  != null ? m.skill_density       : '—',
+      hint: '/100w',         tone: m.skill_density   >= 6  ? 'good' : m.skill_density   >= 4  ? 'warn' : 'bad' },
+    { lbl: 'Words',        v: m.word_count      != null ? m.word_count          : '—',
+      hint: 'total',         tone: (m.word_count >= 350 && m.word_count <= 700) ? 'good' : 'warn' },
+  ];
+
+  const topStrength = (insights?.strengths || [])[0];
+  const topFlag     = (insights?.red_flags || [])[0];
+  const primary = (resumes || []).find(r => r.primary) || (resumes || [])[0];
+
+  return (
+    <div className="dossier-card intel-card">
+      <div className="dossier-eyebrow">
+        <span className="dossier-num">01</span>
+        <span>Resume intelligence</span>
+        <span className="dossier-sep">·</span>
+        <span className="dossier-meta">
+          {primary ? primary.filename.replace(/\.[^.]+$/, '') : 'no resume'}
+        </span>
+        <span className="dossier-grow"/>
+        <span className={'dossier-chip ' + (verified ? 'ok' : score == null ? 'mute' : 'info')}>
+          <Icon name={verified ? 'shield-check' : 'sparkles'} size={11}/>
+          {verified ? 'AI-verified' : score == null ? 'Not scanned' : 'Heuristic'}
+        </span>
+      </div>
+
+      <div className="intel-grid">
+        <div className="intel-ring-wrap">
+          <svg width="160" height="160" viewBox="0 0 160 160" className="intel-ring-svg">
+            <defs>
+              <linearGradient id="intelRingGrad" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0%"  stopColor={ringColor} stopOpacity=".95"/>
+                <stop offset="100%" stopColor={ringColor} stopOpacity=".55"/>
+              </linearGradient>
+            </defs>
+            <circle cx="80" cy="80" r={R} fill="none" stroke="rgba(255,255,255,.06)" strokeWidth="9"/>
+            <circle cx="80" cy="80" r={R} fill="none" stroke="url(#intelRingGrad)" strokeWidth="9"
+              strokeLinecap="round" strokeDasharray={CIRC} strokeDashoffset={off}
+              transform="rotate(-90 80 80)"
+              style={{ transition:'stroke-dashoffset 1.2s cubic-bezier(.16,1,.3,1)' }}/>
+          </svg>
+          <div className="intel-ring-c">
+            <div className="intel-ring-num" style={{ color: ringColor }}>
+              {score == null ? '—' : score}
+            </div>
+            <div className="intel-ring-unit">/ 100</div>
+          </div>
+        </div>
+
+        <div className="intel-body">
+          <div className="intel-verdict" style={{ color: verdictColor }}>{verdict}</div>
+          <div className="intel-sub">{subline}</div>
+
+          <div className="intel-tile-row">
+            {tiles.map((t, i) => (
+              <div key={i} className={'intel-tile tone-' + t.tone}>
+                <div className="intel-tile-v">{t.v}</div>
+                <div className="intel-tile-l">{t.lbl}</div>
+                <div className="intel-tile-h">{t.hint}</div>
+              </div>
+            ))}
+          </div>
+
+          <div className="intel-bullets">
+            {topStrength && (
+              <div className="intel-bullet good">
+                <Icon name="check" size={11}/>
+                <span>{topStrength}</span>
+              </div>
+            )}
+            {topFlag && (
+              <div className="intel-bullet bad">
+                <Icon name="alert-triangle" size={11}/>
+                <span>{topFlag}</span>
+              </div>
+            )}
+            {!topStrength && !topFlag && (
+              <div className="intel-bullet mute">
+                <Icon name="info" size={11}/>
+                <span>{primary ? 'Re-scan to surface strengths and red flags.' : 'Upload a resume to begin.'}</span>
+              </div>
+            )}
+          </div>
+
+          <div className="intel-actions">
+            <button className="intel-btn primary" onClick={() => setPage('resume')}>
+              <Icon name="bar-chart-3" size={12}/> Open analysis
+            </button>
+            {primary && (
+              <button className="intel-btn ghost" onClick={async () => {
+                try {
+                  await api.post('/api/profile/extract', { resume_id: primary.id, force: true });
+                  refresh?.();
+                } catch (e) { /* swallow — UI shows extracting state */ }
+              }}>
+                <Icon name="refresh-cw" size={11}/> Re-scan
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── Home — Mission Control quick-actions panel ──────────────────────────── */
+function MissionControlPanel({ state, setPage, refresh }) {
+  const has_resume = !!state?.has_resume;
+  const apps = state?.applications || [];
+  const jobs_total = state?.scored_summary?.total || state?.job_count || 0;
+  const primary = (state?.resumes || []).find(r => r.primary) || (state?.resumes || [])[0];
+
+  const actions = [
+    {
+      n: '01', icon: 'compass', label: 'Discover roles',
+      sub: jobs_total ? `${jobs_total} in queue` : 'find new openings',
+      tone: 'accent', onClick: () => setPage('jobs'),
+    },
+    {
+      n: '02', icon: 'sparkles', label: 'Run agent',
+      sub: 'all 7 phases',
+      tone: 'cyan', onClick: () => setPage('agent'),
+    },
+    {
+      n: '03', icon: 'scan-text', label: 'Re-scan resume',
+      sub: primary ? primary.filename.replace(/\.[^.]+$/, '').slice(0, 22) : 'analyze resume',
+      tone: 'pink',
+      onClick: async () => {
+        if (!primary) { setPage('resume'); return; }
+        try { await api.post('/api/profile/extract', { resume_id: primary.id, force: true }); refresh?.(); }
+        catch (e) {}
+      },
+    },
+    {
+      n: '04', icon: 'user-round', label: 'Edit profile',
+      sub: state?.profile?.target_titles?.[0] || 'identity & targets',
+      tone: 'mint', onClick: () => setPage('profile'),
+    },
+    {
+      n: '05', icon: 'send', label: 'Applications',
+      sub: apps.length ? `${apps.length} tracked` : 'tracker view',
+      tone: 'amber', onClick: () => setPage('jobs'),
+    },
+    {
+      n: '06', icon: 'settings-2', label: 'Settings',
+      sub: state?.mode === 'demo' ? 'demo mode' : state?.mode === 'ollama' ? 'local AI' : 'cloud AI',
+      tone: 'violet', onClick: () => setPage('settings'),
+    },
+  ];
+
+  return (
+    <div className="dossier-card mission-card">
+      <div className="dossier-eyebrow">
+        <span className="dossier-num">02</span>
+        <span>Mission control</span>
+        <span className="dossier-sep">·</span>
+        <span className="dossier-meta">launchpad</span>
+      </div>
+      <div className="mission-grid">
+        {actions.map((a, i) => (
+          <button
+            key={a.n}
+            className={'mission-tile tone-' + a.tone}
+            onClick={a.onClick}
+            disabled={!has_resume && (a.label === 'Discover roles' || a.label === 'Run agent')}
+            style={{ animationDelay: `${i * 60}ms` }}
+          >
+            <span className="mission-num">{a.n}</span>
+            <span className="mission-icon"><Icon name={a.icon} size={20}/></span>
+            <span className="mission-label">{a.label}</span>
+            <span className="mission-sub">{a.sub}</span>
+            <span className="mission-arrow"><Icon name="arrow-up-right" size={13}/></span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ── Home — editorial pull-quote of the AI narrative ─────────────────────── */
+function NarrativePullQuote({ profile }) {
+  const insights = profile?.insights;
+  const narrative = insights?.narrative || '';
+  if (!narrative.trim()) return null;
+  const verified = insights.verified_by && insights.verified_by !== 'heuristic';
+  // Pull the first paragraph for the home page; the full narrative lives on
+  // the Resume → Analysis tab.
+  const lead = narrative.split(/\n\n+/)[0]?.trim() || narrative;
+  return (
+    <section className="narrative-section">
+      <div className="narrative-card">
+        <span className="narrative-mark" aria-hidden="true">&ldquo;</span>
+        <div className="narrative-eyebrow">
+          <span>03 ·</span>
+          <span>{verified ? 'AI-verified analysis' : 'Heuristic analysis'}</span>
+          <span className="narrative-sep">·</span>
+          <span>this week's read</span>
+        </div>
+        <p className="narrative-body">{lead}</p>
+        <div className="narrative-foot">— Atlas, your career analyst</div>
+      </div>
+    </section>
+  );
+}
+
+
+function Dashboard({ state, setPage, refresh }) {
   const jobs       = state?.scored_summary?.jobs || [];
   const apps       = state?.applications || [];
   const applied    = apps.filter(a => a.status === 'Applied').length;
@@ -841,6 +1231,19 @@ function Dashboard({ state, setPage }) {
           </div>
         </div>
       </section>
+
+      {/* ── Resume Intelligence + Mission Control row ──────────────── */}
+      <section className="dossier-row">
+        <ResumeIntelligencePanel
+          profile={state?.profile}
+          resumes={state?.resumes}
+          setPage={setPage}
+          refresh={refresh}
+        />
+        <MissionControlPanel state={state} setPage={setPage} refresh={refresh}/>
+      </section>
+
+      <NarrativePullQuote profile={state?.profile}/>
 
       <section className="kpi-row">
         <div className="kpi" style={{ animationDelay:'40ms' }}>
@@ -976,13 +1379,14 @@ function Onboarding({ onLoaded, isDev, setPage }) {
   const handleFile = async file => {
     if (!file) return;
     setLoading(true);
-    try { 
-      await api.upload('/api/resume/upload', file); 
-      onLoaded?.(); 
+    try {
+      await api.upload('/api/resume/upload', file);
+      onLoaded?.();
     } catch (e) {
       alert(e.message);
-    } finally { 
-      setLoading(false); 
+      onLoaded?.();  // re-check auth state; if session expired, auth gate shows sign-in
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -996,13 +1400,21 @@ function Onboarding({ onLoaded, isDev, setPage }) {
       onLoaded?.();
     } catch (e) {
       alert(e.message);
+      onLoaded?.();
     } finally { setLoading(false); }
   };
 
   const handleDemo = async () => {
     setLoading(true);
-    try { await api.post('/api/resume/demo', {}); onLoaded?.(); }
-    finally { setLoading(false); }
+    try {
+      await api.post('/api/resume/demo', {});
+      onLoaded?.();
+    } catch (e) {
+      alert(e.message || 'Could not load the sample resume. Please try again.');
+      onLoaded?.();
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -1084,7 +1496,7 @@ function ScoreRing({ score }) {
   );
 }
 
-function JobCard({ job, idx, isLiked, onLike, onHide }) {
+function JobCard({ job, idx, isLiked, onLike, onHide, onAsk }) {
   // Prefer stable per-job values (set by JobsPage); fall back to idx-based for callers that don't enrich.
   const logo    = job._logo   ?? LOGO_VARIANTS[idx % LOGO_VARIANTS.length];
   const posted  = job._posted ?? POSTED_LABELS[idx % POSTED_LABELS.length];
@@ -1135,7 +1547,7 @@ function JobCard({ job, idx, isLiked, onLike, onHide }) {
                 style={isLiked ? { color:'var(--accent-h)', background:'var(--accent-d)', borderColor:'var(--accent-b)' } : {}}>
                 <Icon name="bookmark" size={13} fill={isLiked ? "currentColor" : "none"}/>
               </button>
-              <button className="btn-ghost">
+              <button className="btn-ghost" onClick={() => onAsk?.(job)}>
                 <Icon name="sparkles" size={12}/> Ask Atlas
               </button>
               <button className="btn-primary" onClick={() => job.url && window.open(job.url, '_blank')}>
@@ -1272,6 +1684,7 @@ function JobsPage({ state, refresh, setPage }) {
   const [running, setRun]       = useState(false);
   const [searchingMore, setSearchingMore] = useState(false);
   const [runLabel, setRunLabel] = useState('');
+  const [askJob,  setAskJob]    = useState(null);  // active "Ask Atlas" target
 
   // Filter selections — null means "no filter for this dimension"
   const [fLocation, setFLocation] = useState(null);
@@ -1329,7 +1742,7 @@ function JobsPage({ state, refresh, setPage }) {
       setFeedJobs(data.jobs || []);
       setFeedCursor(data.next_cursor || null);
       setFeedTotal(data.total_estimate || 0);
-    } catch (e) { console.warn('feed load failed', e); }
+    } catch (e) { /* feed load failed — silently degrade, user sees empty state */ }
     finally { if (reqId === feedRequest.current) setFeedLoading(false); }
   }, [feedQS]);
 
@@ -1347,7 +1760,7 @@ function JobsPage({ state, refresh, setPage }) {
       fresh.forEach(j => seenIds.current.add(j.id));
       setFeedJobs(prev => [...prev, ...fresh]);
       setFeedCursor(data.next_cursor || null);
-    } catch (e) { console.warn('load more failed', e); }
+    } catch (e) { /* load more failed — cursor resets on next filter change */ }
     finally { setSearchingMore(false); }
   }, [feedCursor, feedQS, searchingMore]);
 
@@ -1485,14 +1898,22 @@ function JobsPage({ state, refresh, setPage }) {
 
   const handleAction = async (action, job) => {
     const job_id = job.id || `${job.co}|${job.role}`;
-    await api.post('/api/jobs/action', { action, job_id });
-    refresh();
+    try {
+      await api.post('/api/jobs/action', { action, job_id });
+      refresh();
+    } catch (e) {
+      alert(e.message || `Could not ${action} this job. Please try again.`);
+    }
   };
 
   const removeSearch = async (title) => {
     const nextTitles = (state?.profile?.target_titles || []).filter(t => t !== title);
-    await api.post('/api/profile', { ...state.profile, target_titles: nextTitles });
-    refresh();
+    try {
+      await api.post('/api/profile', { ...state.profile, target_titles: nextTitles });
+      refresh();
+    } catch (e) {
+      alert(e.message || 'Could not remove search title.');
+    }
   };
 
   const anyExtracting = (state?.resumes || []).some(r => r.extracting);
@@ -1621,7 +2042,8 @@ function JobsPage({ state, refresh, setPage }) {
                 <JobCard key={j.id || i} idx={i} job={j}
                   isLiked={liked.has(j.id)}
                   onLike={() => handleAction(liked.has(j.id) ? 'unlike' : 'like', j)}
-                  onHide={() => handleAction('hide', j)}/>
+                  onHide={() => handleAction('hide', j)}
+                  onAsk={() => setAskJob(j)}/>
               ))}
 
               {searchingMore && (
@@ -1701,7 +2123,174 @@ function JobsPage({ state, refresh, setPage }) {
           </div>
         </div>
       </div>
+
+      {askJob && (
+        <AskAtlas job={askJob} mode={state?.mode} isPro={!!state?.is_pro} onClose={() => setAskJob(null)}/>
+      )}
     </>
+  );
+}
+
+/* ──────────────────────────────────────────────────────────
+   Ask Atlas — per-job chat advisor. Slides in from the right;
+   thread is owned locally and reset when the drawer closes.
+   ────────────────────────────────────────────────────────── */
+function AskAtlas({ job, mode, isPro, onClose }) {
+  const jobId = job.id || `${job.co || job.company || ''}|${job.role || job.title || ''}`;
+  const [history, setHistory] = useState([]);
+  const [draft, setDraft] = useState('');
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState(null);
+  const scrollRef = useRef(null);
+  const inputRef = useRef(null);
+
+  // Esc closes; click outside also closes (handled by overlay click).
+  useEffect(() => {
+    const onKey = e => { if (e.key === 'Escape') onClose?.(); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    // Pin to bottom on every new turn or while pending shows the typing dots
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
+  }, [history.length, pending]);
+
+  const send = async () => {
+    const message = draft.trim();
+    if (!message || pending) return;
+    setError(null);
+    setDraft('');
+    const next = [...history, { role: 'user', content: message }];
+    setHistory(next);
+    setPending(true);
+    try {
+      const res = await api.post('/api/jobs/ask', { job_id: jobId, message, history });
+      setHistory([...next, { role: 'assistant', content: res.reply || '(no reply)' }]);
+    } catch (e) {
+      setError(e.message || 'Atlas could not respond.');
+      setHistory(next);   // keep the user's question even on failure
+    } finally {
+      setPending(false);
+      setTimeout(() => inputRef.current?.focus(), 50);
+    }
+  };
+
+  const onKey = e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+  };
+
+  const co = job.co || job.company || '—';
+  const role = job.role || job.title || 'Untitled role';
+  const score = Math.round(job.score || 0);
+  // Neutral label — the chat advisor uses whichever provider is configured;
+  // surfacing the brand here is just noise.
+  const providerLabel = mode === 'demo' ? 'Demo' : 'AI';
+
+  const suggestions = [
+    'How well do I fit this role based on my profile?',
+    'What résumé bullets should I emphasize for this posting?',
+    'What gaps should I expect in the interview, and how do I handle them?',
+    'What\'s a smart question to ask the recruiter for this role?',
+  ];
+
+  return (
+    <div className="ask-overlay" onClick={onClose}>
+      <aside className="ask-drawer" onClick={e => e.stopPropagation()}>
+        <header className="ask-head">
+          <div className="ask-head-l">
+            <CompanyLogo company={co} fallbackVariant="v1" size={36}/>
+            <div className="ask-head-meta">
+              <div className="ask-head-eyebrow">
+                <Icon name="sparkles" size={10}/> Atlas · {providerLabel}
+                {!isPro && mode === 'anthropic' && <span className="ask-pro-pill">Pro</span>}
+              </div>
+              <div className="ask-head-role">{role}</div>
+              <div className="ask-head-co">
+                <span>{co}</span>
+                {score > 0 && <span className="ask-head-score">{score}<i>/100</i></span>}
+              </div>
+            </div>
+          </div>
+          <button className="ask-close" onClick={onClose} title="Close (Esc)">
+            <Icon name="x" size={16}/>
+          </button>
+        </header>
+
+        <div className="ask-thread" ref={scrollRef}>
+          {history.length === 0 && (
+            <div className="ask-empty">
+              <div className="ask-empty-eyebrow">
+                <Icon name="brain" size={11}/> Atlas has read the full posting and your résumé
+              </div>
+              <div className="ask-empty-h">
+                Ask anything about <em>{role}</em> at <em>{co}</em>.
+              </div>
+              <div className="ask-suggestions">
+                {suggestions.map((s, i) => (
+                  <button key={i} className="ask-suggestion"
+                    style={{ animationDelay: `${i * 60}ms` }}
+                    onClick={() => { setDraft(s); setTimeout(() => inputRef.current?.focus(), 0); }}>
+                    <Icon name="sparkle" size={11}/> {s}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {history.map((m, i) => (
+            <div key={i} className={'ask-msg ask-msg-' + m.role}>
+              {m.role === 'assistant' && (
+                <div className="ask-msg-icon"><Icon name="sparkles" size={12}/></div>
+              )}
+              <div className="ask-msg-body">
+                {m.role === 'assistant'
+                  ? <Markdown text={m.content}/>
+                  : m.content}
+              </div>
+            </div>
+          ))}
+
+          {pending && (
+            <div className="ask-msg ask-msg-assistant">
+              <div className="ask-msg-icon"><Icon name="sparkles" size={12}/></div>
+              <div className="ask-msg-body ask-typing">
+                <span/><span/><span/>
+              </div>
+            </div>
+          )}
+
+          {error && (
+            <div className="ask-error">
+              <Icon name="alert-triangle" size={13}/>
+              <span>{error}</span>
+            </div>
+          )}
+        </div>
+
+        <footer className="ask-input-row">
+          <textarea
+            ref={inputRef}
+            className="ask-input"
+            placeholder={`Ask Atlas about ${role}…`}
+            value={draft}
+            onChange={e => setDraft(e.target.value)}
+            onKeyDown={onKey}
+            rows={1}
+            disabled={pending}/>
+          <button className="ask-send" onClick={send} disabled={pending || !draft.trim()}>
+            {pending ? <span className="spin"/> : <Icon name="send" size={14}/>}
+          </button>
+        </footer>
+        <div className="ask-foot-hint">
+          <Icon name="corner-down-left" size={10}/> Enter to send · Shift+Enter for newline · Esc to close
+        </div>
+      </aside>
+    </div>
   );
 }
 
@@ -1792,20 +2381,12 @@ function ScoreHero({ score, verifiedBy, notes, verifiedError }) {
             : pct >= 55 ? 'Has the bones; sharpen impact and verbs.'
             : pct >= 40 ? 'Quantification & action verbs are the unlocks.'
             :              'Restructure: numbers, action verbs, sections.';
-  const verified = !!verifiedBy && verifiedBy.startsWith('ollama');
-  const model = verified ? verifiedBy.replace(/^ollama:/, '') : null;
-  const FAIL_LABELS = {
-    offline:        'Ollama offline',
-    no_models:      'No Ollama models pulled',
-    http_error:     'Ollama request failed',
-    timeout:        'Ollama timed out',
-    request_failed: 'Ollama request failed',
-    parse_envelope: 'Ollama returned malformed output',
-    parse_content:  'Ollama returned non-JSON output',
-    empty_response: 'Ollama returned an empty response',
-    exception:      'Ollama call errored',
-  };
-  const failLabel = !verified ? (FAIL_LABELS[verifiedError] || 'Ollama unavailable') : null;
+  // Any non-"heuristic" verified_by counts as a successful AI verification.
+  // The specific provider name (e.g. "ollama:llama3.2", "anthropic:opus") is
+  // intentionally not surfaced — the user shouldn't have to know which
+  // backend ran the check, and they shouldn't see an apology when the LLM
+  // step fails. The heuristic output is itself a complete, valid analysis.
+  const verified = !!verifiedBy && verifiedBy !== 'heuristic';
   return (
     <div className="rs-hero">
       <div className="rs-hero-ring">
@@ -1824,13 +2405,16 @@ function ScoreHero({ score, verifiedBy, notes, verifiedError }) {
       <div className="rs-hero-text">
         <div className="rs-hero-rating" style={{ color }}>{label}</div>
         <div className="rs-hero-tag">{sub}</div>
-        <div className={'rs-verify ' + (verified ? 'ok' : 'warn')}>
-          <Icon name={verified ? 'shield-check' : 'shield-alert'} size={11}/>
+        <div className={'rs-verify ' + (verified ? 'ok' : 'info')}>
+          <Icon name={verified ? 'shield-check' : 'sparkles'} size={11}/>
           {verified
-            ? <>Verified by Ollama <code>{model}</code></>
-            : <>Heuristic-only · {failLabel}</>}
+            ? <>AI-verified analysis</>
+            : <>Heuristic analysis</>}
         </div>
-        {notes ? <div className="rs-verify-notes">{notes}</div> : null}
+        {/* Only surface verifier notes when the AI verification actually
+            succeeded; failure messages would just be alarming noise on top
+            of an already-valid heuristic analysis. */}
+        {verified && notes ? <div className="rs-verify-notes">{notes}</div> : null}
       </div>
     </div>
   );
@@ -2070,7 +2654,35 @@ function ResumePage({ state, refresh, setPage }) {
   const [isEditing, setIsEditing] = useState(false);
   const [editText, setEditText] = useState('');
   const [selectedId, setSelectedId] = useState(null);  // which row is selected
+  const [deleteConfirmId, setDeleteConfirmId] = useState(null);
+  // "Add resume" splits into two paths: upload a file, or paste text into
+  // a modal that round-trips the same /api/resume/upload endpoint as a
+  // pasted_resume.txt blob.
+  const [addMenuOpen, setAddMenuOpen] = useState(false);
+  const [pasteOpen, setPasteOpen] = useState(false);
+  const [pasteText, setPasteText] = useState('');
+  const [pasteName, setPasteName] = useState('pasted_resume.txt');
   const fileRef = useRef(null);
+  const addMenuRef = useRef(null);
+  // Close the Add menu when the user clicks outside it.
+  useEffect(() => {
+    if (!addMenuOpen) return undefined;
+    const off = (e) => {
+      if (addMenuRef.current && !addMenuRef.current.contains(e.target)) {
+        setAddMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', off);
+    return () => document.removeEventListener('mousedown', off);
+  }, [addMenuOpen]);
+  // Track per-upload extraction polls so we can clear them when the user
+  // navigates away or kicks off another upload — otherwise setInterval keeps
+  // ticking for the full 2-min safety cap and triggers stale refreshes.
+  const pollsRef = useRef(new Set());
+  useEffect(() => () => {
+    for (const id of pollsRef.current) clearInterval(id);
+    pollsRef.current.clear();
+  }, []);
 
   const resumes = state?.resumes || [];
   const primary = resumes.find(r => r.primary) || resumes[0];
@@ -2105,24 +2717,31 @@ function ResumePage({ state, refresh, setPage }) {
     };
   }, [sp]);
 
-  const handleUpload = async (file) => {
+  // Shared upload pipeline used by both the file-picker and the paste-text
+  // modal. Both end up calling /api/resume/upload with a File object — the
+  // backend can't tell the difference and the same extraction polling runs.
+  const submitResume = async (file) => {
     if (!file) return;
     setUploading(true);
     try {
       const result = await api.upload('/api/resume/upload', file);
-      // Auto-select the newly uploaded resume so its analysis panel shows immediately
       if (result?.id) setSelectedId(result.id);
       refresh();
-      // Poll more frequently while this resume is extracting
+      // Poll while extraction is in flight so the analysis lights up live.
       if (result?.extracting) {
         const poll = setInterval(async () => {
-          await refresh();
-          // Stop polling once it's no longer extracting
-          const s = await api.get('/api/state').catch(() => null);
+          const s = await refresh();
           const r = (s?.resumes || []).find(x => x.id === result.id);
-          if (!r || !r.extracting) clearInterval(poll);
+          if (!r || !r.extracting) {
+            clearInterval(poll);
+            pollsRef.current.delete(poll);
+          }
         }, 2000);
-        setTimeout(() => clearInterval(poll), 120000); // safety cap: 2 min
+        pollsRef.current.add(poll);
+        setTimeout(() => {
+          clearInterval(poll);
+          pollsRef.current.delete(poll);
+        }, 120000);
       }
     } catch (e) {
       alert(e.message);
@@ -2131,8 +2750,30 @@ function ResumePage({ state, refresh, setPage }) {
     }
   };
 
-  const handleDelete = async (id) => {
-    if (!confirm('Are you sure you want to delete this resume?')) return;
+  const handleUpload = (file) => submitResume(file);
+
+  const handlePasteSubmit = async () => {
+    const text = (pasteText || '').trim();
+    if (!text) {
+      alert('Paste your resume text first.');
+      return;
+    }
+    // Sanitize the filename — strip path separators, ensure .txt suffix.
+    let fname = (pasteName || 'pasted_resume.txt').trim().replace(/[/\\]/g, '_');
+    if (!/\.[a-z0-9]{1,5}$/i.test(fname)) fname += '.txt';
+    const blob = new Blob([text], { type: 'text/plain' });
+    const file = new File([blob], fname, { type: 'text/plain' });
+    setPasteOpen(false);
+    setPasteText('');
+    setPasteName('pasted_resume.txt');
+    await submitResume(file);
+  };
+
+  const handleDelete = (id) => setDeleteConfirmId(id);
+
+  const handleDeleteExecute = async () => {
+    const id = deleteConfirmId;
+    setDeleteConfirmId(null);
     try {
       await api.delete(`/api/resume/${id}`);
       refresh();
@@ -2153,8 +2794,7 @@ function ResumePage({ state, refresh, setPage }) {
       await refresh();
       if (res?.extracting) {
         const poll = setInterval(async () => {
-          await refresh();
-          const s = await api.get('/api/state').catch(() => null);
+          const s = await refresh();
           const r = (s?.resumes || []).find(x => x.id === id);
           if (!r || !r.extracting) clearInterval(poll);
         }, 2000);
@@ -2196,10 +2836,39 @@ function ResumePage({ state, refresh, setPage }) {
       <div className="page-head">
         <div className="page-title-big">Resume</div>
         <div className="head-spacer"/>
-        <button className="head-cta" onClick={() => fileRef.current?.click()} disabled={uploading}>
-          {uploading ? <span className="spin"/> : <Icon name="plus" size={13} color="#fff"/>}
-          {uploading ? 'Uploading...' : 'Add resume'}
-        </button>
+        <div ref={addMenuRef} style={{ position:'relative', display:'inline-flex' }}>
+          <button
+            className="head-cta"
+            onClick={() => setAddMenuOpen(o => !o)}
+            disabled={uploading}
+            style={{ display:'inline-flex', alignItems:'center', gap:6 }}
+          >
+            {uploading ? <span className="spin"/> : <Icon name="plus" size={13} color="#fff"/>}
+            {uploading ? 'Uploading…' : 'Add resume'}
+            {!uploading && <Icon name="chevron-down" size={11} color="#fff"/>}
+          </button>
+          {addMenuOpen && !uploading && (
+            <div
+              className="action-menu fade-in"
+              style={{ position:'absolute', top:'calc(100% + 6px)', right:0, minWidth:200, zIndex:50 }}
+            >
+              <button
+                className="menu-item"
+                onClick={() => { setAddMenuOpen(false); fileRef.current?.click(); }}
+              >
+                <Icon name="upload-cloud" size={13}/>
+                <span>Upload file</span>
+              </button>
+              <button
+                className="menu-item"
+                onClick={() => { setAddMenuOpen(false); setPasteOpen(true); }}
+              >
+                <Icon name="clipboard" size={13}/>
+                <span>Paste text</span>
+              </button>
+            </div>
+          )}
+        </div>
         <input ref={fileRef} type="file" style={{ display:'none' }} accept=".pdf,.docx,.txt,.md,.tex" onChange={e => handleUpload(e.target.files?.[0])}/>
       </div>
 
@@ -2335,10 +3004,10 @@ function ResumePage({ state, refresh, setPage }) {
                       {selected.extracting ? (
                         <>
                           <span className="spin" style={{ width:28, height:28, borderWidth:3, margin:'0 auto 16px', display:'block' }}/>
-                          <h3 className="rs-empty-h">Scanning resume & verifying with Ollama…</h3>
+                          <h3 className="rs-empty-h">Scanning resume & verifying with AI…</h3>
                           <p className="rs-empty-sub">
                             Reading every bullet for action verbs, quantification, weak phrasing,
-                            and section structure — then asking the local LLM to double-check.
+                            and section structure — then asking your configured AI to double-check.
                             Usually 5–30 seconds.
                           </p>
                         </>
@@ -2441,6 +3110,105 @@ function ResumePage({ state, refresh, setPage }) {
           )}
         </div>
       </div>
+
+      {deleteConfirmId && (() => {
+        const target = resumes.find(r => r.id === deleteConfirmId);
+        return (
+          <div className="ask-overlay" onClick={() => setDeleteConfirmId(null)}>
+            <div style={{ position:'fixed', top:'50%', left:'50%', transform:'translate(-50%,-50%)',
+                          background:'var(--bg-2)', border:'1px solid var(--bdr2)', borderRadius:12,
+                          padding:'24px 28px', minWidth:300, maxWidth:420, display:'flex', flexDirection:'column', gap:16 }}
+                 onClick={e => e.stopPropagation()}>
+              <div style={{ fontWeight:600, fontSize:16 }}>Delete resume?</div>
+              <div style={{ color:'var(--t2)', fontSize:14.5, lineHeight:1.5 }}>
+                <b style={{ color:'var(--t1)' }}>{target?.filename || 'This resume'}</b> will be permanently removed.
+                {target?.primary && <div style={{ marginTop:8, color:'var(--warn)', fontSize:13.5 }}>This is your primary resume. The next resume in the list will become primary.</div>}
+              </div>
+              <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
+                <button className="btn-ghost" style={{ padding:'7px 14px', fontSize:14 }} onClick={() => setDeleteConfirmId(null)}>Cancel</button>
+                <button className="btn-primary" style={{ padding:'7px 14px', fontSize:14, background:'var(--bad)', borderColor:'var(--bad)' }} onClick={handleDeleteExecute}>Delete</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Paste-text modal — alternative to file upload. Uses the same
+          /api/resume/upload endpoint by wrapping the text in a Blob. */}
+      {pasteOpen && (
+        <div
+          style={{
+            position:'fixed', inset:0, background:'rgba(0,0,0,0.55)',
+            display:'flex', alignItems:'center', justifyContent:'center',
+            zIndex:9999, padding:20,
+          }}
+          onClick={(e) => { if (e.target === e.currentTarget) setPasteOpen(false); }}
+        >
+          <div
+            style={{
+              background:'var(--surface)', border:'1px solid var(--bdr)',
+              borderRadius:14, padding:24, width:'min(720px, 100%)',
+              boxShadow:'0 24px 48px rgba(0,0,0,0.45)',
+            }}
+          >
+            <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:14 }}>
+              <Icon name="clipboard" size={18} color="var(--accent-h)"/>
+              <h2 style={{ fontSize:18, fontWeight:600, margin:0 }}>Paste resume text</h2>
+            </div>
+            <p style={{ fontSize:13, color:'var(--t2)', margin:'0 0 16px', lineHeight:1.6 }}>
+              Drop the text of your resume here. We extract skills, target roles, and
+              experience the same way as an uploaded PDF — just without the PDF parser
+              step.
+            </p>
+
+            <label className="set-field" style={{ marginBottom:12 }}>
+              <span className="set-label">Filename (optional)</span>
+              <input
+                className="set-input"
+                value={pasteName}
+                onChange={e => setPasteName(e.target.value)}
+                placeholder="pasted_resume.txt"
+              />
+            </label>
+
+            <label className="set-field" style={{ marginBottom:16 }}>
+              <span className="set-label">Resume content</span>
+              <textarea
+                className="profile-input profile-textarea"
+                style={{ minHeight:300, fontFamily:'var(--mono, monospace)', fontSize:12.5 }}
+                value={pasteText}
+                onChange={e => setPasteText(e.target.value)}
+                placeholder={'Jane Doe\njane@example.com  |  linkedin.com/in/janedoe\n\nEDUCATION\n…\n\nEXPERIENCE\n…'}
+                autoFocus
+              />
+            </label>
+
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:12 }}>
+              <span style={{ fontSize:12, color:'var(--t3)' }}>
+                {pasteText.length.toLocaleString()} characters
+              </span>
+              <div style={{ display:'flex', gap:8 }}>
+                <button
+                  className="btn-ghost"
+                  style={{ padding:'7px 14px', fontSize:14 }}
+                  onClick={() => { setPasteOpen(false); setPasteText(''); setPasteName('pasted_resume.txt'); }}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="btn-primary"
+                  style={{ padding:'7px 14px', fontSize:14 }}
+                  onClick={handlePasteSubmit}
+                  disabled={uploading || !pasteText.trim()}
+                >
+                  {uploading ? <span className="spin"/> : <Icon name="upload" size={13} color="#fff"/>}
+                  {uploading ? 'Saving…' : 'Save resume'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }
@@ -2859,6 +3627,7 @@ function CoachingPage() {
    INTERVIEW PAGE
 ══════════════════════════════════════════════════════════ */
 function InterviewPage() {
+  const [searchQuery, setSearchQuery] = useState('');
   const recents = ['Stripe','Meta (E4)','Google (L4)','Bloomberg','Databricks'];
   const sections = [
     {
@@ -2889,7 +3658,11 @@ function InterviewPage() {
 
           <div className="iv-search">
             <Icon name="search" size={15} color="var(--t3)"/>
-            <input placeholder="Search 311+ companies…"/>
+            <input
+              placeholder="Search 311+ companies…"
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+            />
           </div>
 
           <div className="iv-pillbar">
@@ -2958,6 +3731,14 @@ const PHASE_INFO = {
   7: { n:'Report',              s:'Generate session summary' },
 };
 
+function useAutoScroll(deps = []) {
+  const ref = useRef(null);
+  useEffect(() => {
+    if (ref.current) ref.current.scrollTop = ref.current.scrollHeight;
+  }, deps);
+  return ref;
+}
+
 const CLI_LINES = {
   1: ['$ agent.py --phase 1', '  parsing resume -> extracting text...', '  extracting skills and experience...', '  auditing skill evidence...', '  ranking target titles...', 'OK phase_1 complete'],
   2: ['$ agent.py --phase 2', '  sources: linkedin / indeed / glassdoor / ziprecruiter', '  simplify dataset enabled', '  deduplicating postings...', '  applying education + citizenship filters...', 'OK phase_2 complete'],
@@ -2970,9 +3751,10 @@ const CLI_LINES = {
 
 function PhaseLog({ n, logs = [], running }) {
   const lines = logs.length ? logs : CLI_LINES[n] || [];
+  const logRef = useAutoScroll([logs.length, running]);
   if (!lines.length && !running) return null;
   return (
-    <div className="agent-log">
+    <div className="agent-log" ref={logRef}>
       {(running && !logs.length ? lines.slice(0, -1) : lines).map((line, i) => (
         <div key={i} className={line.trim().startsWith('OK') ? 'ok' : ''}>{line}</div>
       ))}
@@ -3051,6 +3833,239 @@ function PhaseDetails({ n, data = {}, state = {}, threshold }) {
   return null;
 }
 
+/* ── Atlas chat — streaming over fetch (SSE-style) ─────────────────────── */
+function streamAtlasChat({ message, history, onStart, onDelta, onDone, onError }) {
+  const ctrl = new AbortController();
+  fetch('/api/atlas/chat/stream', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message, history }),
+    signal: ctrl.signal,
+  }).then(async resp => {
+    if (!resp.ok) {
+      const txt = await resp.text().catch(() => '');
+      // Pretty-print FastAPI's {"detail":"..."} envelope so the user sees a
+      // sentence rather than a JSON blob.
+      let detail = txt;
+      try { detail = JSON.parse(txt).detail || txt; } catch (_) {}
+      // 404 on this route almost always means the server is running an older
+      // app.py that predates the Ask Atlas endpoint — give the user a hint.
+      if (resp.status === 404) {
+        detail = 'Ask Atlas endpoint not found (HTTP 404). Restart the backend (uvicorn app:app) so it picks up the /api/atlas/chat/stream route.';
+      }
+      onError?.(new Error(detail || `HTTP ${resp.status}`));
+      return;
+    }
+    const reader = resp.body?.getReader();
+    if (!reader) { onError?.(new Error('No stream body')); return; }
+    const decoder = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const events = buf.split('\n\n');
+      buf = events.pop() || '';
+      for (const ev of events) {
+        const dataLine = ev.split('\n').find(l => l.startsWith('data: '));
+        if (!dataLine) continue;
+        try {
+          const m = JSON.parse(dataLine.slice(6));
+          if      (m.type === 'start') onStart?.(m);
+          else if (m.type === 'delta') onDelta?.(m.text || '');
+          else if (m.type === 'done')  { onDone?.(m); return; }
+          else if (m.type === 'error') { onError?.(new Error(m.message || 'chat error')); return; }
+        } catch (e) { /* malformed event — skip */ }
+      }
+    }
+    onDone?.({});
+  }).catch(err => {
+    if (err.name !== 'AbortError') onError?.(err);
+  });
+  return () => ctrl.abort();
+}
+
+function AtlasChat({ state, dataPing }) {
+  const [messages, setMessages] = useState([]); // [{role, content, streaming?, error?}]
+  const [draft, setDraft] = useState('');
+  const [busy, setBusy] = useState(false);
+  const cancelRef = useRef(null);
+  const transcriptRef = useAutoScroll([messages]);
+
+  const mode = state?.mode || 'anthropic';
+  // Neutral label — the user shouldn't have to know which provider is wired.
+  const modeLabel = mode === 'demo' ? 'DEMO' : 'AI';
+
+  const send = (text) => {
+    const trimmed = (text ?? draft).trim();
+    if (!trimmed || busy) return;
+    setDraft('');
+    const history = messages
+      .filter(m => !m.streaming && m.content && !m.error)
+      .map(({ role, content }) => ({ role, content }));
+    setMessages(prev => [
+      ...prev,
+      { role: 'user', content: trimmed },
+      { role: 'assistant', content: '', streaming: true },
+    ]);
+    setBusy(true);
+    cancelRef.current = streamAtlasChat({
+      message: trimmed,
+      history,
+      onDelta: (chunk) => {
+        setMessages(prev => {
+          const copy = prev.slice();
+          const last = copy[copy.length - 1];
+          if (last && last.role === 'assistant') {
+            copy[copy.length - 1] = { ...last, content: (last.content || '') + chunk };
+          }
+          return copy;
+        });
+      },
+      onDone: () => {
+        setMessages(prev => {
+          const copy = prev.slice();
+          const last = copy[copy.length - 1];
+          if (last && last.streaming) {
+            copy[copy.length - 1] = { ...last, streaming: false, content: last.content || '(no reply)' };
+          }
+          return copy;
+        });
+        setBusy(false);
+      },
+      onError: (err) => {
+        setMessages(prev => {
+          const copy = prev.slice();
+          const last = copy[copy.length - 1];
+          if (last && last.streaming) {
+            copy[copy.length - 1] = { ...last, streaming: false, content: '', error: err.message || 'chat failed' };
+          }
+          return copy;
+        });
+        setBusy(false);
+      },
+    });
+  };
+
+  const stop = () => {
+    cancelRef.current?.();
+    cancelRef.current = null;
+    setMessages(prev => {
+      const copy = prev.slice();
+      const last = copy[copy.length - 1];
+      if (last && last.streaming) {
+        copy[copy.length - 1] = { ...last, streaming: false, content: last.content || '(stopped)' };
+      }
+      return copy;
+    });
+    setBusy(false);
+  };
+
+  const reset = () => {
+    cancelRef.current?.();
+    setMessages([]);
+    setBusy(false);
+  };
+
+  const suggestions = useMemo(() => {
+    const out = [];
+    if (state?.scored_summary?.total) {
+      out.push("Which of my top-scored jobs should I prioritise this week?");
+      out.push("What's the pattern in the gaps the scorer flagged?");
+    } else if (state?.has_resume) {
+      out.push("What's the strongest narrative my resume can tell?");
+      out.push("Which titles am I closest to landing right now?");
+    } else {
+      out.push("How does Jobs AI work?");
+      out.push("What should I upload first?");
+    }
+    if ((state?.applications || []).length) {
+      out.push("How am I trending across the applications I've sent?");
+    } else {
+      out.push("How aggressive should my apply threshold be?");
+    }
+    return out.slice(0, 3);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state?.scored_summary?.total, state?.has_resume, state?.applications, dataPing]);
+
+  const onKeyDown = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      send();
+    }
+  };
+
+  return (
+    <aside className="atlas-panel">
+      <header className="atlas-head">
+        <div className="atlas-head-l">
+          <span className="atlas-mark" aria-hidden="true">✦</span>
+          <div className="atlas-head-text">
+            <div className="atlas-name">Ask <em>Atlas</em></div>
+            <div className="atlas-sub">Career-wide strategist · <code>{modeLabel}</code></div>
+          </div>
+        </div>
+        <div className="atlas-head-r">
+          {busy
+            ? <button className="atlas-iconbtn" onClick={stop} title="Stop generating"><Icon name="square" size={11}/></button>
+            : <button className="atlas-iconbtn" onClick={reset} disabled={!messages.length} title="Clear chat"><Icon name="rotate-ccw" size={11}/></button>}
+        </div>
+      </header>
+
+      <div className="atlas-transcript" ref={transcriptRef}>
+        {messages.length === 0 ? (
+          <div className="atlas-empty">
+            <div className="atlas-empty-mark">✦</div>
+            <div className="atlas-empty-h">I've read your resume, your queue, and your applications.</div>
+            <div className="atlas-empty-sub">Ask anything — strategy, gaps, what to fix next.</div>
+            <div className="atlas-suggestions">
+              {suggestions.map((s, i) => (
+                <button key={i} className="atlas-sug" onClick={() => send(s)}>
+                  <span className="atlas-sug-arrow">↳</span> {s}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : (
+          messages.map((m, i) => (
+            <div key={i} className={'atlas-msg atlas-msg-' + m.role + (m.streaming ? ' streaming' : '') + (m.error ? ' error' : '')}>
+              {m.role === 'assistant' && <span className="atlas-msg-mark" aria-hidden="true">✦</span>}
+              <div className="atlas-msg-bubble">
+                {m.error
+                  ? <span className="atlas-msg-err"><Icon name="circle-alert" size={12}/> {m.error}</span>
+                  : (m.content
+                      ? (
+                          <>
+                            {m.role === 'assistant'
+                              ? <Markdown text={m.content}/>
+                              : m.content}
+                            {m.streaming ? <span className="atlas-cursor">▍</span> : null}
+                          </>
+                        )
+                      : (m.streaming ? <span className="atlas-thinking"><span/><span/><span/></span> : null))}
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+
+      <div className="atlas-composer">
+        <textarea
+          className="atlas-input"
+          placeholder={busy ? 'Atlas is replying…' : 'Ask Atlas about your search…'}
+          value={draft}
+          onChange={e => setDraft(e.target.value)}
+          onKeyDown={onKeyDown}
+          rows={1}
+        />
+        <button className="atlas-send" onClick={() => send()} disabled={busy || !draft.trim()} aria-label="Send message">
+          {busy ? <span className="spin" style={{ width:13, height:13, borderWidth:2 }}/> : <Icon name="arrow-up" size={14}/>}
+        </button>
+      </div>
+    </aside>
+  );
+}
+
 function AgentPage({ state, refresh }) {
   const [open,    setOpen]    = useState({});
   const [running, setRunning] = useState(null);
@@ -3058,10 +4073,11 @@ function AgentPage({ state, refresh }) {
   const [phaseResults, setPhaseResults] = useState({});
   const [phaseLogs, setPhaseLogs] = useState({});
 
-  const done = new Set(state?.done || []);
+  const done = useMemo(() => new Set(state?.done || []), [state?.done]);
   const pct  = Math.round((done.size / 7) * 100);
-  const C = 65, circ = 2 * Math.PI * C;
+  const C = 56, circ = 2 * Math.PI * C;
   const off = circ - (circ * pct / 100);
+  const ringTone = pct === 100 ? 'var(--good)' : pct > 0 ? 'var(--accent-h)' : 'var(--t4)';
 
   const startPhase = (n, rerun=false) => {
     if (running) return;
@@ -3077,108 +4093,169 @@ function AgentPage({ state, refresh }) {
     });
   };
 
+  // Run-all uses a local "completed" set so phases finishing mid-loop are
+  // tracked correctly (the captured `done` Set otherwise goes stale).
   const runAll = async () => {
     if (running) return;
+    const completed = new Set(done);
     for (let n = 1; n <= 7; n++) {
-      if (done.has(n)) continue;
-      await new Promise((res, rej) => {
+      if (completed.has(n)) continue;
+      const ok = await new Promise(resolve => {
         setRunning(n);
         setOpen(o => ({ ...o, [n]:true }));
         setPhaseLogs(p => ({ ...p, [n]:[] }));
         runPhaseSSE(n, {
-          onLog:   m  => setPhaseLogs(p => ({ ...p, [n]:[...(p[n] || []), m.text || m.line || ''] })),
-          onDone:  m  => { setPhaseResults(p => ({ ...p, [n]:m.data || {} })); setRunning(null); refresh(); res(); },
-          onError: e  => { setRunning(null); setErrors(p => ({ ...p, [n]:e.message })); refresh(); rej(e); },
+          onLog:   m => setPhaseLogs(p => ({ ...p, [n]:[...(p[n] || []), m.text || m.line || ''] })),
+          onDone:  m => {
+            setPhaseResults(p => ({ ...p, [n]:m.data || {} }));
+            setRunning(null); refresh();
+            completed.add(n); resolve(true);
+          },
+          onError: e => {
+            setRunning(null);
+            setErrors(p => ({ ...p, [n]:e.message || 'failed' }));
+            refresh(); resolve(false);
+          },
         });
-      }).catch(() => {});
+      });
+      if (!ok) break;
     }
   };
 
-  return (
-    <>
-      <div className="page-head">
-        <div className="page-title-big">Agent</div>
-        <div className="head-spacer"/>
-        <button className="btn-ghost" onClick={() => api.post('/api/reset', {}).then(refresh)}>
-          <Icon name="rotate-ccw" size={12}/> Reset
-        </button>
-        <button className="head-cta" onClick={runAll} disabled={!!running} style={{ marginLeft:8 }}>
-          {running ? <><span className="spin"/> Running phase {running}…</> : <><Icon name="play" size={13} color="#fff"/> Run all phases</>}
-        </button>
-      </div>
+  const totalElapsed = useMemo(() => {
+    const e = state?.elapsed || {};
+    return Object.values(e).reduce((acc, v) => acc + (Number(v) || 0), 0);
+  }, [state?.elapsed]);
 
-      <div className="page-body solo" style={{ paddingTop:14 }}>
-        <div className="col-main">
-          <div className="agent-hero">
-            <div style={{ flex:1, minWidth:0 }}>
-              <div className="agent-eyebrow">Autonomous mode</div>
-              <h1 className="agent-h">Atlas runs your entire job&#8209;search pipeline.</h1>
-              <p className="agent-p">From resume parsing to one-click applies, seven chained phases handle everything. Pause and inspect any step, or let it run end-to-end.</p>
-            </div>
-            <div className="agent-ring">
-              <svg width="120" height="120" viewBox="0 0 150 150">
-                <circle cx="75" cy="75" r={C} fill="none" strokeWidth="7" stroke="rgba(255,255,255,.06)"/>
-                <circle cx="75" cy="75" r={C} fill="none" strokeWidth="7" stroke="var(--accent-h)" strokeLinecap="round"
-                  strokeDasharray={circ} strokeDashoffset={off} style={{ transition:'stroke-dashoffset .8s' }}/>
+  const appliedCount = (state?.applications || []).filter(a => a.app_status === 'Applied' || a.status === 'Applied').length;
+
+  return (
+    <div className="agent-shell">
+      {/* Slim header with mono cadence — no decorative hero */}
+      <header className="agent-head">
+        <div className="agent-head-l">
+          <div className="agent-eyebrow">Pipeline · 7 phases</div>
+          <h1 className="agent-h"><em>Atlas</em> runs your entire search.</h1>
+        </div>
+        <div className="agent-head-r">
+          <button className="btn-ghost" onClick={() => api.post('/api/reset', {}).then(refresh)} disabled={!!running}>
+            <Icon name="rotate-ccw" size={12}/> Reset
+          </button>
+          <button className="head-cta agent-runall" onClick={runAll} disabled={!!running}>
+            {running
+              ? <><span className="spin"/> Running phase {running}…</>
+              : <><Icon name="play" size={13} color="#fff"/> Run all phases</>}
+          </button>
+        </div>
+      </header>
+
+      <div className="agent-grid">
+        {/* ── Left: pipeline ──────────────────────────────────── */}
+        <section className="agent-pipeline">
+          <div className="agent-meter">
+            <div className="agent-meter-ring">
+              <svg width="120" height="120" viewBox="0 0 120 120">
+                <circle cx="60" cy="60" r={C} fill="none" strokeWidth="6" stroke="rgba(255,255,255,.06)"/>
+                <circle cx="60" cy="60" r={C} fill="none" strokeWidth="6" stroke={ringTone} strokeLinecap="round"
+                  strokeDasharray={circ} strokeDashoffset={off}
+                  transform="rotate(-90 60 60)"
+                  style={{ transition:'stroke-dashoffset .9s cubic-bezier(.16,1,.3,1), stroke .25s' }}/>
               </svg>
-              <div className="agent-ring-pct">
-                <b>{pct}%</b>
-                <span>{done.size}/7 phases</span>
+              <div className="agent-meter-pct" style={{ color: ringTone }}>
+                <b>{pct}<i>%</i></b>
+                <span>{done.size}/7</span>
+              </div>
+            </div>
+            <div className="agent-meter-stats">
+              <div className="agent-meter-stat">
+                <i>RUNTIME</i>
+                <b>{totalElapsed > 0 ? `${totalElapsed.toFixed(1)}s` : '—'}</b>
+              </div>
+              <div className="agent-meter-stat">
+                <i>JOBS</i>
+                <b>{state?.scored_summary?.total ?? state?.job_count ?? 0}</b>
+              </div>
+              <div className="agent-meter-stat">
+                <i>APPLIED</i>
+                <b>{appliedCount}</b>
+              </div>
+              <div className="agent-meter-stat">
+                <i>STATUS</i>
+                <b style={{ color: running ? 'var(--warn)' : pct === 100 ? 'var(--good)' : 'var(--t2)' }}>
+                  {running ? 'RUNNING' : pct === 100 ? 'COMPLETE' : pct > 0 ? 'IDLE' : 'READY'}
+                </b>
               </div>
             </div>
           </div>
 
-          <div className="phases">
-            {[1,2,3,4,5,6,7].map(n => {
+          <ol className="agent-phases">
+            {[1,2,3,4,5,6,7].map((n, idx) => {
               const isDone = done.has(n);
               const isRun  = running === n;
               const err    = errors[n] || state?.error?.[n];
               const elapsed = state?.elapsed?.[n];
-              const cls = isRun ? 'run' : err ? 'err' : isDone ? 'done' : '';
+              const cls = isRun ? 'run' : err ? 'err' : isDone ? 'done' : 'idle';
+              const isOpen = !!open[n];
 
               return (
-                <div key={n} className={'ph ' + cls}>
-                  <div className="ph-hd" onClick={() => setOpen(o => ({ ...o, [n]:!o[n] }))}>
-                    <div className="ph-num">{n}</div>
-                    <div style={{ flex:1, minWidth:0 }}>
-                      <div className="ph-name">{PHASE_INFO[n].n}</div>
-                      <div className="ph-sub">{PHASE_INFO[n].s}</div>
-                    </div>
-                    {isRun  && <span className="ph-badge" style={{ background:'var(--warn-d)', color:'var(--warn)' }}>Running</span>}
-                    {!isRun && isDone && <span className="ph-badge" style={{ background:'var(--good-d)', color:'var(--good)' }}>Done</span>}
-                    {!isRun && !isDone && !err && <span className="ph-badge" style={{ background:'rgba(255,255,255,.04)', color:'var(--t3)' }}>Waiting</span>}
-                    {!isRun && err && <span className="ph-badge" style={{ background:'var(--bad-d)', color:'var(--bad)' }}>Error</span>}
-                    {elapsed != null && <span className="ph-elapsed">{elapsed.toFixed(1)}s</span>}
-                    <button className="btn-ghost" style={{ marginLeft:6 }}
-                      onClick={e => { e.stopPropagation(); startPhase(n, isDone); }}
-                      disabled={!!running}>
-                      <Icon name={isDone ? 'rotate-ccw' : 'play'} size={11}/>
-                      {isDone ? 'Re-run' : 'Run'}
-                    </button>
-                    <span className={'ph-chev' + (open[n] ? ' open' : '')} style={{ marginLeft:6 }}>
-                      <Icon name="chevron-down" size={14}/>
+                <li key={n} className={'aph aph-' + cls + (isOpen ? ' aph-open' : '')}
+                    style={{ animationDelay: `${idx * 60}ms` }}>
+                  <div className="aph-hd" onClick={() => setOpen(o => ({ ...o, [n]: !o[n] }))} role="button" tabIndex={0}>
+                    <span className="aph-num">{String(n).padStart(2, '0')}</span>
+                    <span className="aph-info">
+                      <span className="aph-name">{PHASE_INFO[n].n}</span>
+                      <span className="aph-sub">{PHASE_INFO[n].s}</span>
+                    </span>
+                    <span className="aph-status">
+                      {isRun  && <span className="aph-pulse"><span className="aph-dot"/> Running</span>}
+                      {!isRun && isDone && <span className="aph-pill aph-pill-good"><Icon name="check" size={10}/> Done</span>}
+                      {!isRun && !isDone && !err && <span className="aph-pill aph-pill-mid">Idle</span>}
+                      {!isRun && err && <span className="aph-pill aph-pill-bad"><Icon name="alert-triangle" size={10}/> Error</span>}
+                      {elapsed != null && <span className="aph-elapsed">{elapsed.toFixed(1)}s</span>}
+                    </span>
+                    <span className="aph-actions">
+                      <button type="button" className="aph-runbtn"
+                        onClick={e => { e.stopPropagation(); startPhase(n, isDone); }}
+                        disabled={!!running}
+                        title={isDone ? 'Re-run phase' : 'Run phase'}>
+                        <Icon name={isDone ? 'rotate-ccw' : 'play'} size={11}/>
+                      </button>
+                      <span className="aph-chev" aria-hidden="true">
+                        <Icon name="chevron-down" size={14}/>
+                      </span>
                     </span>
                   </div>
-                  {isRun && <div className="ph-loading-bar"><div className="ph-loading-fill"/></div>}
-                  {open[n] && (
-                    <div className="ph-body fade-in">
+
+                  {isRun && <div className="aph-bar"><div className="aph-bar-fill"/></div>}
+
+                  {isOpen && (
+                    <div className="aph-body">
                       <PhaseLog n={n} logs={phaseLogs[n]} running={isRun}/>
-                      {err && <div className="err-block">Warning: {err}</div>}
+                      {err && <div className="err-block"><Icon name="alert-triangle" size={12}/> {err}</div>}
                       {!err && isDone && (
-                        <PhaseDetails n={n} data={phaseResults[n] || state?.phase_results?.[n] || state?.phase_results?.[String(n)] || {}} state={state} threshold={state?.threshold || 75}/>
+                        <PhaseDetails
+                          n={n}
+                          data={phaseResults[n] || state?.phase_results?.[n] || state?.phase_results?.[String(n)] || {}}
+                          state={state}
+                          threshold={state?.threshold || 75}/>
                       )}
                       {!err && !isDone && !isRun && (
-                        <div className="wait-state">Waiting for phase {n-1} to complete first.</div>
+                        <div className="wait-state">
+                          {n === 1 ? 'Click Run to extract your profile.' : `Waiting for phase ${n - 1} to complete first.`}
+                        </div>
                       )}
                     </div>
                   )}
-                </div>
+                </li>
               );
             })}
-          </div>
-        </div>
+          </ol>
+        </section>
+
+        {/* ── Right: Atlas chat sidebar ──────────────────────── */}
+        <AtlasChat state={state} dataPing={(state?.done || []).join(',') + '|' + (state?.applications || []).length}/>
       </div>
-    </>
+    </div>
   );
 }
 
@@ -3191,8 +4268,31 @@ function SettingsPage({ state, refresh, setPage }) {
   const [ollamaModels, setOllamaModels] = useState([]);
   const [ollamaOk, setOllamaOk] = useState(null);
   const [planError, setPlanError] = useState(null);
+  const [resetting, setResetting] = useState(false);
+  const [resetError, setResetError] = useState(null);
 
   const isPro = !!state?.is_pro;
+  const isCloudModel = name => /cloud$/i.test(name || '');
+
+  const handleReset = async () => {
+    if (resetting) return;
+    if (!confirm('Delete all data? This will permanently remove your resume, profile, jobs, and applications. Your account stays signed in.')) return;
+    setResetting(true);
+    setResetError(null);
+    try {
+      const res = await api.post('/api/reset', {});
+      if (res?.ok === false) throw new Error(res.error || 'Reset failed');
+      // Pull the now-blank server state and route to home so the cleared
+      // state is unmistakable. The Onboarding gate will fire because
+      // has_resume is false, which is exactly the post-reset experience.
+      await refresh();
+      setPage?.('home');
+    } catch (err) {
+      setResetError(err?.message || 'Reset failed');
+    } finally {
+      setResetting(false);
+    }
+  };
 
   const update = async (newCfg) => {
     const prev = { ...cfg };
@@ -3208,23 +4308,68 @@ function SettingsPage({ state, refresh, setPage }) {
         setPlanError(e.message);
         setCfg(prev);
       } else {
-        console.error('Config save failed:', e);
+        setPlanError(e.message || 'Settings save failed');
       }
     } finally {
       setTimeout(() => setSaving(false), 600);
     }
   };
 
-  useEffect(() => {
-    if (cfg.mode !== 'ollama') return;
-    api.get('/api/ollama/status').then(s => {
+  // Ollama runs SERVER-SIDE (the RPi in production), not on the visiting
+  // user's laptop. Fetch on mount unconditionally so the dropdown is populated
+  // by the time the user enters Ollama mode (fixes the "models only show on
+  // hover" bug — the previous mode-gated effect never fired until mode flipped).
+  const [ollamaStatus, setOllamaStatus] = useState(null);
+  const [ensuringPull, setEnsuringPull] = useState(false);
+
+  const refreshOllama = useCallback(async () => {
+    try {
+      const s = await api.get('/api/ollama/status');
+      setOllamaStatus(s);
       setOllamaOk(s.running);
       setOllamaModels(s.models || []);
-      if (s.models && s.models.length > 0 && !s.models.find(m => m.name === cfg.ollama_model)) {
-        update({ ollama_model: s.models[0].name });
-      }
-    }).catch(() => setOllamaOk(false));
-  }, [cfg.mode]);
+    } catch (e) {
+      setOllamaOk(false);
+      setOllamaStatus({ running: false, error: e.message });
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshOllama();
+    const id = setInterval(refreshOllama, 8000);
+    return () => clearInterval(id);
+  }, [refreshOllama]);
+
+  // When the configured model isn't pulled, ask the server to background-pull it.
+  useEffect(() => {
+    if (cfg.mode !== 'ollama') return;
+    if (!ollamaStatus?.running) return;
+    if (ollamaStatus?.pulled) return;
+    if (ensuringPull) return;
+    const ps = ollamaStatus?.pull?.status;
+    if (ps === 'pulling' || ps === 'starting') return;
+    setEnsuringPull(true);
+    api.post('/api/ollama/ensure', {})
+      .catch(() => {})
+      .finally(() => { setEnsuringPull(false); refreshOllama(); });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cfg.mode, ollamaStatus?.running, ollamaStatus?.pulled, ollamaStatus?.pull?.status]);
+
+  // If the configured model isn't in the available list, snap to the first one.
+  // Free users get snapped to the first local model rather than potentially a cloud model.
+  useEffect(() => {
+    if (cfg.mode !== 'ollama') return;
+    const models = ollamaStatus?.models || [];
+    if (!models.length) return;
+    const inList = cfg.ollama_model && models.find(m => m.name === cfg.ollama_model);
+    // Free users must not stay on a cloud model — snap away even if it's in the list.
+    if (inList && (isPro || !isCloudModel(cfg.ollama_model))) return;
+    const firstModel = isPro
+      ? models[0]
+      : (models.find(m => !isCloudModel(m.name)) || models[0]);
+    update({ ollama_model: firstModel.name });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ollamaStatus?.models, cfg.mode, isPro]);
 
   const Toggle = ({ field, label, sub }) => (
     <div className="set-row">
@@ -3233,7 +4378,7 @@ function SettingsPage({ state, refresh, setPage }) {
         {sub && <div className="set-helper">{sub}</div>}
       </div>
       <button className={'set-toggle' + (cfg[field] ? ' on' : '')}
-        onClick={() => update({ [field]: !cfg[field] })}/>
+        onClick={() => update({ [field]: !(cfg[field] ?? false) })}/>
     </div>
   );
 
@@ -3269,7 +4414,7 @@ function SettingsPage({ state, refresh, setPage }) {
                 <Icon name="lock" size={14}/>
                 <div className="plan-banner-body">
                   <b>{planError}</b>
-                  <span>Switch your provider, or upgrade to unlock Claude.</span>
+                  <span>{/cloud/i.test(planError) ? 'Switch to a local model, or upgrade to unlock cloud models.' : 'Switch your provider, or upgrade to unlock Claude.'}</span>
                 </div>
                 <button className="plan-banner-cta" onClick={() => setPage && setPage('plans')}>
                   View plans <Icon name="arrow-right" size={11}/>
@@ -3285,26 +4430,91 @@ function SettingsPage({ state, refresh, setPage }) {
             )}
             {cfg.mode === 'ollama' && (
               <div className="set-field">
-                <div className="set-label">Ollama Model</div>
-                {ollamaOk === false && (
-                  <div className="set-helper" style={{ color:'#f87171', marginBottom:8 }}>
-                    Ollama not reachable — run: <code>ollama serve</code>
+                <div className="set-label">
+                  Ollama Model
+                  {!isPro && <span className="set-label-hint">cloud models require Pro</span>}
+                </div>
+
+                {/* Server-side status banner — makes it clear this is on the
+                    deployment host (the RPi), not the user's machine. */}
+                <div className={'ollama-banner' + (
+                  ollamaStatus == null      ? ' ob-loading'
+                  : !ollamaStatus.running   ? ' ob-down'
+                  : ollamaStatus.pull?.status === 'pulling' || ollamaStatus.pull?.status === 'starting' ? ' ob-pulling'
+                  : !ollamaStatus.pulled    ? ' ob-missing'
+                  : ' ob-ok'
+                )}>
+                  <div className="ob-row">
+                    <span className="ob-tag">SERVER</span>
+                    <code className="ob-host">{ollamaStatus?.host || 'http://localhost:11434'}</code>
+                    <span className="ob-state">
+                      {ollamaStatus == null
+                        ? <><span className="spin" style={{ width:9, height:9, borderWidth:1.5 }}/> CHECKING</>
+                        : !ollamaStatus.running
+                          ? <>● OFFLINE</>
+                          : ollamaStatus.pull?.status === 'pulling' || ollamaStatus.pull?.status === 'starting'
+                            ? <>● PULLING {typeof ollamaStatus.pull?.percent === 'number' ? `${ollamaStatus.pull.percent}%` : ''}</>
+                            : ollamaStatus.pulled
+                              ? <>● READY</>
+                              : <>● MODEL MISSING</>}
+                    </span>
                   </div>
-                )}
-                {ollamaModels.length > 0 ? (
-                  <>
-                    <select className="set-select" value={cfg.ollama_model || ''} 
-                      onChange={e => update({ ollama_model: e.target.value })}>
-                      {ollamaModels.map(m => (
-                        <option key={m.name} value={m.name}>{m.name}</option>
-                      ))}
-                    </select>
-                  </>
-                ) : ollamaOk && (
-                  <div className="set-helper" style={{ color:'#fbbf24' }}>
-                    No models pulled — run: <code>ollama pull llama3.2</code>
-                  </div>
-                )}
+                  {ollamaStatus?.pull?.status === 'pulling' || ollamaStatus?.pull?.status === 'starting' ? (
+                    <div className="ob-progress">
+                      <div className="ob-progress-bar" style={{ width: `${Math.max(2, ollamaStatus?.pull?.percent || 2)}%` }}/>
+                      <div className="ob-progress-stage">
+                        Pulling <code>{ollamaStatus?.pull?.model || cfg.ollama_model}</code> · {ollamaStatus?.pull?.stage || 'starting'}
+                      </div>
+                    </div>
+                  ) : null}
+                  {!ollamaStatus?.running && (
+                    <div className="ob-help">
+                      The deployment server can't reach Ollama. On the RPi, run <code>ollama serve</code>
+                      {' '}— or set <code>OLLAMA_URL</code> to point at the host that's running it.
+                    </div>
+                  )}
+                  {ollamaStatus?.running && !ollamaStatus?.pulled && ollamaStatus?.pull?.status !== 'pulling' && ollamaStatus?.pull?.status !== 'starting' && (
+                    <div className="ob-help">
+                      Model <code>{cfg.ollama_model}</code> isn't pulled on the server yet — auto-pull starting…
+                    </div>
+                  )}
+                </div>
+
+                <select className="set-select" value={cfg.ollama_model || ''}
+                  disabled={!ollamaModels.length}
+                  onChange={e => {
+                    const name = e.target.value;
+                    if (isCloudModel(name) && !isPro) {
+                      setPlanError('Cloud models require the Pro plan');
+                      return;
+                    }
+                    update({ ollama_model: name });
+                  }}>
+                  {ollamaModels.length > 0 ? (() => {
+                    const local = ollamaModels.filter(m => !isCloudModel(m.name));
+                    const cloud = ollamaModels.filter(m => isCloudModel(m.name));
+                    return <>
+                      {local.length > 0 && <optgroup label="Local">
+                        {local.map(m => (
+                          <option key={m.name} value={m.name}>
+                            {m.name}{m.size_gb ? `  ·  ${m.size_gb} GB` : ''}{m.params ? `  ·  ${m.params}` : ''}
+                          </option>
+                        ))}
+                      </optgroup>}
+                      {cloud.length > 0 && <optgroup label={`Cloud${isPro ? '' : ' — Pro'}`}>
+                        {cloud.map(m => (
+                          <option key={m.name} value={m.name} disabled={!isPro}>
+                            {m.name}{!isPro ? ' — Pro' : ''}
+                          </option>
+                        ))}
+                      </optgroup>}
+                    </>;
+                  })()
+                  : <option>{ollamaStatus == null ? 'Loading models…' : ollamaStatus.running ? 'No models pulled yet' : 'Ollama offline'}</option>}
+                </select>
+                <div className="set-helper" style={{ marginTop:6 }}>
+                  Ollama is hosted on the deployment server. Browser ↔ FastAPI traffic goes over your Tailnet Funnel; FastAPI ↔ Ollama stays internal on the host.
+                </div>
               </div>
             )}
             <div className="set-field">
@@ -3327,10 +4537,22 @@ function SettingsPage({ state, refresh, setPage }) {
           {/* Account/Data */}
           <div className="set-sec">
             <div className="set-sec-h"><Icon name="database" size={14}/> Data Management</div>
-            <button className="btn-ghost" style={{ width:'100%', justifyContent:'flex-start', color:'var(--bad)' }} onClick={async () => { if (!confirm('Delete all data? This will permanently remove your resume, profile, jobs, and applications.')) return; try { await api.post('/api/reset', {}); } catch (err) { alert(err.message || 'Reset failed'); } await refresh(); }}>
-              <Icon name="trash-2" size={14}/> Reset all data
+            <button
+              className="btn-ghost"
+              style={{ width:'100%', justifyContent:'flex-start', color:'var(--bad)', opacity: resetting ? 0.6 : 1 }}
+              onClick={handleReset}
+              disabled={resetting}
+            >
+              {resetting
+                ? <><span className="spin"/> Resetting…</>
+                : <><Icon name="trash-2" size={14}/> Reset all data</>}
             </button>
-            <div className="set-helper" style={{ marginTop:8 }}>This will clear your resume, jobs, and all application data permanently.</div>
+            <div className="set-helper" style={{ marginTop:8 }}>This will clear your resume, jobs, and all application data permanently. Your account stays signed in.</div>
+            {resetError && (
+              <div className="set-helper" style={{ marginTop:6, color:'var(--bad)' }}>
+                <Icon name="alert-circle" size={12}/> {resetError}
+              </div>
+            )}
           </div>
           
           {/* Advanced */}
@@ -3398,6 +4620,7 @@ function PlansPage({ state, setPage }) {
               <li><Icon name="check" size={13}/> Excel tracker + run reports</li>
               <li><Icon name="check" size={13}/> Job discovery across all scrapers</li>
               <li><Icon name="check" size={13}/> Cover letter generation (template)</li>
+              <li className="plan-feature-muted"><Icon name="x" size={13}/> Cloud Ollama models</li>
               <li className="plan-feature-muted"><Icon name="x" size={13}/> Anthropic Claude provider</li>
             </ul>
             <button className="plan-cta plan-cta-ghost" disabled>
@@ -3417,6 +4640,7 @@ function PlansPage({ state, setPage }) {
             <ul className="plan-features">
               <li><Icon name="check" size={13}/> Everything in Free</li>
               <li className="plan-feature-hi"><Icon name="sparkles" size={13}/> Anthropic Claude provider unlocked</li>
+              <li className="plan-feature-hi"><Icon name="sparkles" size={13}/> Cloud Ollama models unlocked</li>
               <li><Icon name="check" size={13}/> Higher-fidelity scoring &amp; tailoring</li>
               <li><Icon name="check" size={13}/> Better résumé critique &amp; ATS gap analysis</li>
               <li><Icon name="check" size={13}/> Priority support</li>
@@ -3621,7 +4845,6 @@ function DevPage({ state: globalState, refresh: globalRefresh }) {
         setError(null);
       }
     } catch (e) {
-      console.error('Dev refresh failed:', e);
       setError(500);
     } finally {
       setTimeout(() => setRefreshing(false), 400);
@@ -4583,28 +5806,37 @@ function App() {
       const next = await api.get('/api/state');
       setState(next);
       applyDevTweaks(next.dev_tweaks);
+      return next;
     }
-    catch (err) {}
+    catch (err) { return null; }
     finally { setBooted(true); }
   }, []);
 
   useEffect(() => { refresh(); }, [refresh]);
 
-  // Apply light/dark theme to <html> whenever the setting changes
+  // Apply light/dark theme to <html> whenever the setting changes.
+  // Skip the DOM write when the value already matches so polling doesn't
+  // touch the layout-affecting attribute on every state refresh.
   useEffect(() => {
-    if (state?.light_mode) {
-      document.documentElement.dataset.theme = 'light';
-    } else {
-      delete document.documentElement.dataset.theme;
-    }
+    const want = state?.light_mode ? 'light' : '';
+    const have = document.documentElement.dataset.theme || '';
+    if (want === have) return;
+    if (want) document.documentElement.dataset.theme = 'light';
+    else delete document.documentElement.dataset.theme;
   }, [state?.light_mode]);
 
-  // Adaptive polling: 2 s while any resume is extracting, 8 s otherwise
+  // Adaptive polling: 2 s while any resume is extracting, 8 s otherwise.
+  // Only poll once the user is authenticated. Polling on the AuthPage races
+  // with login: a poll started just before the user clicks Sign-in resolves
+  // *after* login with the OLD anonymous cookies, then setState clobbers
+  // state.user back to null and the AuthPage re-renders — which is why login
+  // used to require two clicks.
   const anyExtracting = (state?.resumes || []).some(r => r.extracting);
   useEffect(() => {
+    if (!state?.user) return;
     const id = setInterval(refresh, anyExtracting ? 2000 : 8000);
     return () => clearInterval(id);
-  }, [refresh, anyExtracting]);
+  }, [refresh, anyExtracting, state?.user]);
 
   // Note: discovery (phases 1/2/3) is owned by JobsPage when the user opens it.
   // We deliberately do NOT prefetch from App.jsx — running both led to two
@@ -4616,17 +5848,15 @@ function App() {
     </div>
   );
 
-  /* Auth Gate */
-  if (!state?.user && page !== 'home' && page !== 'dev' && !state?.is_dev) {
+  /* Auth gate — the entire SPA requires a real authenticated user.
+     Anonymous visitors only ever see AuthPage. This prevents ghost/unprofiled
+     users from being created in the Dev Ops user list. */
+  if (!state?.user) {
     return <AuthPage onAuth={refresh} />;
   }
 
-  /* Onboarding gate — resume upload requires a real authenticated user.
-     is_dev alone is NOT sufficient: /api/resume/upload calls _require_auth_user. */
+  /* Onboarding gate — once authenticated, route resume-less users into upload. */
   if (!state?.has_resume && page !== 'dev') {
-    if (!state?.user) {
-      return <AuthPage onAuth={refresh} />;
-    }
     return (
       <div style={{ display:'flex', flexDirection:'column', height:'100vh', background:'var(--bg)' }}>
         <Onboarding onLoaded={refresh} isDev={state?.is_dev} setPage={setPage}/>
@@ -4641,7 +5871,7 @@ function App() {
 
   const pageEl = (() => {
     switch (page) {
-      case 'home':      return <Dashboard state={state} setPage={setPage}/>;
+      case 'home':      return <Dashboard state={state} setPage={setPage} refresh={refresh}/>;
       case 'jobs':      return <JobsPage state={state} refresh={refresh} setPage={setPage}/>;
       case 'resume':    return <ResumePage state={state} refresh={refresh} setPage={setPage}/>;
       case 'profile':   return <ProfilePage state={state} refresh={refresh} setPage={setPage}/>;
@@ -4656,9 +5886,32 @@ function App() {
   })();
 
   const handleLogout = async () => {
-    await api.post('/api/auth/logout', {});
-    window.location.href = '/app#auth';
-    window.location.reload();
+    // Always navigate, even if the network call fails — the user's intent
+    // is unambiguous and we never want a stale 5xx to leave them stuck
+    // on a "logged-in" view.
+    try {
+      await fetch('/api/auth/logout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+        credentials: 'same-origin',
+        cache: 'no-store',
+      });
+    } catch (err) {
+      console.warn('logout request failed (continuing anyway):', err);
+    }
+    // Best-effort: drop any non-HttpOnly state cookies the SPA can see.
+    // The auth cookie itself is HttpOnly so the browser must drop it via
+    // the Set-Cookie response (server-side path/samesite/secure now mirror
+    // the original set_cookie so the delete is honored).
+    try {
+      document.cookie = 'jobs_ai_session=; Max-Age=0; Path=/; SameSite=Lax';
+    } catch (_) { /* ignore */ }
+    // Force a FULL document load (not a hash change) so the SPA re-mounts
+    // and re-fetches /api/state with the cleared cookie jar. We use
+    // `replace` so the browser back button doesn't bounce the user back
+    // into the authenticated view.
+    window.location.replace('/?signed_out=1');
   };
 
   const exitCustomerMode = async () => {

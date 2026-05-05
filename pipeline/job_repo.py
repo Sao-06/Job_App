@@ -103,6 +103,7 @@ _SCHEMA_SQL = [
         experience_level     TEXT,
         education_required   TEXT,
         citizenship_required TEXT,
+        job_category         TEXT,
         posted_at            TEXT,
         fetched_at           TEXT NOT NULL,
         last_seen_at         TEXT NOT NULL,
@@ -110,11 +111,14 @@ _SCHEMA_SQL = [
         deleted              INTEGER NOT NULL DEFAULT 0
     )
     """,
+    # Live migration for existing DBs that pre-date job_category.
+    # SQLite ignores ALTER TABLE failures via the wrapping try below.
     "CREATE INDEX IF NOT EXISTS ix_jobs_seen     ON job_postings(deleted, last_seen_at DESC)",
     "CREATE INDEX IF NOT EXISTS ix_jobs_posted   ON job_postings(deleted, posted_at DESC)",
     "CREATE INDEX IF NOT EXISTS ix_jobs_filter   ON job_postings(deleted, experience_level, education_required, remote)",
     "CREATE INDEX IF NOT EXISTS ix_jobs_company  ON job_postings(company_norm)",
     "CREATE INDEX IF NOT EXISTS ix_jobs_source   ON job_postings(source)",
+    "CREATE INDEX IF NOT EXISTS ix_jobs_category ON job_postings(deleted, job_category)",
     # Standalone FTS5 (no content= link) so the triggers fully own the body.
     # Indexed columns are: title, company, requirements (joined bullets).
     """
@@ -162,6 +166,11 @@ def init_schema(conn: sqlite3.Connection) -> None:
     """Idempotent — safe to call on every server boot."""
     for stmt in _SCHEMA_SQL:
         conn.execute(stmt)
+    # Idempotent column additions for existing DBs that predate the field.
+    try:
+        conn.execute("ALTER TABLE job_postings ADD COLUMN job_category TEXT")
+    except sqlite3.OperationalError:
+        pass
     conn.commit()
 
 
@@ -171,13 +180,13 @@ _UPSERT_SQL = """
 INSERT INTO job_postings (
     id, canonical_url, source, company, company_norm, title, title_norm,
     location, remote, requirements_json, salary_range,
-    experience_level, education_required, citizenship_required,
+    experience_level, education_required, citizenship_required, job_category,
     posted_at, fetched_at, last_seen_at, miss_count, deleted
 )
 VALUES (
     :id, :canonical_url, :source, :company, :company_norm, :title, :title_norm,
     :location, :remote, :requirements_json, :salary_range,
-    :experience_level, :education_required, :citizenship_required,
+    :experience_level, :education_required, :citizenship_required, :job_category,
     :posted_at, :fetched_at, :last_seen_at, 0, 0
 )
 ON CONFLICT(canonical_url) DO UPDATE SET
@@ -198,6 +207,7 @@ ON CONFLICT(canonical_url) DO UPDATE SET
     experience_level     = excluded.experience_level,
     education_required   = excluded.education_required,
     citizenship_required = excluded.citizenship_required,
+    job_category         = COALESCE(excluded.job_category, job_postings.job_category),
     posted_at            = COALESCE(excluded.posted_at, job_postings.posted_at),
     last_seen_at         = excluded.last_seen_at,
     miss_count           = 0,
@@ -249,6 +259,7 @@ def upsert_many(conn: sqlite3.Connection, rows: Iterable[Mapping]) -> tuple[int,
             "experience_level": r.get("experience_level") or "unknown",
             "education_required": r.get("education_required") or "unknown",
             "citizenship_required": r.get("citizenship_required") or "unknown",
+            "job_category": r.get("job_category") or "general",
             "posted_at": r.get("posted_at") or r.get("posted_date") or None,
             "fetched_at": now,
             "last_seen_at": now,
@@ -325,6 +336,16 @@ def latest_source_runs(conn: sqlite3.Connection) -> list[dict]:
 
 
 # ── Read helpers ──────────────────────────────────────────────────────────────
+
+def get_job(conn: sqlite3.Connection, job_id: str) -> dict | None:
+    """Single-row lookup by id from the persistent job_postings store.
+    Returns None if no active row matches. Used by the per-job Ask Atlas
+    endpoint when a session has no in-memory `scored`/`jobs` list to scan."""
+    if not job_id:
+        return None
+    rows = bulk_get_by_ids(conn, [job_id])
+    return rows[0] if rows else None
+
 
 def bulk_get_by_ids(conn: sqlite3.Connection, ids: Sequence[str]) -> list[dict]:
     if not ids:

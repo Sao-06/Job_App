@@ -720,17 +720,34 @@ def parse_projects_robust(lines: list[str]) -> list[dict]:
     return [p for p in projects if p.get("name") or p.get("bullets") or p.get("description")]
 
 
+# Lines that look like contact info — skip when scanning for role headers.
+# Phone fragments (555-2030 / 555.2030 / (650) 555-9911) read as dates to the
+# bare-year regex, so we filter contact lines out before the date check.
+_CONTACT_LINE_RE = re.compile(
+    r"(?:[\w.+\-]+@[\w\-]+\.[a-zA-Z]{2,}"     # email
+    r"|linkedin\.com|github\.com|gitlab\.com"  # social
+    r"|https?://"                              # any URL
+    r"|\(?\d{3}\)?[\s.\-]\d{3}[\s.\-]\d{4})",  # phone
+    re.IGNORECASE,
+)
+
+
+def _is_contact_line(line: str) -> bool:
+    return bool(_CONTACT_LINE_RE.search(line or ""))
+
+
 def parse_experience_fulltext(text: str, sections: dict) -> list[dict]:
     """Last-resort: scan the entire resume for date-anchored role blocks.
 
     Triggers when no recognized "experience" section was detected. For every
     line that contains a date range (real role headers almost always do),
     we open a new role and capture following bullet lines.
+
+    Skips contact lines (which contain phone numbers that look like years)
+    and lines from already-classified buckets (education / projects / etc.).
     """
     if not text:
         return []
-    # Avoid double-counting lines that already lived inside a recognized
-    # education / projects / skills block.
     skip_buckets = {"education", "skills", "projects", "summary", "objective",
                     "publications", "certifications", "awards", "interests",
                     "coursework", "research experience"}
@@ -748,7 +765,9 @@ def parse_experience_fulltext(text: str, sections: dict) -> list[dict]:
         if not line or line in forbidden_lines:
             cur = None
             continue
-        # Headers like "EXPERIENCE" alone close any open role.
+        if _is_contact_line(line):
+            cur = None
+            continue
         if line.isupper() and len(line.split()) <= 4:
             cur = None
             continue
@@ -760,7 +779,7 @@ def parse_experience_fulltext(text: str, sections: dict) -> list[dict]:
                 cur["bullets"].append(text_l)
             continue
         if is_bullet:
-            continue   # bullet without an open role — ignore
+            continue
 
         if _has_date(line):
             title, company, dates = _classify_header_parts(line)
@@ -768,7 +787,6 @@ def parse_experience_fulltext(text: str, sections: dict) -> list[dict]:
                    "bullets": []}
             roles.append(cur)
 
-    # Filter: keep only roles that had at least one bullet OR a clear company.
     cleaned = [
         r for r in roles
         if r.get("bullets") or (r.get("company") and r.get("title"))

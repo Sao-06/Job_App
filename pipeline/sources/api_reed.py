@@ -20,7 +20,7 @@ import os
 from datetime import datetime
 from typing import Iterator
 
-from .base import RawJob, is_remote_location
+from .base import RawJob, is_remote_location, GENERAL_QUERIES, QueryRotator
 from .registry import register
 from ._http import http_get_json, basic_auth_header
 
@@ -34,25 +34,19 @@ class ReedSource:
     timeout_seconds = 12
 
     RESULTS_PER_PAGE = 100
-    MAX_PAGES = 5
-
-    QUERIES = (
-        "engineer",
-        "software engineer",
-        "hardware engineer",
-        "data scientist",
-        "machine learning",
-    )
+    MAX_PAGES = 2
+    QUERY_BATCH = 8
 
     def __init__(self, api_key: str):
         self.api_key = api_key
+        self.rotator = QueryRotator(GENERAL_QUERIES, batch_size=self.QUERY_BATCH)
 
     def _auth_headers(self) -> dict:
         return {"Authorization": basic_auth_header(self.api_key, "")}
 
     def fetch(self, since: datetime | None) -> Iterator[RawJob]:
         seen: set[str] = set()
-        for query in self.QUERIES:
+        for query in self.rotator.next_batch():
             offset = 0
             for _page in range(self.MAX_PAGES):
                 data = http_get_json(_BASE, params={

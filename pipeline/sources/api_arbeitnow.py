@@ -2,12 +2,21 @@
 Arbeitnow — public job-board feed, no key required.
 Docs: https://www.arbeitnow.com/api/job-board-api
 
-Pages through the entire feed (all categories, all countries) and yields
-each posting. Useful for non-US remote inventory.
+Pages the global feed (all categories, all countries) and yields each
+posting that looks English-relevant for a US-focused job board. The
+upstream is German-speaking-DACH-heavy, so we filter aggressively:
+
+  * tags must contain "english" OR location/title must look ASCII / English.
+  * obvious German signal words (m/w/d, Mitarbeiter, Kaufmann, Fachkraft…)
+    skip the row.
+
+This keeps us from polluting page 1 with hundreds of German listings that
+nobody using the SPA can apply to.
 """
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Iterator
 
@@ -29,6 +38,49 @@ def _norm_date(value) -> str:
         except Exception:
             return ""
     return str(value)[:10]
+
+
+# Heuristic English-only filter. Cheap (no language model) but surprisingly
+# effective on Arbeitnow's data. We accept the row when ANY of:
+#   * upstream tags include 'english' / 'english speaking'
+#   * title is plain ASCII and contains no German signal words
+# We reject when title contains the m/w/d gender hints or German-specific
+# nouns that strongly imply a German-language posting.
+_GERMAN_HINTS_RE = re.compile(
+    r"(?:"
+    r"\bm\s*/\s*w\s*/\s*[dx]\b"          # m/w/d, m/w/x
+    r"|\bmitarbeiter(?:in|innen)?\b"
+    r"|\bkaufmann\b|\bkauffrau\b"
+    r"|\bfachkraft\b|\bfachinformatiker\b|\bsachbearbeiter(?:in)?\b"
+    r"|\bfür\b|\bmit\b\s+\w+\b\s+(?:in|im|am)\b"
+    r"|\bgesucht\b|\bberater(?:in)?\b"
+    r"|\bingenieur(?:in)?\b|\bentwickler(?:in)?\b"
+    r"|\bsenior(?:e|in|innen)\b"
+    r"|\bgmbh\b|\bag\b"
+    r"|werkstudent|praktikum|ausbildung|festanstellung"
+    r"|\bteilzeit\b|\bvollzeit\b"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _english_relevant(title: str, tags: list, location: str) -> bool:
+    if not title:
+        return False
+    tag_blob = " ".join(str(t).lower() for t in (tags or []))
+    if "english" in tag_blob:
+        return True
+    # Reject obvious German signals.
+    if _GERMAN_HINTS_RE.search(title):
+        return False
+    if _GERMAN_HINTS_RE.search(location or ""):
+        return False
+    # Plain ASCII titles with mostly word characters → assume English.
+    try:
+        title.encode("ascii")
+    except UnicodeEncodeError:
+        return False
+    return True
 
 
 class ArbeitnowSource:
@@ -65,6 +117,8 @@ class ArbeitnowSource:
                 location = item.get("location") or "Remote"
                 remote = bool(item.get("remote"))
                 tags = item.get("tags") or []
+                if not _english_relevant(title, tags, location):
+                    continue
                 yield RawJob(
                     application_url=url,
                     company=company, title=title,

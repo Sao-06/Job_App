@@ -21,7 +21,7 @@ import os
 from datetime import datetime
 from typing import Iterator
 
-from .base import RawJob, is_remote_location
+from .base import RawJob, is_remote_location, GENERAL_QUERIES, QueryRotator
 from .registry import register
 from ._http import http_get_json
 
@@ -37,24 +37,22 @@ class AdzunaSource:
     # Country code → Adzuna's country slug. We default to US.
     COUNTRY = "us"
     RESULTS_PER_PAGE = 50
-    MAX_PAGES = 5            # 5 × 50 × len(QUERIES) ≈ 2500 jobs/cycle
-
-    QUERIES = (
-        "engineer",
-        "software engineer",
-        "hardware engineer",
-        "data scientist",
-        "machine learning",
-        "fpga",
-    )
+    MAX_PAGES = 3
+    # Rotate through ~50 cross-industry queries 8 at a time. With cadence=30
+    # min that means a full sweep of every job family roughly every 5 hours,
+    # while staying well under the 1000-call/day Adzuna free tier
+    # (8 queries × 3 pages × 48 cycles/day ≈ 1150 calls/day max — but most
+    # cycles short-circuit on empty pages).
+    QUERY_BATCH = 8
 
     def __init__(self, app_id: str, app_key: str):
         self.app_id = app_id
         self.app_key = app_key
+        self.rotator = QueryRotator(GENERAL_QUERIES, batch_size=self.QUERY_BATCH)
 
     def fetch(self, since: datetime | None) -> Iterator[RawJob]:
         seen: set[str] = set()
-        for query in self.QUERIES:
+        for query in self.rotator.next_batch():
             for page in range(1, self.MAX_PAGES + 1):
                 url = f"{_API_BASE}/{self.COUNTRY}/search/{page}"
                 data = http_get_json(url, params={

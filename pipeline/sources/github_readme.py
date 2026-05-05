@@ -56,8 +56,30 @@ def _strip_html(text: str) -> str:
     return re.sub(r",\s*,", ",", text).strip(", ").strip()
 
 
+def _strip_md_emphasis(text: str) -> str:
+    """Strip Markdown bold / italic / underline markers around a cell value.
+
+    Catches ``**bold**``, ``__bold__``, ``*italic*``, ``_italic_``. These
+    leak through because some GitHub-curated repos wrap company names in
+    bold (rendering as bold in the README, but appearing as ``**Foo**``
+    when scraped raw).
+    """
+    if not text:
+        return text
+    # Repeated passes catch nested wrappers like ``**[Foo](url)**``.
+    for _ in range(3):
+        before = text
+        text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
+        text = re.sub(r"__(.+?)__",     r"\1", text)
+        text = re.sub(r"(?<![*_])\*([^*]+?)\*(?![*_])", r"\1", text)
+        text = re.sub(r"(?<![*_])_([^_]+?)_(?![*_])",   r"\1", text)
+        if text == before:
+            break
+    return text.strip()
+
+
 def _clean_cell(text: str) -> str:
-    return _EMOJI_RE.sub("", _strip_html(text)).strip()
+    return _strip_md_emphasis(_EMOJI_RE.sub("", _strip_html(text))).strip()
 
 
 def _md_link_text_url(cell: str) -> Tuple[str, str]:
@@ -248,6 +270,18 @@ def _parse_md_table(text: str, *, source: str, default_exp: str | None,
         # (truly malformed row), drop it rather than polluting the index.
         if company.lower() == title.lower():
             continue
+        # Reject obvious leakage: companies with stray Markdown bracket
+        # markers (the cell got split because the link text included a
+        # `|`). A standalone `|` is OK — some companies legit are spelled
+        # "Foo | Bar" — we only reject when paired with bracket noise.
+        if "[" in company or "]" in company or company.startswith("("):
+            continue
+        if "[" in title or "]" in title or title.startswith("("):
+            continue
+        # Likewise, drop any company that's still a partial markdown
+        # marker after stripping (lone `**`, etc.).
+        if re.fullmatch(r"[\*_\-\s]+", company):
+            continue
 
         out: RawJob = {
             "application_url": apply_url,
@@ -343,27 +377,154 @@ REPOS = [
          branches=["dev", "main"], parser="html_tr",
          default_exp="entry-level", platform="SimplifyJobs/GitHub"),
 
-    # jobright-ai (Markdown pipe tables)
-    dict(name="gh:jobright/2026-tech-internship",
-         repo="jobright-ai/2026-Tech-Internship",
-         branches=["main"], parser="md_table",
+    # jobright-ai — the active org has ~30 repos on the `master` branch,
+    # one per role family. We seed the ones most likely to match this app's
+    # users (tech / engineering / data / product / H1B-friendly).
+    dict(name="gh:jobright/2026-swe-internship",
+         repo="jobright-ai/2026-Software-Engineer-Internship",
+         branches=["master", "main"], parser="md_table",
          default_exp="internship", platform="Jobright/GitHub"),
-    dict(name="gh:jobright/2025-tech-internship",
-         repo="jobright-ai/2025-Tech-Internship",
-         branches=["main"], parser="md_table",
-         default_exp="internship", platform="Jobright/GitHub"),
-    dict(name="gh:jobright/2026-tech-new-grad",
-         repo="jobright-ai/2026-Tech-New-Grad",
-         branches=["main"], parser="md_table",
+    dict(name="gh:jobright/2026-swe-new-grad",
+         repo="jobright-ai/2026-Software-Engineer-New-Grad",
+         branches=["master", "main"], parser="md_table",
          default_exp="entry-level", platform="Jobright/GitHub"),
-    dict(name="gh:jobright/2026-hardware-internship",
-         repo="jobright-ai/2026-Hardware-Engineer-Internship",
-         branches=["main"], parser="md_table",
+    dict(name="gh:jobright/2026-engineer-internship",
+         repo="jobright-ai/2026-Engineer-Internship",
+         branches=["master", "main"], parser="md_table",
          default_exp="internship", platform="Jobright/GitHub"),
-    dict(name="gh:jobright/2025-hardware-internship",
-         repo="jobright-ai/2025-Hardware-Engineer-Internship",
-         branches=["main"], parser="md_table",
+    dict(name="gh:jobright/2026-engineering-new-grad",
+         repo="jobright-ai/2026-Engineering-New-Grad",
+         branches=["master", "main"], parser="md_table",
+         default_exp="entry-level", platform="Jobright/GitHub"),
+    dict(name="gh:jobright/2026-data-internship",
+         repo="jobright-ai/2026-Data-Analysis-Internship",
+         branches=["master", "main"], parser="md_table",
          default_exp="internship", platform="Jobright/GitHub"),
+    dict(name="gh:jobright/2026-data-new-grad",
+         repo="jobright-ai/2026-Data-Analysis-New-Grad",
+         branches=["master", "main"], parser="md_table",
+         default_exp="entry-level", platform="Jobright/GitHub"),
+    dict(name="gh:jobright/2026-product-internship",
+         repo="jobright-ai/2026-Product-Management-Internship",
+         branches=["master", "main"], parser="md_table",
+         default_exp="internship", platform="Jobright/GitHub"),
+    dict(name="gh:jobright/2026-product-new-grad",
+         repo="jobright-ai/2026-Product-Management-New-Grad",
+         branches=["master", "main"], parser="md_table",
+         default_exp="entry-level", platform="Jobright/GitHub"),
+    dict(name="gh:jobright/h1b-tech",
+         repo="jobright-ai/Daily-H1B-Jobs-In-Tech",
+         branches=["master", "main"], parser="md_table",
+         default_exp=None, platform="Jobright/GitHub"),
+
+    # jobright-ai non-tech repos — every job family they curate. Each repo
+    # carries a few hundred postings; together they cover Finance, HR,
+    # Marketing, Sales, Legal, Healthcare-adjacent (HR / Public Sector),
+    # Design, Consulting, Education, Management, Customer Support, Arts.
+    dict(name="gh:jobright/2026-account-internship",
+         repo="jobright-ai/2026-Account-Internship",
+         branches=["master"], parser="md_table",
+         default_exp="internship", platform="Jobright/GitHub"),
+    dict(name="gh:jobright/2026-account-new-grad",
+         repo="jobright-ai/2026-Account-New-Grad",
+         branches=["master"], parser="md_table",
+         default_exp="entry-level", platform="Jobright/GitHub"),
+    dict(name="gh:jobright/2026-art-internship",
+         repo="jobright-ai/2026-Art-Internship",
+         branches=["master"], parser="md_table",
+         default_exp="internship", platform="Jobright/GitHub"),
+    dict(name="gh:jobright/2026-art-new-grad",
+         repo="jobright-ai/2026-Art-New-Grad",
+         branches=["master"], parser="md_table",
+         default_exp="entry-level", platform="Jobright/GitHub"),
+    dict(name="gh:jobright/2026-ba-internship",
+         repo="jobright-ai/2026-Business-Analyst-Internship",
+         branches=["master"], parser="md_table",
+         default_exp="internship", platform="Jobright/GitHub"),
+    dict(name="gh:jobright/2026-ba-new-grad",
+         repo="jobright-ai/2026-Business-Analyst-New-Grad",
+         branches=["master"], parser="md_table",
+         default_exp="entry-level", platform="Jobright/GitHub"),
+    dict(name="gh:jobright/2026-consultant-internship",
+         repo="jobright-ai/2026-Consultant-Internship",
+         branches=["master"], parser="md_table",
+         default_exp="internship", platform="Jobright/GitHub"),
+    dict(name="gh:jobright/2026-consultant-new-grad",
+         repo="jobright-ai/2026-Consultant-New-Grad",
+         branches=["master"], parser="md_table",
+         default_exp="entry-level", platform="Jobright/GitHub"),
+    dict(name="gh:jobright/2026-design-internship",
+         repo="jobright-ai/2026-Design-Internship",
+         branches=["master"], parser="md_table",
+         default_exp="internship", platform="Jobright/GitHub"),
+    dict(name="gh:jobright/2026-design-new-grad",
+         repo="jobright-ai/2026-Design-New-Grad",
+         branches=["master"], parser="md_table",
+         default_exp="entry-level", platform="Jobright/GitHub"),
+    dict(name="gh:jobright/2026-education-internship",
+         repo="jobright-ai/2026-Education-Internship",
+         branches=["master"], parser="md_table",
+         default_exp="internship", platform="Jobright/GitHub"),
+    dict(name="gh:jobright/2026-education-new-grad",
+         repo="jobright-ai/2026-Education-New-Grad",
+         branches=["master"], parser="md_table",
+         default_exp="entry-level", platform="Jobright/GitHub"),
+    dict(name="gh:jobright/2026-hr-internship",
+         repo="jobright-ai/2026-HR-Internship",
+         branches=["master"], parser="md_table",
+         default_exp="internship", platform="Jobright/GitHub"),
+    dict(name="gh:jobright/2026-hr-new-grad",
+         repo="jobright-ai/2026-HR-New-Grad",
+         branches=["master"], parser="md_table",
+         default_exp="entry-level", platform="Jobright/GitHub"),
+    dict(name="gh:jobright/2026-legal-internship",
+         repo="jobright-ai/2026-Legal-Internship",
+         branches=["master"], parser="md_table",
+         default_exp="internship", platform="Jobright/GitHub"),
+    dict(name="gh:jobright/2026-legal-new-grad",
+         repo="jobright-ai/2026-Legal-New-Grad",
+         branches=["master"], parser="md_table",
+         default_exp="entry-level", platform="Jobright/GitHub"),
+    dict(name="gh:jobright/2026-management-internship",
+         repo="jobright-ai/2026-Management-Internship",
+         branches=["master"], parser="md_table",
+         default_exp="internship", platform="Jobright/GitHub"),
+    dict(name="gh:jobright/2026-management-new-grad",
+         repo="jobright-ai/2026-Management-New-Grad",
+         branches=["master"], parser="md_table",
+         default_exp="entry-level", platform="Jobright/GitHub"),
+    dict(name="gh:jobright/2026-marketing-internship",
+         repo="jobright-ai/2026-Marketing-Internship",
+         branches=["master"], parser="md_table",
+         default_exp="internship", platform="Jobright/GitHub"),
+    dict(name="gh:jobright/2026-marketing-new-grad",
+         repo="jobright-ai/2026-Marketing-New-Grad",
+         branches=["master"], parser="md_table",
+         default_exp="entry-level", platform="Jobright/GitHub"),
+    dict(name="gh:jobright/2026-public-sector-internship",
+         repo="jobright-ai/2026-Public-Sector-Internship",
+         branches=["master"], parser="md_table",
+         default_exp="internship", platform="Jobright/GitHub"),
+    dict(name="gh:jobright/2026-public-sector-new-grad",
+         repo="jobright-ai/2026-Public-Sector-New-Grad",
+         branches=["master"], parser="md_table",
+         default_exp="entry-level", platform="Jobright/GitHub"),
+    dict(name="gh:jobright/2026-sales-internship",
+         repo="jobright-ai/2026-Sales-Internship",
+         branches=["master"], parser="md_table",
+         default_exp="internship", platform="Jobright/GitHub"),
+    dict(name="gh:jobright/2026-sales-new-grad",
+         repo="jobright-ai/2026-Sales-New-Grad",
+         branches=["master"], parser="md_table",
+         default_exp="entry-level", platform="Jobright/GitHub"),
+    dict(name="gh:jobright/2026-support-internship",
+         repo="jobright-ai/2026-Support-Internship",
+         branches=["master"], parser="md_table",
+         default_exp="internship", platform="Jobright/GitHub"),
+    dict(name="gh:jobright/2026-support-new-grad",
+         repo="jobright-ai/2026-Support-New-Grad",
+         branches=["master"], parser="md_table",
+         default_exp="entry-level", platform="Jobright/GitHub"),
 
     # speedyapply
     dict(name="gh:speedyapply/2025-swe-college-jobs",

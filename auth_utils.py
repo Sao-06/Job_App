@@ -5,6 +5,10 @@ try:
 except ImportError:  # Password auth can fail without disabling Google OAuth.
     bcrypt = None
 
+
+def _is_dev_dummy_enabled() -> bool:
+    return os.environ.get("GOOGLE_OAUTH_DEV_DUMMY", "").lower() in ("1", "true", "yes")
+
 # Password hashing
 def hash_password(password: str) -> str:
     if bcrypt is None:
@@ -27,8 +31,14 @@ def get_google_auth_url(redirect_uri: str):
     if redirect_uri.startswith("http://localhost") or redirect_uri.startswith("http://127.0.0.1"):
         os.environ.setdefault("OAUTHLIB_INSECURE_TRANSPORT", "1")
     if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
-        # Return a dummy URL that points back to our own callback for dev purposes
-        return f"/api/auth/google/callback?code=dummy_code&state=dummy_state", "dummy_state"
+        # Dummy dev flow — only active when GOOGLE_OAUTH_DEV_DUMMY=1 is explicitly set.
+        # Never allow this in production (where GOOGLE_CLIENT_ID should always be present).
+        if _is_dev_dummy_enabled():
+            return f"/api/auth/google/callback?code=dummy_code&state=dummy_state", "dummy_state"
+        raise RuntimeError(
+            "Google OAuth is not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET, "
+            "or set GOOGLE_OAUTH_DEV_DUMMY=1 to use a local dev placeholder."
+        )
 
     from google_auth_oauthlib.flow import Flow
 
@@ -58,7 +68,8 @@ def verify_google_token(code: str, redirect_uri: str, state: str):
     GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET")
     if redirect_uri.startswith("http://localhost") or redirect_uri.startswith("http://127.0.0.1"):
         os.environ.setdefault("OAUTHLIB_INSECURE_TRANSPORT", "1")
-    if code == "dummy_code" and state == "dummy_state":
+    # Only accept dummy tokens when the dummy dev flow is explicitly enabled.
+    if code == "dummy_code" and state == "dummy_state" and _is_dev_dummy_enabled():
         return {
             "email": "dev@example.com",
             "sub": "dummy_google_id",

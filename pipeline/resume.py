@@ -643,5 +643,11 @@ def _save_tailored_resume(job: dict, tailored: dict, profile: dict = None,
         console.print(f"  [green]PDF saved (reportlab) -> {pdf_path.name}[/green]")
     else:
         console.print("  [yellow]No PDF backend available - .tex only.[/yellow]")
+        # print() reaches the SSE log stream; console.print() only goes to the terminal.
+        print(
+            f"  [WARNING] No PDF generated for {tex_path.name} — neither pdflatex nor "
+            "reportlab is available. Applications will use the .tex source, not a PDF. "
+            "Install: pip install reportlab"
+        )
 
     return {"tex": tex_path.name, "pdf": pdf_filename, "base": base}

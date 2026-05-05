@@ -25,12 +25,15 @@ class TheMuseSource:
     cadence_seconds = 30 * 60
     timeout_seconds = 12
 
-    # Category strings come from The Muse's taxonomy.
+    # The Muse's taxonomy — broadened to cover non-tech families.
     CATEGORIES = (
-        "Engineering", "Software Engineer", "Hardware Engineering",
-        "Data Science", "Product", "Design",
+        "Engineering", "Software Engineer", "Data Science",
+        "Design", "Product", "Marketing", "Sales",
+        "HR", "Finance", "Legal",
+        "Customer Service", "Operations", "Education",
+        "Healthcare", "Account Management", "Project Management",
     )
-    MAX_PAGES = 25      # ~500 jobs per category-cycle, ~3000 total
+    MAX_PAGES = 8
 
     def fetch(self, since: datetime | None) -> Iterator[RawJob]:
         seen: set[str] = set()

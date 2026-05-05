@@ -24,8 +24,10 @@ class JobicySource:
     timeout_seconds = 12
 
     CATEGORIES = (
-        "engineering", "data-science", "design", "devops",
-        "tech", "product",
+        "engineering", "data-science", "design", "devops", "tech",
+        "product", "marketing", "sales", "business",
+        "writing", "finance", "human-resources", "customer-service",
+        "operations", "consulting",
     )
 
     def fetch(self, since: datetime | None) -> Iterator[RawJob]:

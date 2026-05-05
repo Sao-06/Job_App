@@ -23,7 +23,7 @@ from .config import console, OUTPUT_DIR, RESOURCES_DIR, MAX_SCRAPE_JOBS, _CliSpi
 from .helpers import (infer_experience_level, infer_education_required,
                       infer_citizenship_required, deduplicate_jobs,
                       filter_jobs_by_education, validate_job_urls)
-from .providers import BaseProvider
+from .providers import BaseProvider, RUBRIC_WEIGHTS, compute_skill_coverage
 from .resume import _build_demo_resume, _save_tailored_resume
 
 
@@ -99,23 +99,27 @@ def phase1_ingest_resume(resume_text: str, provider: BaseProvider,
                 )
 
     if profile:
-        # Insights are recomputed when the cached version is stale OR when an
-        # Ollama model is available and the cache only holds a heuristic pass.
-        # This keeps the rich UI fresh without re-running the costly extraction.
+        # Insights are recomputed when the cached version is stale, or when
+        # we have an LLM provider whose verification could upgrade a cache
+        # that only holds heuristic-only insights. Provider-agnostic: any
+        # BaseProvider subclass that exposes a callable chat() qualifies.
         existing = profile.get("insights") or {}
+        provider_can_verify = bool(provider) and callable(getattr(provider, "chat", None))
+        cached_verified = str(existing.get("verified_by") or "") == "ai"
         needs_rescan = (
             not existing
             or int(existing.get("version") or 0) < INSIGHTS_VERSION
-            or (ollama_model and not str(existing.get("verified_by") or "").startswith("ollama"))
+            or (provider_can_verify and not cached_verified)
         )
         if needs_rescan:
             console.print(
                 "  🔬 Scanning resume content & "
-                + ("verifying with Ollama" if ollama_model else "computing heuristic insights")
+                + ("verifying with AI" if provider_can_verify else "computing heuristic insights")
                 + "…"
             )
             profile["insights"] = analyze_resume(
-                resume_text, profile, ollama_model=ollama_model,
+                resume_text, profile,
+                provider=provider if provider_can_verify else None,
             )
             cache_hit = False  # force re-save with fresh insights
 
@@ -283,7 +287,8 @@ def phase2_discover_jobs(profile: dict, job_titles: list, location: str,
     # Open a dedicated read connection; works for both web (where the
     # session store already created the schema) and CLI (where running
     # before any scheduler tick will return zero rows).
-    db_path = OUTPUT_DIR / "jobs_ai_sessions.sqlite3"
+    from .config import DB_PATH as _DB_PATH
+    db_path = _DB_PATH
     if not db_path.exists():
         console.print("  [yellow]Local index DB does not exist yet[/yellow]")
         return []
@@ -441,15 +446,42 @@ def phase3_score_jobs(jobs: list, profile: dict, provider: BaseProvider,
         console.print(f"  🇺🇸 Citizenship filter (only required): {len(to_score)} jobs remain")
 
     def _fast_score(job: dict, profile: dict) -> int:
-        """Fast heuristic scoring (0-100) based on keyword matching."""
-        reqs = set(str(r).lower() for r in (job.get("requirements") or []) if r)
-        skills = set(str(s).lower() for s in (profile.get("top_hard_skills") or []))
-        titles = set(str(t).lower() for t in (profile.get("target_titles") or []))
+        """Fast heuristic scoring (0-100) using the same skill-coverage logic
+        the LLM scorer uses, plus title/experience signals. Returns an integer
+        in roughly the same range as the rubric scorer so jobs that don't get
+        LLM-scored are comparable."""
+        coverage, _matched, _missing = compute_skill_coverage(job, profile)
+        skill_pts = coverage * RUBRIC_WEIGHTS["required_skills"]  # up to 50
 
-        skill_match = len(reqs & skills) / len(reqs) * 50 if reqs else 25
-        title_match = 25 if any(t in job.get("title", "").lower() for t in titles) else 5
-        exp_match = 15 if job.get("experience_level") in ["internship", "entry-level"] else 5
-        return int(skill_match + title_match + exp_match)
+        title_lower = (job.get("title") or "").lower()
+        targets = [str(t).lower() for t in (profile.get("target_titles") or []) if t]
+        # Token-level title match — "ml engineer" hits "machine learning engineer"
+        title_hit = 0.0
+        for t in targets:
+            if not t:
+                continue
+            t_tokens = [tk for tk in t.split() if len(tk) > 2]
+            if t_tokens and all(tk in title_lower for tk in t_tokens):
+                title_hit = 1.0
+                break
+            elif t in title_lower:
+                title_hit = 1.0
+                break
+            elif any(tk in title_lower for tk in t_tokens):
+                title_hit = max(title_hit, 0.5)
+        industry_pts = title_hit * RUBRIC_WEIGHTS["industry"]  # up to 30
+
+        # Location/seniority blended like the LLM rubric.
+        remote_ok = bool(job.get("remote"))
+        loc = (job.get("location") or "").lower()
+        cand_loc = (profile.get("location") or "").lower()
+        loc_hit = 1.0 if (remote_ok or "united states" in loc or
+                          (cand_loc and any(part in loc for part in cand_loc.split(",") if part.strip()))) else 0.5
+        exp_levels = profile.get("experience_levels") or ["internship", "entry-level"]
+        exp_hit = 1.0 if job.get("experience_level") in exp_levels else 0.5
+        loc_seniority_pts = ((loc_hit + exp_hit) / 2) * RUBRIC_WEIGHTS["location_seniority"]
+
+        return int(round(skill_pts + industry_pts + loc_seniority_pts))
 
     console.print(f"  🔢 Fast-scoring {len(to_score)} jobs…")
     for job in to_score:

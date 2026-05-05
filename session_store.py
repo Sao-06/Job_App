@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import json
 import sqlite3
 import uuid
@@ -9,6 +10,17 @@ from typing import Any
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _hash_token(token: str) -> str:
+    """One-way digest of a session bearer token. Stored in
+    ``auth_tokens.token`` so a DB read alone is *not* sufficient to
+    impersonate a user — the attacker would still need to crack
+    SHA-256, which (for unguessable 32+ byte secrets) is infeasible.
+    """
+    if not token:
+        return ""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
 def json_default(value: Any):
@@ -49,7 +61,77 @@ class SQLiteSessionStore:
         self.db_path = Path(db_path)
         self.default_state_factory = default_state_factory
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        # Detect a malformed file BEFORE we let the rest of the schema /
+        # ingestion layer touch it. A corrupted DB can otherwise cause
+        # every Phase-2 search and every /api/state poll to crash with
+        # "database disk image is malformed" — far worse than rebuilding.
+        if self.db_path.exists():
+            self._quarantine_if_corrupt()
         self._init_db()
+
+    def _quarantine_if_corrupt(self) -> None:
+        """If the on-disk DB fails ``PRAGMA quick_check``, move it aside
+        with a ``.corrupt-<timestamp>`` suffix (alongside its WAL/SHM
+        siblings) so the next ``_init_db`` rebuilds a fresh schema.
+
+        Recovery cost: users + auth tokens + session state are gone (users
+        re-sign-in; resume profiles re-extract on next upload). The job
+        index re-fills from sources within a few minutes of boot. That's
+        acceptable vs. the entire app being unusable.
+        """
+        try:
+            probe = sqlite3.connect(self.db_path, timeout=2)
+        except sqlite3.DatabaseError:
+            self._move_aside("open_failed")
+            return
+        try:
+            try:
+                row = probe.execute("PRAGMA quick_check").fetchone()
+            except sqlite3.DatabaseError as exc:
+                # quick_check itself can raise on severe corruption.
+                self._move_aside(f"quick_check_raised_{type(exc).__name__}")
+                return
+            if not row or str(row[0]).strip().lower() != "ok":
+                self._move_aside(f"quick_check={row}")
+                return
+        finally:
+            try:
+                probe.close()
+            except Exception:
+                pass
+
+    def _move_aside(self, reason: str) -> None:
+        """Rename the malformed DB file (and its WAL/SHM siblings) so a
+        fresh schema can be rebuilt. The original file is preserved with
+        a ``.corrupt-<unix_ts>`` suffix in case manual forensics is
+        wanted later. NEVER deletes — that's the user's call.
+        """
+        from datetime import datetime as _dt
+        stamp = _dt.now().strftime("%Y%m%d-%H%M%S")
+        suffix = f".corrupt-{stamp}"
+        try:
+            print(
+                f"[session_store] {self.db_path} is malformed ({reason}); "
+                f"quarantining as *{suffix} and rebuilding from scratch."
+            )
+        except Exception:
+            pass
+        for tail in ("", "-wal", "-shm", "-journal"):
+            old = self.db_path.with_name(self.db_path.name + tail)
+            if not old.exists():
+                continue
+            target = old.with_name(old.name + suffix)
+            try:
+                old.rename(target)
+            except OSError:
+                # File still locked by a sibling process; best-effort try
+                # to copy + truncate.
+                try:
+                    import shutil
+                    shutil.copy2(old, target)
+                    old.unlink()
+                except Exception:
+                    pass
 
     def _connect(self):
         conn = sqlite3.connect(self.db_path, timeout=30)
@@ -115,6 +197,22 @@ class SQLiteSessionStore:
             try:
                 conn.execute(
                     "ALTER TABLE users ADD COLUMN plan_tier TEXT NOT NULL DEFAULT 'free'"
+                )
+            except sqlite3.OperationalError:
+                pass
+            # One-shot purge of any auth_tokens rows that pre-date the
+            # SHA-256 hashing migration. Existing rows store the raw bearer
+            # cookie verbatim, which would still allow impersonation if
+            # someone had already exfiltrated them. Force a re-login by
+            # nuking those rows. (Safe: the purge keys off the row
+            # length — hashed digests are exactly 64 hex chars, so any
+            # row that doesn't match that pattern is legacy raw-token
+            # storage.)
+            try:
+                conn.execute(
+                    "DELETE FROM auth_tokens "
+                    "WHERE LENGTH(token) != 64 "
+                    "   OR token GLOB '*[!0-9a-f]*'"
                 )
             except sqlite3.OperationalError:
                 pass
@@ -214,6 +312,9 @@ class SQLiteSessionStore:
             ]
 
     def create_auth_token(self, token: str, user_id: str, user_payload: dict) -> None:
+        if not token:
+            return
+        digest = _hash_token(token)
         with self._connect() as conn:
             conn.execute(
                 """
@@ -224,16 +325,17 @@ class SQLiteSessionStore:
                     user_json = excluded.user_json,
                     created_at = excluded.created_at
                 """,
-                (token, user_id, json.dumps(user_payload), utc_now()),
+                (digest, user_id, json.dumps(user_payload), utc_now()),
             )
 
     def get_auth_user(self, token: str) -> dict | None:
         if not token:
             return None
+        digest = _hash_token(token)
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT user_id, user_json FROM auth_tokens WHERE token = ?",
-                (token,),
+                (digest,),
             ).fetchone()
             if not row:
                 return None
@@ -247,8 +349,9 @@ class SQLiteSessionStore:
     def delete_auth_token(self, token: str) -> None:
         if not token:
             return
+        digest = _hash_token(token)
         with self._connect() as conn:
-            conn.execute("DELETE FROM auth_tokens WHERE token = ?", (token,))
+            conn.execute("DELETE FROM auth_tokens WHERE token = ?", (digest,))
 
     def associate_session_with_user(self, session_id: str, user_id: str) -> None:
         with self._connect() as conn:
@@ -274,6 +377,21 @@ class SQLiteSessionStore:
                 (user_id,),
             ).fetchall()
             return [row[0] for row in rows]
+
+    def peek_state(self, session_id: str) -> dict | None:
+        """Read-only state load. Returns None if no row exists. Use this for
+        anonymous sessions so we don't INSERT a session_state row that would
+        later show up as a 'ghost' user in the Dev Ops console."""
+        if not session_id:
+            return None
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT state_json FROM session_state WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            if row:
+                return normalize_state(json.loads(row[0]))
+        return None
 
     def get_state(self, session_id: str) -> dict:
         now = utc_now()
@@ -336,6 +454,9 @@ class SQLiteSessionStore:
         return normalize_state(state)
 
     def list_sessions(self, limit: int = 200) -> list[dict]:
+        # Only return sessions tied to a real authenticated user. Anonymous
+        # sessions don't get an INSERT anymore (see peek_state), but legacy
+        # rows from before that change can still exist — filter them out.
         with self._connect() as conn:
             rows = conn.execute(
                 """
@@ -344,6 +465,7 @@ class SQLiteSessionStore:
                 FROM sessions s
                 LEFT JOIN session_state ss ON ss.session_id = s.id
                 LEFT JOIN users u ON u.id = s.user_id
+                WHERE s.user_id IS NOT NULL
                 ORDER BY s.updated_at DESC
                 LIMIT ?
                 """,

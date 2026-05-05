@@ -45,10 +45,15 @@ class BaseProvider:
     def generate_demo_jobs(self, profile: dict, titles: list, location: str) -> list:
         raise NotImplementedError
 
-    def chat(self, system: str, messages: list, max_tokens: int = 1024) -> str:
+    def chat(self, system: str, messages: list, max_tokens: int = 1024,
+             json_mode: bool = False) -> str:
         """Free-form conversational call. `messages` is [{role, content}, ...] with
-        roles 'user' or 'assistant'. Used by the Ask-Atlas job advisor.
-        Default raises so providers must opt in explicitly."""
+        roles 'user' or 'assistant'. Used by Ask-Atlas and the resume-insights
+        verifier. When `json_mode=True`, providers that support strict JSON
+        output (Ollama via response_format, Anthropic via prefill) MUST honor
+        it. Providers that can't degrade gracefully — they return whatever
+        they normally would and the caller falls back to heuristics.
+        """
         raise NotImplementedError
 
 
@@ -123,6 +128,70 @@ def _build_heuristic_block(heuristic: dict | None) -> str:
 RUBRIC_WEIGHTS = {"required_skills": 50, "industry": 30, "location_seniority": 20}
 
 
+_TOKEN_SPLIT_RE = re.compile(r"[^a-z0-9+#.\-]+")
+
+
+def _tokenize(text: str) -> set:
+    """Lowercase token set with light normalization (handles c++, .net, node.js)."""
+    if not text:
+        return set()
+    return {t for t in _TOKEN_SPLIT_RE.split(str(text).lower()) if t}
+
+
+def compute_skill_coverage(job: dict, profile: dict) -> tuple[float, list, list]:
+    """Deterministic skill-vs-job match — used both as the fast-score baseline
+    AND as a grounded anchor for the LLM rubric scorer. Returns
+    ``(coverage_0_to_1, matched_skills, missing_requirements)``.
+
+    Result is cached on the job dict under ``_skill_coverage`` so Phase 3
+    doesn't recompute it for the top-N jobs that get LLM-scored after the
+    fast-score pass.
+    """
+    cached = job.get("_skill_coverage")
+    if cached is not None:
+        return cached
+
+    skills = [str(s).strip() for s in (profile.get("top_hard_skills") or []) if s]
+    skills_lower = {s.lower(): s for s in skills}
+    if not skills_lower:
+        result = (0.5, [], [])
+        job["_skill_coverage"] = result
+        return result
+
+    reqs = [str(r).strip() for r in (job.get("requirements") or []) if r]
+    full_haystack = " ".join([
+        " ".join(reqs).lower(),
+        str(job.get("description") or "").lower(),
+    ]).strip()
+    haystack_tokens = _tokenize(full_haystack)
+
+    matched: list = []
+    skill_tokens: set = set()
+    for s_lower, s_orig in skills_lower.items():
+        s_tokens = _tokenize(s_lower)
+        skill_tokens |= s_tokens
+        if not full_haystack:
+            continue
+        if s_lower in full_haystack or (s_tokens and s_tokens.issubset(haystack_tokens)):
+            matched.append(s_orig)
+
+    if not full_haystack:
+        coverage = 0.3
+    else:
+        coverage = len(matched) / max(len(skills), 1)
+        # Small floor so 0 matches isn't always a hard 0 (synonyms etc.).
+        coverage = min(max(coverage, 0.1 if matched else 0.0), 1.0)
+
+    missing = [
+        r.title() for r in reqs
+        if (rt := _tokenize(r)) and not (rt & skill_tokens)
+    ]
+
+    result = (coverage, matched[:8], missing[:8])
+    job["_skill_coverage"] = result
+    return result
+
+
 def _build_rubric_result(job: dict, req_raw: float, industry_raw: float,
                           loc_seniority_raw: float, *,
                           matched: list = None, missing: list = None,
@@ -171,7 +240,8 @@ class AnthropicProvider(BaseProvider):
         self.client = _anthropic.Anthropic(api_key=api_key)
         self.model = "claude-opus-4-6"
 
-    def chat(self, system: str, messages: list, max_tokens: int = 1024) -> str:
+    def chat(self, system: str, messages: list, max_tokens: int = 1024,
+             json_mode: bool = False) -> str:
         # Anthropic SDK takes system as a top-level kwarg, not a message role.
         clean = [
             {"role": m["role"], "content": str(m.get("content", ""))}
@@ -180,6 +250,10 @@ class AnthropicProvider(BaseProvider):
         ]
         if not clean:
             return ""
+        # JSON mode: prefill the assistant turn with `{` so Anthropic continues
+        # from there. We then prepend the brace to the response before parsing.
+        if json_mode and clean[-1]["role"] == "user":
+            clean.append({"role": "assistant", "content": "{"})
         resp = self.client.messages.create(
             model=self.model,
             max_tokens=max_tokens,
@@ -190,7 +264,10 @@ class AnthropicProvider(BaseProvider):
         for block in resp.content:
             if getattr(block, "type", None) == "text":
                 out_parts.append(getattr(block, "text", "") or "")
-        return "".join(out_parts).strip()
+        out = "".join(out_parts).strip()
+        if json_mode and out and not out.startswith("{"):
+            out = "{" + out
+        return out
 
     def _tool_call(self, tool_def: dict, prompt: str,
                    max_tokens: int = 4096, thinking: bool = False) -> dict:
@@ -386,51 +463,64 @@ class AnthropicProvider(BaseProvider):
         return self._tool_call(tool, prompt, thinking=True)
 
     def score_job(self, job: dict, profile: dict) -> dict:
+        # Deterministic skill coverage — the LLM does NOT get to invent this.
+        det_cov, det_matched, det_missing = compute_skill_coverage(job, profile)
         tool = {
             "name": "score_job",
-            "description": "Rubric-score a job vs. the candidate using three weighted categories.",
+            "description": "Judge industry alignment and location/seniority fit. Skill coverage is computed deterministically and provided as input — DO NOT recompute it.",
             "input_schema": {
                 "type": "object",
                 "properties": {
-                    "required_skills":    {"type": "number", "minimum": 0, "maximum": 1,
-                                           "description": "Fraction of job requirements covered by the candidate's skills (0-1)."},
                     "industry":           {"type": "number", "minimum": 0, "maximum": 1,
-                                           "description": "Alignment of job's industry/domain with candidate's target field (0-1)."},
+                                           "description": "How well the job's domain/industry aligns with the candidate's target field and background. 1.0 = exact target field, 0.5 = adjacent/transferable, 0.0 = unrelated."},
                     "location_seniority": {"type": "number", "minimum": 0, "maximum": 1,
-                                           "description": "Combined fit of location and seniority level (0-1)."},
+                                           "description": "Combined fit of location AND seniority. 1.0 = remote OR matches candidate location AND seniority matches candidate's level. 0.5 = one mismatch. 0.0 = both mismatch."},
                     "reasoning":          {"type": "string",
-                                           "description": "EXACTLY one sentence explaining the overall score."},
-                    "matching_skills":    {"type": "array", "items": {"type": "string"}},
-                    "missing_skills":     {"type": "array", "items": {"type": "string"}},
+                                           "description": "ONE sentence grounded in actual JD/profile content — cite a specific requirement, skill, or detail. Do not generalize."},
                 },
-                "required": ["required_skills", "industry", "location_seniority", "reasoning"],
+                "required": ["industry", "location_seniority", "reasoning"],
             },
         }
-        profile_summary = json.dumps({
-            "skills":    profile.get("top_hard_skills", []),
-            "education": profile.get("education", []),
-            "targets":   profile.get("target_titles", []),
-        })
-        prompt = (
-            "Score this job vs. the candidate using EXACTLY three categories, each 0.0-1.0:\n"
-            "  - required_skills (weight 50%): fraction of job requirements the candidate covers.\n"
-            "  - industry (weight 30%): alignment of job's domain with candidate's target field.\n"
-            "  - location_seniority (weight 20%): combined location + seniority fit.\n"
-            "Also provide a ONE-sentence 'reasoning' string explaining the overall score.\n\n"
-            f"Candidate:\n{profile_summary}\n\n"
-            f"Job Title: {job.get('title')}\nCompany: {job.get('company')}\n"
-            f"Requirements: {', '.join(job.get('requirements', []))}\n"
-            f"Description: {job.get('description', '')}\n"
-            f"Location: {job.get('location')} (Remote: {job.get('remote', False)})"
+        edu = (profile.get("education") or [{}])[0] if profile.get("education") else {}
+        candidate_block = (
+            f"  Skills (top): {', '.join((profile.get('top_hard_skills') or [])[:15])}\n"
+            f"  Target titles: {', '.join(profile.get('target_titles') or [])}\n"
+            f"  Education: {edu.get('degree', '?')} at {edu.get('institution', '?')} ({edu.get('dates', '')})\n"
+            f"  Location preference: {profile.get('location') or 'unspecified'}"
         )
-        raw = self._tool_call(tool, prompt, max_tokens=1024)
+        desc = (job.get("description") or "")
+        if len(desc) > 1200:
+            desc = desc[:1200] + "…"
+        job_block = (
+            f"  Title: {job.get('title')}\n"
+            f"  Company: {job.get('company')}\n"
+            f"  Location: {job.get('location')} (remote={bool(job.get('remote'))})\n"
+            f"  Experience level: {job.get('experience_level', 'unknown')}\n"
+            f"  Requirements: {', '.join((job.get('requirements') or [])[:12]) or '(none listed)'}\n"
+            f"  Description: {desc or '(none)'}"
+        )
+        prompt = (
+            "You are scoring how well a job posting fits a candidate. Skill "
+            "coverage has ALREADY been computed deterministically — don't redo it. "
+            "Your job is to judge two qualitative dimensions:\n"
+            "  - industry (0.0-1.0): how aligned is the job's domain with the candidate?\n"
+            "  - location_seniority (0.0-1.0): location and seniority fit.\n"
+            "Be strict: 1.0 means perfect fit, 0.5 means partially aligned, 0.0 means clearly off. "
+            "The reasoning MUST cite a concrete requirement, skill, or detail from the JD — "
+            "not generic phrases like 'good match'.\n\n"
+            f"=== Deterministic skill coverage (FYI, do not change): "
+            f"{det_cov:.2f} ({len(det_matched)} matched / {len(det_missing)} missing) ===\n\n"
+            f"Candidate:\n{candidate_block}\n\n"
+            f"Job:\n{job_block}"
+        )
+        raw = self._tool_call(tool, prompt, max_tokens=512)
         return _build_rubric_result(
             job,
-            raw.get("required_skills", 0),
-            raw.get("industry", 0),
-            raw.get("location_seniority", 0),
-            matched=raw.get("matching_skills") or [],
-            missing=raw.get("missing_skills") or [],
+            det_cov,
+            raw.get("industry", 0.5),
+            raw.get("location_seniority", 0.5),
+            matched=det_matched,
+            missing=det_missing,
             reasoning=raw.get("reasoning", ""),
         )
 
@@ -755,9 +845,15 @@ class DemoProvider(BaseProvider):
         "experience": "experience",
         "work experience": "experience",
         "professional experience": "experience",
+        "relevant experience": "experience",
+        "internship experience": "experience",
+        "engineering experience": "experience",
+        "career experience": "experience",
         "employment": "experience",
         "employment history": "experience",
         "industry experience": "experience",
+        "work history": "experience",
+        "career": "experience",
         "research experience": "research experience",
         "research": "research experience",
         "research projects": "research experience",
@@ -1436,7 +1532,8 @@ class DemoProvider(BaseProvider):
     def generate_demo_jobs(self, profile: dict, titles: list, location: str) -> list:  # noqa: ARG002
         return DEMO_JOBS
 
-    def chat(self, system: str, messages: list, max_tokens: int = 1024) -> str:
+    def chat(self, system: str, messages: list, max_tokens: int = 1024,
+             json_mode: bool = False) -> str:                              # noqa: ARG002
         # Demo mode has no LLM. Return a clear, honest message so the UI degrades
         # gracefully instead of bubbling a NotImplementedError.
         return (
@@ -1450,9 +1547,16 @@ class DemoProvider(BaseProvider):
 # ── 3. Ollama (local LLM) ──────────────────────────────────────────────────────
 
 class OllamaProvider(BaseProvider):
-    """Uses a local Ollama model.  Free, no API key, requires Ollama installed."""
+    """Uses an Ollama instance — server-side in production, localhost in dev.
 
-    OLLAMA_URL = "http://localhost:11434"
+    The Ollama URL is read from the OLLAMA_URL env var so deployments can
+    point at a different host (e.g. a beefier machine on the Tailnet) without
+    code changes. Defaults to localhost:11434 — which on the production RPi
+    deployment is the RPi's own Ollama, not the visiting user's laptop.
+    """
+
+    import os as _os
+    OLLAMA_URL = _os.environ.get("OLLAMA_URL", "http://localhost:11434").rstrip("/")
 
     def __init__(self, model: str = "llama3.2"):
         self.model = model
@@ -1471,6 +1575,14 @@ class OllamaProvider(BaseProvider):
                 f"Start it with:  ollama serve\n(error: {e})"
             ) from e
 
+        # Ollama Turbo cloud models (`*-cloud` tag) are proxied through the
+        # local daemon to Ollama's hosted servers. They aren't always listed
+        # by /api/tags — skip the local-existence check and let the actual
+        # chat call surface any auth/model errors with a real message.
+        tag = self.model.split(":", 1)[1] if ":" in self.model else ""
+        if tag.endswith("cloud") or tag == "cloud" or self.model.endswith("-cloud"):
+            return
+
         models      = data.get("models", [])
         local_bases = {m.get("name", "").split(":")[0] for m in models}
         local_full  = {m.get("name", "") for m in models}
@@ -1484,7 +1596,8 @@ class OllamaProvider(BaseProvider):
                 f"Fix: ollama pull {self.model}"
             )
 
-    def chat(self, system: str, messages: list, max_tokens: int = 1024) -> str:
+    def chat(self, system: str, messages: list, max_tokens: int = 1024,
+             json_mode: bool = False) -> str:
         try:
             from openai import OpenAI
         except ImportError as exc:
@@ -1500,9 +1613,20 @@ class OllamaProvider(BaseProvider):
                 msgs.append({"role": m["role"], "content": str(m["content"])})
         if len(msgs) == (1 if system else 0):
             return ""
-        resp = oc.chat.completions.create(
-            model=self.model, messages=msgs, max_tokens=max_tokens,
-        )
+        kwargs: dict = {"model": self.model, "messages": msgs,
+                        "max_tokens": max_tokens}
+        if json_mode:
+            # Ollama's OpenAI-compatible endpoint accepts response_format on
+            # recent builds; older builds error so we retry once without it.
+            kwargs["response_format"] = {"type": "json_object"}
+        try:
+            resp = oc.chat.completions.create(**kwargs)
+        except Exception as exc:
+            if json_mode and "response_format" in str(exc):
+                kwargs.pop("response_format", None)
+                resp = oc.chat.completions.create(**kwargs)
+            else:
+                raise
         return (resp.choices[0].message.content or "").strip()
 
     def _chat(self, prompt: str, json_mode: bool = False) -> str:
@@ -1676,34 +1800,51 @@ class OllamaProvider(BaseProvider):
         return result
 
     def score_job(self, job: dict, profile: dict) -> dict:
+        # Deterministic skill coverage — keep the LLM out of this.
+        det_cov, det_matched, det_missing = compute_skill_coverage(job, profile)
+
+        edu = (profile.get("education") or [{}])[0] if profile.get("education") else {}
+        desc = (job.get("description") or "")
+        if len(desc) > 1000:
+            desc = desc[:1000] + "…"
+
         prompt = (
-            "Score this job against the candidate using EXACTLY three categories, "
-            "each a float 0.0-1.0:\n"
-            "  required_skills (weight 50%): fraction of requirements covered.\n"
-            "  industry (weight 30%): domain alignment with candidate targets.\n"
-            "  location_seniority (weight 20%): location + seniority fit.\n"
-            "Return ONLY a JSON object with keys: required_skills, industry, "
-            "location_seniority, reasoning (ONE sentence), "
-            "matching_skills (array), missing_skills (array).\n\n"
-            f"Candidate skills: {', '.join(profile.get('top_hard_skills', []))}\n"
-            f"Target titles: {', '.join(profile.get('target_titles', []))}\n\n"
-            f"Job: {job.get('title')} at {job.get('company')}\n"
-            f"Requirements: {', '.join(job.get('requirements', []))}\n"
-            f"Location: {job.get('location')} (Remote: {job.get('remote', False)})"
+            "Score how well a job posting fits a candidate. Output ONLY a JSON "
+            "object with these EXACT keys:\n"
+            '  "industry": float 0.0-1.0 (domain/field alignment)\n'
+            '  "location_seniority": float 0.0-1.0 (location + seniority fit)\n'
+            '  "reasoning": one sentence citing a CONCRETE requirement or skill from the JD.\n\n'
+            "Be strict. 1.0 = exact match, 0.5 = partial, 0.0 = clearly off. "
+            "Skill coverage is already computed deterministically — don't include it.\n\n"
+            f"Deterministic skill coverage (for context): {det_cov:.2f} "
+            f"({len(det_matched)} matched, {len(det_missing)} missing)\n\n"
+            "Candidate:\n"
+            f"  Skills: {', '.join((profile.get('top_hard_skills') or [])[:12])}\n"
+            f"  Target titles: {', '.join(profile.get('target_titles') or [])}\n"
+            f"  Education: {edu.get('degree','?')} @ {edu.get('institution','?')}\n"
+            f"  Location: {profile.get('location') or 'unspecified'}\n\n"
+            "Job:\n"
+            f"  Title: {job.get('title')}\n"
+            f"  Company: {job.get('company')}\n"
+            f"  Location: {job.get('location')} (remote={bool(job.get('remote'))})\n"
+            f"  Experience level: {job.get('experience_level','unknown')}\n"
+            f"  Requirements: {', '.join((job.get('requirements') or [])[:10]) or '(none)'}\n"
+            f"  Description: {desc or '(none)'}\n"
         )
-        raw = self._chat(prompt)
+        raw = self._chat(prompt, json_mode=True)
         parsed = self._parse_json(raw, {
-            "required_skills": 0.5, "industry": 0.5, "location_seniority": 0.5,
-            "reasoning": "Scored by Ollama (fallback).",
-            "matching_skills": [], "missing_skills": [],
+            "industry": 0.5, "location_seniority": 0.5,
+            "reasoning": "Ollama returned non-JSON; using deterministic coverage only.",
         })
+        # Clamp + grounding: even if the LLM returns garbage extremes, the
+        # deterministic skill coverage owns the heaviest weight.
         return _build_rubric_result(
             job,
-            parsed.get("required_skills", 0),
-            parsed.get("industry", 0),
-            parsed.get("location_seniority", 0),
-            matched=parsed.get("matching_skills") or [],
-            missing=parsed.get("missing_skills") or [],
+            det_cov,
+            parsed.get("industry", 0.5),
+            parsed.get("location_seniority", 0.5),
+            matched=det_matched,
+            missing=det_missing,
             reasoning=parsed.get("reasoning", ""),
         )
 

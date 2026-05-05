@@ -1,0 +1,237 @@
+{
+  "name": "Jonathan Liu",
+  "email": "jliu1401@uw.edu",
+  "linkedin": "linkedin.com/in/jonathan-liu-202081252",
+  "github": "github.com/JonathanLiu1401",
+  "phone": "+1 (206) 589-0963",
+  "location": "Seattle, WA",
+  "target_titles": [
+    "FPGA/Hardware Engineering Intern",
+    "IC Design Engineering Intern",
+    "Hardware Engineering Intern"
+  ],
+  "top_hard_skills": [
+    "Altium Designer",
+    "KiCad",
+    "STM32",
+    "Arduino",
+    "FPGA (SystemVerilog)",
+    "Intel Quartus",
+    "ModelSim",
+    "Soldering",
+    "BLDC",
+    "C/C++",
+    "Python (NumPy/SciPy)",
+    "Java",
+    "MATLAB",
+    "LTspice",
+    "Fusion360",
+    "Linux/Bash",
+    "MBE",
+    "GIT",
+    "RUST",
+    "PL",
+    "GO",
+    "Pcb Design",
+    "Oscilloscope",
+    "RIE",
+    "SOC"
+  ],
+  "top_soft_skills": [
+    "Leadership",
+    "Project Management",
+    "Cross-functional Communication",
+    "Reliability",
+    "Time Management"
+  ],
+  "education": [
+    {
+      "degree": "Bachelor of Science in Electrical and Computer Engineering",
+      "institution": "University of Washington Seattle, WA",
+      "year": "Sep 2024 - June 2028",
+      "gpa": "3.93"
+    }
+  ],
+  "research_experience": [
+    {
+      "title": "Undergraduate Research Assistant (Embedded Systems)",
+      "company": "Sensors, Energy, and Automation Laboratory (SEAL) Seattle, WA"
+    },
+    {
+      "title": "",
+      "company": "Institute of Electrical and Electronics Engineers (IEEE) UW Seattle, WA"
+    }
+  ],
+  "work_experience": [
+    {
+      "title": "Lead (Drone Hardware Engineer)",
+      "company": "Husky Robotics Drone Subteam Seattle, WA",
+      "dates": "Oct 2024 - Present"
+    }
+  ],
+  "projects": [],
+  "resume_gaps": [],
+  "critical_analysis": "",
+  "top_hard_skills_detailed": [
+    {
+      "skill": "Altium Designer",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "KiCad",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "STM32",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Arduino",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "FPGA (SystemVerilog)",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Intel Quartus",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "ModelSim",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Soldering",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "BLDC",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "C/C++",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Python (NumPy/SciPy)",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Java",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "MATLAB",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "LTspice",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Fusion360",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Linux/Bash",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "MBE",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "GIT",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "RUST",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "PL",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "GO",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Pcb Design",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Oscilloscope",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "RIE",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "SOC",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    }
+  ],
+  "target_titles_detailed": [
+    {
+      "title": "FPGA/Hardware Engineering Intern",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "IC Design Engineering Intern",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "Hardware Engineering Intern",
+      "family": "",
+      "evidence": ""
+    }
+  ],
+  "_audit_log": [
+    "retention_audit recovered 9 missing skills: ['MBE', 'GIT', 'RUST', 'PL', 'GO', 'Pcb Design', 'Oscilloscope', 'RIE', 'SOC']"
+  ],
+  "experience": [
+    {
+      "title": "Undergraduate Research Assistant (Embedded Systems)",
+      "company": "Sensors, Energy, and Automation Laboratory (SEAL) Seattle, WA"
+    },
+    {
+      "title": "",
+      "company": "Institute of Electrical and Electronics Engineers (IEEE) UW Seattle, WA"
+    },
+    {
+      "title": "Lead (Drone Hardware Engineer)",
+      "company": "Husky Robotics Drone Subteam Seattle, WA",
+      "dates": "Oct 2024 - Present"
+    }
+  ]
+}

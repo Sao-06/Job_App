@@ -90,13 +90,11 @@ def startup_checklist() -> dict:
     raw = input("   [Enter to skip]: ").strip()
     cfg["blacklist"] = [c.strip() for c in raw.split(",")] if raw else []
 
-    console.print("\n[bold]7. Priority target companies[/bold]")
-    raw = input(
-        "   [NVIDIA, Apple, Microsoft, Intel, IBM, Micron, Samsung, TSMC]: "
-    ).strip()
+    console.print("\n[bold]7. Priority target companies[/bold] (optional, comma-separated)")
+    raw = input("   [Enter to skip]: ").strip()
     cfg["whitelist"] = (
-        [c.strip() for c in raw.split(",")]
-        if raw else ["NVIDIA", "Apple", "Microsoft", "Intel", "IBM", "Micron", "Samsung", "TSMC"]
+        [c.strip() for c in raw.split(",") if c.strip()]
+        if raw else []
     )
 
     console.print("\n[bold]9. Cover letter preference[/bold]")
@@ -156,15 +154,16 @@ def run_agent(config: dict, provider: BaseProvider) -> None:
 
     threshold = config.get("threshold", 75)
     scored = phase3_score_jobs(
-        jobs, profile, provider, min_score=60,
+        jobs, profile, provider, min_score=50,
         experience_levels=config.get("experience_levels"),
+        include_unknown_experience=config.get("include_unknown_experience", True),
         citizenship_filter=config.get("citizenship_filter", "all"),
     )
 
     # Phase 4 only sees jobs that actually passed scoring.
     passed = [j for j in scored if j.get("filter_status") == "passed"]
     auto_eligible = [j for j in passed if j.get("score", 0) >= threshold]
-    review_needed = [j for j in passed if 60 <= j.get("score", 0) < threshold]
+    review_needed = [j for j in passed if 50 <= j.get("score", 0) < threshold]
 
     console.print(
         f"\n  📋 [bold]{len(auto_eligible)}[/bold] auto-eligible (≥{threshold})  |  "
@@ -296,8 +295,9 @@ def run_agent(config: dict, provider: BaseProvider) -> None:
                 "notes": f"Score {job.get('score', 0)} below threshold or max_apps reached",
             })
 
-    tracker_path = phase6_update_tracker(applications)
-    phase7_run_report(applications, tracker_path, provider)
+    tracker_result = phase6_update_tracker(applications)
+    tracker_path = tracker_result.get("tracker_path") if isinstance(tracker_result, dict) else tracker_result
+    phase7_run_report(applications, tracker_path, provider, output_dir=OUTPUT_DIR)
 
     console.print("\n[bold green]✅  Agent run complete![/bold green]")
     if tracker_path:

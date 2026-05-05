@@ -35,10 +35,12 @@ try:
 except ImportError:
     pass
 
-# Force UTF-8 stdout/stderr so Rich emoji don't crash on Windows cp1252
-if hasattr(sys.stdout, "buffer"):
+# Force UTF-8 stdout/stderr so Rich emoji don't crash on Windows cp1252.
+# Skip when stdout is already utf-8 — re-wrapping pytest's capture file
+# breaks its session-end teardown (mirrors the same guard in pipeline/config.py).
+if hasattr(sys.stdout, "buffer") and "utf" not in (sys.stdout.encoding or "").lower():
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-if hasattr(sys.stderr, "buffer"):
+if hasattr(sys.stderr, "buffer") and "utf" not in (sys.stderr.encoding or "").lower():
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 import uvicorn
@@ -55,23 +57,35 @@ try:
         verify_google_token,
         verify_password,
     )
-except ImportError:
+except ImportError as _exc:
+    _AUTH_IMPORT_ERROR = f"auth_utils import failed ({type(_exc).__name__}: {_exc}). "
+    _AUTH_PW_HINT = (
+        _AUTH_IMPORT_ERROR
+        + "Password sign-in needs `bcrypt`. Run `pip install 'bcrypt>=4.1.0'` "
+          "in the Python interpreter that runs app.py, then restart the server."
+    )
+    _AUTH_GOOGLE_HINT = (
+        _AUTH_IMPORT_ERROR
+        + "Google OAuth needs `google-auth-oauthlib`. Run "
+          "`pip install 'google-auth-oauthlib>=1.2.0'` in the Python interpreter "
+          "that runs app.py, then restart the server."
+    )
     def hash_password(_pw):
-        raise RuntimeError("bcrypt is required for password auth")
+        raise RuntimeError(_AUTH_PW_HINT)
     def verify_password(_pw, _h):
-        raise RuntimeError("bcrypt is required for password auth")
+        raise RuntimeError(_AUTH_PW_HINT)
     def get_google_auth_url(_redirect_uri):
-        raise RuntimeError("Google OAuth dependencies are not installed")
+        raise RuntimeError(_AUTH_GOOGLE_HINT)
     def verify_google_token(_code, _redirect_uri, _state):
-        raise RuntimeError("Google OAuth dependencies are not installed")
+        raise RuntimeError(_AUTH_GOOGLE_HINT)
 
 from session_store import SQLiteSessionStore
+from pipeline import stripe_billing as _stripe_billing
 from pipeline.phases import (
     phase1_ingest_resume,
     phase2_discover_jobs,
     phase3_score_jobs,
     phase4_tailor_resume,
-    phase5_simulate_submission,
     _load_existing_applications,
     phase6_update_tracker,
     phase7_run_report,
@@ -214,21 +228,28 @@ def _default_state() -> dict:
     "mode": "ollama",
     "api_key": "",
     "ollama_model": DEFAULT_OLLAMA_MODEL,
-    # Search / apply settings
+    # Search / apply settings — every field that depends on who the user is
+    # starts EMPTY. They get populated from the resume after Phase 1 runs;
+    # see `_apply_profile_search_prefs`. Hardcoding "Engineer" / "United
+    # States" / "bachelors" lied to non-engineering / non-US / non-undergrad
+    # users on first paint, so we no longer ship those.
     "threshold": 75,
-    "job_titles": "Engineer",
-    "location": "United States",
+    "job_titles": "",
+    "location": "",
     "max_apps": 10,
-    "max_scrape_jobs": 20,
+    "max_scrape_jobs": 50,
     "days_old": 30,
     "cover_letter": False,
     "blacklist": "",
-    "whitelist": "NVIDIA, Apple, Microsoft, Intel, IBM, Micron, Samsung, TSMC",
-    # Filters
-    "experience_levels": ["internship", "entry-level"],
-    "education_filter": ["bachelors"],
+    "whitelist": "",
+    # Filters — empty until resume is parsed. citizenship defaults to 'all'
+    # because that's the broadest, least-presumptuous filter; the previous
+    # 'exclude_required' silently dropped roles that may have been fine.
+    "experience_levels": [],
+    "education_filter": [],
     "include_unknown_education": True,
-    "citizenship_filter": "exclude_required",
+    "include_unknown_experience": True,
+    "citizenship_filter": "all",
     "use_simplify": True,
     "llm_score_limit": 10,
     # Resume ? scalar fields kept as the "active primary" copy for pipeline use
@@ -245,7 +266,11 @@ def _default_state() -> dict:
     "scored": None,
     "tailored_map": {},
     "applications": None,
+    # Phase 6 — ``tracker_path`` is preserved for back-compat with any session
+    # row that pre-dates the in-page tracker, but new web runs never populate
+    # it (the spreadsheet lives entirely in ``tracker_data``).
     "tracker_path": None,
+    "tracker_data": None,
     "report": None,
     # Pipeline state
     "done": set(),
@@ -311,14 +336,44 @@ _memory_sessions: dict[str, dict] = {}
 # spawn a duplicate scheduler.
 @app.on_event("startup")
 def _start_ingestion() -> None:
+    if os.environ.get("JOBS_AI_DISABLE_INGESTION"):
+        # Test harness sets this to skip the 60s parallel backfill that
+        # FastAPI's startup event would otherwise hang on under TestClient.
+        return
     if _session_store is None:
         print("[ingest] session store unavailable; skipping job ingestion")
         return
     try:
         from pipeline import ingest as _job_ingest
+        # Skip the parallel backfill if the index already has fresh data.
+        # When the user restarts (e.g. to pick up a code change), the DB
+        # already holds 70K+ jobs from yesterday's scheduler ticks; firing
+        # 8 concurrent upserters at boot blocks SQLite reads for 30-60s
+        # and the SPA's /api/jobs/feed spins forever during warm-up. The
+        # scheduled per-source ticks (every cadence_seconds) refresh data
+        # continuously after boot — backfill only matters on a cold DB.
+        run_backfill = True
+        try:
+            with _session_store.connect() as _probe:
+                latest = _probe.execute(
+                    "SELECT MAX(started_at) FROM source_runs WHERE ok = 1"
+                ).fetchone()
+            if latest and latest[0]:
+                from datetime import datetime as _dt, timezone as _tz
+                last = _dt.fromisoformat(latest[0].replace("Z", "+00:00"))
+                age_min = (_dt.now(_tz.utc) - last).total_seconds() / 60.0
+                # 60-minute freshness window — anything newer means at least
+                # one scheduler tick already ran successfully and the user
+                # would not benefit from yet another backfill at boot.
+                if age_min < 60:
+                    run_backfill = False
+                    print(f"[ingest] skipping startup backfill — last successful run "
+                          f"{age_min:.0f} min ago; scheduler will keep data fresh")
+        except Exception as exc:
+            print(f"[ingest] freshness probe failed ({exc!r}); falling back to backfill")
         _job_ingest.start_scheduler(
             connect=_session_store.connect,
-            run_backfill=True,
+            run_backfill=run_backfill,
             backfill_timeout=60,
         )
     except Exception as exc:
@@ -393,6 +448,9 @@ def _is_local_request(request: Request) -> bool:
     return host in ("127.0.0.1", "::1", "localhost")
 
 
+_LEGACY_WHITELIST_DEFAULT = "NVIDIA, Apple, Microsoft, Intel, IBM, Micron, Samsung, TSMC"
+
+
 def _load_session_state(session_id: str) -> dict:
     # Anonymous sessions live in memory. Authenticated sessions live in SQLite.
     # Try memory first; if missing, peek SQLite (read-only — never INSERT a
@@ -406,6 +464,11 @@ def _load_session_state(session_id: str) -> dict:
     state["liked_ids"] = set(state.get("liked_ids") or [])
     state["hidden_ids"] = set(state.get("hidden_ids") or [])
     state["extracting_ids"] = set(state.get("extracting_ids") or [])
+    # One-shot scrub: clear the legacy hardcoded EE/semiconductor whitelist
+    # for any session that still has it saved verbatim. Only matches the
+    # exact prior default — users who actually customized it keep their list.
+    if str(state.get("whitelist") or "").strip() == _LEGACY_WHITELIST_DEFAULT:
+        state["whitelist"] = ""
     return state
 
 
@@ -530,7 +593,7 @@ async def session_state_middleware(request: Request, call_next):
     # fails the state check.
     skip_save = (
         response.headers.get("content-type", "").startswith("text/event-stream")
-        or request.url.path in ("/api/state",)
+        or request.url.path in ("/api/state", "/api/webhooks/stripe")
     )
     if not skip_save:
         try:
@@ -543,13 +606,19 @@ async def session_state_middleware(request: Request, call_next):
 
 # ── Resume helpers ────────────────────────────────────────────────────────────
 
-def _new_resume_record(filename: str, text: str, latex_source=None) -> dict:
+def _new_resume_record(filename: str, text: str, latex_source=None,
+                       original_path: str | None = None) -> dict:
     now = datetime.now().isoformat()
     return {
         "id": uuid.uuid4().hex,
         "filename": filename,
         "text": text,
         "latex_source": latex_source,
+        # Path (relative to OUTPUT_DIR, posix style) of the original uploaded
+        # file kept on disk so the Resume preview can embed the actual PDF
+        # rather than just the extracted text. None for the demo resume and
+        # for paste-as-text records — the SPA falls back to the text view.
+        "original_path": original_path,
         "profile": None,
         "primary": False,
         "created_at": now,
@@ -572,6 +641,82 @@ def _get_resume_by_id(rid: str) -> dict | None:
     return None
 
 
+_EDU_RANK = {"high_school": 0, "associates": 1, "bachelors": 2, "masters": 3, "phd": 4}
+_DEGREE_TOKEN_TO_LEVEL = (
+    ("phd",         "phd"),  ("doctor",      "phd"),
+    ("master",      "masters"), ("m.s",         "masters"), ("m.eng",       "masters"),
+    ("msc",         "masters"), ("mba",         "masters"),
+    ("bachelor",    "bachelors"), ("b.s",        "bachelors"), ("b.eng",       "bachelors"),
+    ("bsc",         "bachelors"), ("b.a",        "bachelors"),
+    ("associate",   "associates"), ("a.a",       "associates"), ("a.s",         "associates"),
+    ("high school", "high_school"),
+)
+
+
+def _infer_edu_filter_from_profile(profile: dict) -> list[str]:
+    """Return a sensible default education-filter list based on the highest
+    degree in the profile. The convention used downstream is "show jobs
+    requiring this OR lower" — so `[bachelors]` keeps high-school +
+    associates + bachelors postings. We always pin to the highest level
+    we can detect; the user can broaden it in Settings."""
+    edu_entries = (profile or {}).get("education") or []
+    best_rank = -1
+    best_level = ""
+    for e in edu_entries:
+        if not isinstance(e, dict):
+            continue
+        haystack = " ".join(str(e.get(k) or "") for k in ("degree", "field", "name")).lower()
+        if not haystack.strip():
+            continue
+        for token, level in _DEGREE_TOKEN_TO_LEVEL:
+            if token in haystack and _EDU_RANK[level] > best_rank:
+                best_rank = _EDU_RANK[level]
+                best_level = level
+    return [best_level] if best_level else []
+
+
+def _apply_profile_search_prefs(state: dict, profile: dict | None) -> bool:
+    """Fill EMPTY search-pref fields on *state* from a freshly-extracted
+    *profile*. Never overwrites a value the user has already set — empty
+    string / empty list / None are the only fields we touch.
+
+    Returns True if anything was changed. The caller is responsible for
+    persisting the state.
+    """
+    if not profile:
+        return False
+    changed = False
+
+    # job_titles ← profile.target_titles
+    if not str(state.get("job_titles") or "").strip():
+        titles = []
+        for t in (profile.get("target_titles") or []):
+            if isinstance(t, dict):
+                t = t.get("title") or ""
+            t = str(t).strip()
+            if t:
+                titles.append(t)
+        if titles:
+            state["job_titles"] = ", ".join(titles[:5])
+            changed = True
+
+    # location ← profile.location
+    if not str(state.get("location") or "").strip():
+        loc = str((profile.get("location") or "")).strip()
+        if loc:
+            state["location"] = loc
+            changed = True
+
+    # education_filter ← inferred from profile.education
+    if not (state.get("education_filter") or []):
+        derived = _infer_edu_filter_from_profile(profile)
+        if derived:
+            state["education_filter"] = derived
+            changed = True
+
+    return changed
+
+
 def _sync_primary_scalars(record=None):
     pr = record or _get_primary_resume()
     if pr:
@@ -581,6 +726,10 @@ def _sync_primary_scalars(record=None):
         _S["profile"] = pr.get("profile")
         if pr.get("profile"):
             _S["done"].add(1)
+            # Mirror the profile-derived search prefs onto the bound state so
+            # the SettingsPage picks up titles/location/education immediately
+            # after a primary switch (not just after a fresh extraction).
+            _apply_profile_search_prefs(_S.current(), pr["profile"])
         else:
             _S["done"].discard(1)
     else:
@@ -595,6 +744,22 @@ def _serialize_resume(r: dict) -> dict:
     p = r.get("profile") or {}
     is_extracting = r["id"] in (_S.get("extracting_ids") or set())
     full_profile = {k: v for k, v in p.items() if not k.startswith("_")} if p else None
+    # Surface the original-file URL only when the bytes still exist on disk.
+    # Legacy records persisted before the upload-store landed have
+    # original_path = None or point at a file that's already been cleaned up
+    # — in either case the SPA falls back to the text-only preview.
+    original_url = ""
+    original_kind = ""
+    rel = r.get("original_path") or ""
+    if rel:
+        full = (OUTPUT_DIR / rel).resolve()
+        try:
+            full.relative_to(OUTPUT_DIR.resolve())
+        except ValueError:
+            full = None
+        if full and full.exists() and full.is_file():
+            original_url = _output_url(full)
+            original_kind = full.suffix.lstrip(".").lower()
     return {
         "id": r["id"],
         "filename": r["filename"],
@@ -605,6 +770,8 @@ def _serialize_resume(r: dict) -> dict:
         "extracting": is_extracting,
         "extract_error": r.get("extract_error"),
         "profile": full_profile,
+        "original_url": original_url,
+        "original_kind": original_kind,
     }
 
 
@@ -709,6 +876,11 @@ def _run_extraction_bg(record: dict, state: dict, session_id: str | None,
                     done = set(done or [])
                 done.add(1)
                 latest["done"] = done
+                # First resume: there are no hardcoded job_titles / location /
+                # education_filter on a fresh account anymore, so backfill them
+                # from the extracted profile. Only fields the user hasn't
+                # explicitly set get touched.
+                _apply_profile_search_prefs(latest, extraction_result)
         elif extraction_error is not None:
             target["extract_error"] = extraction_error
 
@@ -725,14 +897,23 @@ def _run_extraction_bg(record: dict, state: dict, session_id: str | None,
         # subsequent reads from this thread (or an unfortunate cached
         # reference) see consistent values. Safe: we hold the lock.
         for k in ("resumes", "resume_text", "latex_source", "resume_filename",
-                  "profile", "done", "extracting_ids"):
+                  "profile", "done", "extracting_ids",
+                  "job_titles", "location", "education_filter"):
             if k in latest:
                 state[k] = latest[k]
 
 
 # ── Provider factory ──────────────────────────────────────────────────────────
 
+# Test seam: when set, _make_provider returns this object instead of constructing
+# a real provider. Lets tests inject a FakeProvider without monkeypatching the
+# function or pre-populating session state. None in production.
+_PROVIDER_OVERRIDE = None
+
+
 def _make_provider():
+    if _PROVIDER_OVERRIDE is not None:
+        return _PROVIDER_OVERRIDE
     from pipeline.providers import DemoProvider, AnthropicProvider, OllamaProvider
     mode = _S.get("mode", "ollama")
     if mode == "demo":
@@ -888,6 +1069,75 @@ def _run_phase_sse(phase: int, fn, state: dict | None = None, session_id: str | 
     finally:
         _release_phase(session_id, phase)
         _phase_logs.pop((session_id, phase), None)
+
+
+def _build_tailored_item(*, job: dict, tailored: dict, resume_ref: str,
+                          profile: dict, score=None,
+                          status: str = "Tailored", notes: str = "") -> dict:
+    """Build the SPA-facing item dict for a single tailored resume.
+
+    Used by both the phase 4 batch serializer (_serialize for phase==4) and
+    the per-job ``POST /api/resume/tailor`` endpoint, so both paths return
+    the same shape and the React TailoredResumeCard renders identically
+    whether the user batch-ran phase 4 or clicked Tailor on one job.
+    """
+    profile = profile or {}
+    tailored = tailored or {}
+    profile_skills_lower = {
+        str(s).lower().strip()
+        for s in (profile.get("top_hard_skills") or []) if s and str(s).strip()
+    }
+    skills_raw = tailored.get("skills_reordered") or []
+    skills = [s.get("skill", str(s)) if isinstance(s, dict) else str(s) for s in skills_raw]
+
+    bullets_full = []
+    for entry in (tailored.get("experience_bullets") or []):
+        if not isinstance(entry, dict):
+            continue
+        bullets = [str(b) for b in (entry.get("bullets") or []) if str(b).strip()]
+        if entry.get("role") or bullets:
+            bullets_full.append({"role": entry.get("role", ""), "bullets": bullets})
+
+    reqs = [str(r).strip() for r in (job.get("requirements") or []) if r and str(r).strip()]
+    keyword_comparison = []
+    for req in reqs[:14]:
+        req_lower = req.lower()
+        on_resume = any(
+            s == req_lower or s in req_lower or req_lower in s
+            for s in profile_skills_lower
+        )
+        keyword_comparison.append({
+            "keyword": req,
+            "on_resume": bool(on_resume),
+            "action": "keep" if on_resume else "add",
+        })
+
+    ats_before = int(tailored.get("ats_score_before") or 0)
+    ats_after  = int(tailored.get("ats_score_after") or 0)
+    return {
+        "co":               job.get("company", "") or job.get("co", ""),
+        "role":             job.get("title", "")   or job.get("role", ""),
+        "loc":              job.get("location", "") or job.get("loc", ""),
+        "score":            score if score is not None else job.get("score", 0),
+        "status":           status,
+        "notes":            notes,
+        "resume_file":      resume_ref or "",
+        "ats_before":       ats_before,
+        "ats_after":        ats_after,
+        "ats_delta":        ats_after - ats_before,
+        "ats_gaps":         [
+            s.get("skill", str(s)) if isinstance(s, dict) else str(s)
+            for s in (tailored.get("ats_keywords_missing") or [])
+        ][:10],
+        "skills":           skills[:18],
+        "experience_bullets": bullets_full,
+        "keyword_comparison": keyword_comparison,
+        "section_order":    list(tailored.get("section_order") or []),
+        "has_cl":           bool(tailored.get("cover_letter")),
+        "cover_letter":     str(tailored.get("cover_letter") or "")[:2000],
+    }
+
+
 def _serialize(phase: int, val) -> dict:
     def _title_str(t):
         return t.get("title", str(t)) if isinstance(t, dict) else str(t)
@@ -963,25 +1213,20 @@ def _serialize(phase: int, val) -> dict:
     if phase == 4:
         apps = val or []
         tmap = _S.get("tailored_map") or {}
+        profile = _S.get("profile") or {}
         items = []
         for a in apps:
             jk = a.get("id") or a.get("title", "")
             td = tmap.get(jk, {})
-            t  = td.get("tailored") or {}
-            skills_raw = t.get("skills_reordered") or []
-            skills = [s.get("skill", str(s)) if isinstance(s, dict) else str(s) for s in skills_raw]
-            items.append({
-                "co":            a.get("company", ""),
-                "role":          a.get("title", ""),
-                "score":         a.get("score", 0),
-                "status":        a.get("status", ""),
-                "resume_file":   a.get("resume_version", ""),
-                "ats_before":    t.get("ats_score_before", 0),
-                "ats_after":     t.get("ats_score_after", 0),
-                "ats_gaps":      [s.get("skill", str(s)) if isinstance(s, dict) else str(s) for s in (t.get("ats_keywords_missing") or [])][:6],
-                "skills":        skills[:8],
-                "has_cl":        bool(t.get("cover_letter")),
-            })
+            items.append(_build_tailored_item(
+                job=td.get("job") or a,
+                tailored=td.get("tailored") or {},
+                resume_ref=a.get("resume_version", ""),
+                profile=profile,
+                score=a.get("score", 0),
+                status=a.get("status", ""),
+                notes=a.get("notes", ""),
+            ))
         return {"count": len(apps), "items": items}
     if phase == 5:
         apps = val or []
@@ -1003,8 +1248,20 @@ def _serialize(phase: int, val) -> dict:
             ],
         }
     if phase == 6:
-        p = Path(str(val)) if val else None
-        return {"tracker": p.name if p else "", "url": _output_url(p) if p else ""}
+        # ``val`` is the dict returned by phase6_update_tracker — month +
+        # columns + rows + summary. We pass it through verbatim so the SPA
+        # can render the spreadsheet inline. ``tracker_path`` is dropped
+        # from the wire payload because the web flow doesn't write a file.
+        if isinstance(val, dict):
+            return {
+                "month":   val.get("month") or "",
+                "columns": val.get("columns") or [],
+                "rows":    val.get("rows") or [],
+                "summary": val.get("summary") or {},
+            }
+        # Back-compat shim: legacy phase 6 returned a Path. Surface an
+        # empty tracker rather than crashing the SSE serializer.
+        return {"month": "", "columns": [], "rows": [], "summary": {}}
     if phase == 7:
         return {"report": str(val) if val else ""}
     return {}
@@ -1044,6 +1301,37 @@ def _require_auth_user(request: Request) -> dict:
     return auth_user
 
 
+_PREVIEWABLE_RESUME_SUFFIXES = {".pdf", ".docx", ".txt", ".md", ".tex"}
+
+
+def _persist_uploaded_resume(record_id: str, suffix: str, content: bytes) -> str | None:
+    """Save the uploaded bytes under output/sessions/{sid}/uploads/{id}{ext}
+    and return the path relative to OUTPUT_DIR (posix style).
+
+    Returns None if the suffix isn't in the previewable set (we don't store
+    binaries we can't safely serve back via /output/{path}, which has its own
+    suffix allowlist). The filename uses the record id rather than the
+    user-supplied filename to neutralise traversal / collision concerns.
+    """
+    s = (suffix or "").lower()
+    if s not in _PREVIEWABLE_RESUME_SUFFIXES:
+        return None
+    dest_dir = _session_output_dir() / "uploads"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / f"{record_id}{s}"
+    dest.write_bytes(content)
+    try:
+        return dest.resolve().relative_to(OUTPUT_DIR.resolve()).as_posix()
+    except ValueError:
+        # Defensive: if relative-to fails (different drive on Windows), drop
+        # the persisted copy and fall back to text-only preview.
+        try:
+            dest.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return None
+
+
 @app.post("/api/resume/upload")
 async def upload_resume(request: Request, file: UploadFile = File(...)):
     _require_auth_user(request)
@@ -1062,6 +1350,10 @@ async def upload_resume(request: Request, file: UploadFile = File(...)):
         raise HTTPException(400, "Could not extract text from resume")
 
     record = _new_resume_record(fname, text, latex)
+    # Persist the original bytes AFTER record id is known so the file name
+    # binds to the record. Stored under the bound session's output dir so
+    # /output/sessions/{sid}/... auth-gating already covers access control.
+    record["original_path"] = _persist_uploaded_resume(record["id"], suffix, content)
     resumes = _S.setdefault("resumes", [])
 
     # First upload → becomes primary; subsequent uploads are non-primary
@@ -1116,7 +1408,8 @@ async def update_config(req: Request):
         "max_apps", "max_scrape_jobs", "days_old",
         "cover_letter", "blacklist", "whitelist",
         "experience_levels", "education_filter",
-        "include_unknown_education", "citizenship_filter",
+        "include_unknown_education", "include_unknown_experience",
+        "citizenship_filter",
         "use_simplify", "llm_score_limit",
         "force_customer_mode",
         "light_mode",
@@ -1196,8 +1489,24 @@ def _scored_summary_from_index(profile: dict | None) -> dict | None:
 
 def _scored_summary_for_state(scored, passed, auto_jobs, manual_jobs,
                                profile) -> dict | None:
-    """Prefer real Phase-3 scoring when present; fall back to the live index."""
+    """Prefer real Phase-3 scoring when present; fall back to the live index.
+
+    The displayed `jobs` list ALWAYS surfaces the top-N by score regardless of
+    threshold/filter status. With sparse JD bodies in the index, threshold=75
+    can produce zero passes — leaving the user staring at an empty Dashboard.
+    Filling the list from passed→manual→below→filtered means the page is
+    never empty when the pipeline actually produced output. Status badges
+    (auto/manual/below/filtered) still come from filter_status so the UI
+    can color the cards correctly.
+    """
     if scored:
+        # Sort the whole scored list, but bias passing jobs to the top by status.
+        rank_order = {"passed": 0, "below_threshold": 1}
+        def _rank_key(j):
+            fs = j.get("filter_status") or ""
+            bucket = rank_order.get(fs, 2 if fs.startswith("filtered_") else 3)
+            return (bucket, -(j.get("score") or 0))
+        ordered = sorted(scored, key=_rank_key)
         return {
             "total":    len(scored),
             "auto":     len(auto_jobs),
@@ -1214,8 +1523,9 @@ def _scored_summary_for_state(scored, passed, auto_jobs, manual_jobs,
                     "url":    j.get("application_url", ""),
                     "skills": ", ".join(list(j.get("matching_skills") or [])[:4]),
                     "status": j.get("filter_status", ""),
+                    "reason": j.get("filter_reason", "") or j.get("reasoning", ""),
                 }
-                for j in sorted(passed, key=lambda x: x.get("score", 0), reverse=True)[:20]
+                for j in ordered[:30]
             ],
         }
     return _scored_summary_from_index(profile)
@@ -1229,15 +1539,23 @@ def get_state(request: Request):
     _raw_auth_cookie = request.cookies.get(_AUTH_COOKIE, "")
     auth_user = _auth_token_lookup(_raw_auth_cookie)
 
+    # One fresh DB read per /api/state poll when authenticated. Reused for
+    # both the dev_simulating check below AND the billing customer flag,
+    # so we don't pay for two SELECTs per poll.
+    fresh_user = None
+    if auth_user and auth_user.get("id") and _user_store is not None:
+        try:
+            fresh_user = _user_store.get_user_by_id(auth_user["id"])
+        except Exception:
+            fresh_user = None
+
     # dev_simulating: the underlying user IS a developer but is currently viewing
     # the app as a customer via the force_customer_mode toggle. Lets the frontend
     # show an "Exit customer mode" pill so the dev isn't trapped without nav.
     dev_simulating = False
     if _S.get("force_customer_mode"):
-        if auth_user and auth_user.get("id") and _user_store is not None:
-            fresh = _user_store.get_user_by_id(auth_user["id"])
-            if fresh and bool(fresh.get("is_developer")):
-                dev_simulating = True
+        if fresh_user and bool(fresh_user.get("is_developer")):
+            dev_simulating = True
         if not dev_simulating and os.environ.get("LOCAL_DEV_BYPASS") == "1":
             host = getattr(request.client, "host", "") if request.client else ""
             if host in ("127.0.0.1", "::1", "localhost"):
@@ -1281,17 +1599,18 @@ def get_state(request: Request):
         "ollama_model": _S.get("ollama_model", DEFAULT_OLLAMA_MODEL),
         "threshold": _S.get("threshold", 75),
         "job_titles": _S.get("job_titles", ""),
-        "location": _S.get("location", "United States"),
+        "location": _S.get("location", ""),
         "max_apps": _S.get("max_apps", 10),
-        "max_scrape_jobs": _S.get("max_scrape_jobs", 20),
+        "max_scrape_jobs": _S.get("max_scrape_jobs", 50),
         "days_old": _S.get("days_old", 30),
         "cover_letter": _S.get("cover_letter", False),
         "blacklist": _S.get("blacklist", ""),
         "whitelist": _S.get("whitelist", ""),
-        "experience_levels": _S.get("experience_levels", ["internship", "entry-level"]),
-        "education_filter": _S.get("education_filter", ["bachelors"]),
+        "experience_levels": _S.get("experience_levels", []),
+        "education_filter": _S.get("education_filter", []),
         "include_unknown_education": _S.get("include_unknown_education", True),
-        "citizenship_filter": _S.get("citizenship_filter", "exclude_required"),
+        "include_unknown_experience": _S.get("include_unknown_experience", True),
+        "citizenship_filter": _S.get("citizenship_filter", "all"),
         "use_simplify": _S.get("use_simplify", True),
         "llm_score_limit": _S.get("llm_score_limit", 10),
         # Pass the full profile through — strip internal audit keys only
@@ -1312,6 +1631,13 @@ def get_state(request: Request):
             }
             for a in (_S.get("applications") or [])
         ],
+        # Phase 6 / 7 in-page artifacts. ``tracker_data`` carries the full
+        # spreadsheet payload (columns + rows + summary) so the SPA can render
+        # it inline without a file download. ``report`` is the markdown text
+        # generated by the LLM in Phase 7 — also rendered inline via the
+        # frontend Markdown component.
+        "tracker_data": _S.get("tracker_data"),
+        "report":       _S.get("report") or "",
         "output_files": files,
         # Auth / session
         "is_dev": is_dev,
@@ -1319,10 +1645,17 @@ def get_state(request: Request):
         "runtime": dict(_RUNTIME),
 
         # Plan tier (mirrors is_developer end-to-end). Free is the default for any
-        # unauthenticated visitor or new account; only the manual Dev Ops flip (or
-        # future Stripe webhook) sets it to 'pro'.
+        # unauthenticated visitor or new account; the Stripe webhook flips it to
+        # 'pro' when a subscription becomes active.
         "plan_tier": (auth_user or {}).get("plan_tier", "free"),
         "is_pro": (auth_user or {}).get("plan_tier") == "pro",
+
+        # Billing UI hints. ``billing_configured`` lets the SPA hide the upgrade
+        # button entirely when the server has no Stripe key set (e.g. self-host
+        # deployments). ``has_billing_customer`` gates the Manage-subscription
+        # button for users who haven't yet completed Checkout.
+        "billing_configured": bool(_STRIPE_PRICE_ID_PRO_MONTHLY) and _stripe_billing.is_configured(),
+        "has_billing_customer": bool((fresh_user or {}).get("stripe_customer_id")),
 
         # Only return a user when the auth token in the request cookie is valid.
         # Falling back to _S.get("user") (session state) lets stale sessions appear
@@ -1728,6 +2061,16 @@ def resume_delete(resume_id: str, request: Request):
     if not target:
         raise HTTPException(404, "Resume not found")
     was_primary = target.get("primary", False)
+    # Unlink the persisted upload binary, if any. Best-effort; failures don't
+    # block the delete because the record itself going away is what matters.
+    rel = target.get("original_path") or ""
+    if rel:
+        try:
+            full = (OUTPUT_DIR / rel).resolve()
+            full.relative_to(OUTPUT_DIR.resolve())
+            full.unlink(missing_ok=True)
+        except (OSError, ValueError):
+            pass
     _S["resumes"] = [r for r in resumes if r["id"] != resume_id]
     if was_primary:
         # Pick next resume as primary, or clear everything if none left
@@ -1794,6 +2137,88 @@ async def resume_rename(resume_id: str, req: Request):
     if r.get("primary"):
         _S["resume_filename"] = new_name
     return {"ok": True}
+
+
+@app.post("/api/resume/tailor")
+async def resume_tailor(request: Request):
+    """Per-job, on-demand resume tailoring.
+
+    This is the jobright.ai-style entry point: the user clicks "Tailor for
+    this job" on a single JobCard and we run phase 4 against just that job,
+    without requiring phases 2/3 to have been kicked off in this session.
+
+    Body: { job_id: str, cover_letter?: bool }
+    Returns: same shape as one entry from ``GET /api/phase/4/run``'s
+    ``items`` list, so the SPA can reuse <TailoredResumeCard/>.
+    """
+    auth_user = _require_auth_user(request)
+
+    profile = _S.get("profile") or {}
+    if not profile:
+        raise HTTPException(400, "Upload a resume first — no profile to tailor against.")
+
+    if _S.get("mode") == "anthropic" and not (
+        bool(auth_user.get("is_developer")) or auth_user.get("plan_tier") == "pro"
+    ):
+        return JSONResponse(
+            {"ok": False, "error": "Claude tailoring requires the Pro plan. Switch to Ollama or Demo, or upgrade.",
+             "code": "plan_required"},
+            status_code=402,
+        )
+
+    body = await request.json()
+    job_id = (body.get("job_id") or "").strip()
+    if not job_id:
+        raise HTTPException(400, "job_id is required")
+    include_cover = bool(body.get("cover_letter", _S.get("cover_letter", False)))
+
+    job = _find_job_by_id(job_id)
+    if not job:
+        raise HTTPException(404, f"Job not found: {job_id!r}")
+
+    try:
+        prov = _make_provider()
+    except Exception as exc:
+        raise HTTPException(500, f"Provider unavailable: {exc}") from exc
+
+    try:
+        tailored = phase4_tailor_resume(
+            job, profile, _S.get("resume_text", ""), prov,
+            include_cover_letter=include_cover,
+        )
+        resume_files = _save_tailored_resume(
+            job, tailored, profile,
+            _S.get("latex_source"),
+            resume_text=_S.get("resume_text", ""),
+            output_dir=_session_output_dir(),
+        )
+    except Exception as exc:
+        raise HTTPException(500, f"Tailoring failed: {type(exc).__name__}: {exc}") from exc
+
+    resume_file = resume_files.get("pdf") or resume_files.get("tex") or ""
+    resume_ref = ""
+    if resume_file:
+        resume_path = _session_output_dir() / resume_file
+        resume_ref = Path(_output_url(resume_path)).as_posix().removeprefix("/output/")
+
+    # Persist into the session's tailored_map so a later GET /api/state (and
+    # the phase 4 batch view) sees this single-job result alongside any
+    # batch-tailored entries. The key matches phase 4's ``jk`` derivation.
+    jk = job.get("id") or job.get("title", "")
+    tmap = _S.get("tailored_map") or {}
+    tmap[jk] = {"job": job, "tailored": tailored, "resume_file": resume_ref}
+    _S["tailored_map"] = tmap
+
+    item = _build_tailored_item(
+        job=job,
+        tailored=tailored,
+        resume_ref=resume_ref,
+        profile=profile,
+        score=job.get("score", 0),
+        status="Tailored",
+        notes="",
+    )
+    return {"item": item}
 
 
 # ── Jobs actions ─────────────────────────────────────────────────────────────
@@ -2338,6 +2763,10 @@ def jobs_feed(request: Request):
         blacklist=blacklist,
         whitelist=whitelist,
         include_unknown_education=_truthy(qs.get("include_unknown") or "1"),
+        # `industry` is a comma-separated list of job_category labels. The chip
+        # UI ships canonical labels (engineering, sales, healthcare, …) so this
+        # is the same shape as `exp`.
+        job_categories=_csv(qs.get("industry")),
     )
     with _session_store.connect() as conn:
         page = search(conn=conn, filters=filters, profile=_profile_for_search(),
@@ -2373,6 +2802,83 @@ def _dto_to_json(j) -> dict:
         "source":  j.source,
         "status":  "passed",
     }
+
+
+@app.get("/api/jobs/facets")
+def jobs_facets(request: Request):
+    """Return facet buckets (label, value, count) for one dimension of the job
+    index. Powers the Industry / Location / Company filter chips on the Jobs
+    page — the frontend renders a curated default list and live-searches this
+    endpoint when the user types into the chip's search box.
+
+    Query params:
+      kind   — 'industry' | 'location' | 'company' (required)
+      q      — case-insensitive substring filter on the bucket label
+      limit  — max buckets to return (default 25, max 200)
+    """
+    _require_auth_user(request)
+    if _session_store is None:
+        return {"kind": "", "buckets": []}
+    qs = request.query_params
+    kind = (qs.get("kind") or "").strip().lower()
+    if kind not in ("industry", "location", "company"):
+        raise HTTPException(400, "kind must be 'industry', 'location', or 'company'")
+    q = (qs.get("q") or "").strip().lower()
+    try:
+        limit = max(1, min(200, int(qs.get("limit") or 25)))
+    except ValueError:
+        limit = 25
+
+    # Each branch issues a single GROUP BY against `job_postings`. The columns
+    # are already covered by the `job_category`, `location`, and `company`
+    # indexes on the table, so this stays cheap even on a 100k-row index.
+    if kind == "industry":
+        sql = (
+            "SELECT COALESCE(NULLIF(LOWER(TRIM(job_category)), ''), 'general') AS bucket, "
+            "COUNT(*) AS n "
+            "FROM job_postings WHERE deleted = 0 "
+        )
+        params: list = []
+        if q:
+            sql += "AND LOWER(COALESCE(job_category, 'general')) LIKE ? "
+            params.append(f"%{q}%")
+        sql += "GROUP BY bucket ORDER BY n DESC, bucket ASC LIMIT ?"
+        params.append(limit)
+    elif kind == "location":
+        # Use the first comma-separated city/region token as the bucket so a
+        # location facet doesn't fragment "San Francisco, CA, US" away from
+        # "San Francisco, CA". Empty/null locations bucket as "Unknown".
+        sql = (
+            "SELECT COALESCE(NULLIF(TRIM(SUBSTR(location, 1, "
+            "  CASE WHEN INSTR(location || ',', ',') > 0 "
+            "       THEN INSTR(location || ',', ',') - 1 "
+            "       ELSE LENGTH(location) END)), ''), 'Unknown') AS bucket, "
+            "COUNT(*) AS n "
+            "FROM job_postings WHERE deleted = 0 "
+        )
+        params = []
+        if q:
+            sql += "AND LOWER(location) LIKE ? "
+            params.append(f"%{q}%")
+        sql += "GROUP BY bucket ORDER BY n DESC, bucket ASC LIMIT ?"
+        params.append(limit)
+    else:  # company
+        sql = (
+            "SELECT COALESCE(NULLIF(TRIM(company), ''), 'Unknown') AS bucket, "
+            "COUNT(*) AS n "
+            "FROM job_postings WHERE deleted = 0 "
+        )
+        params = []
+        if q:
+            sql += "AND LOWER(company) LIKE ? "
+            params.append(f"%{q}%")
+        sql += "GROUP BY bucket ORDER BY n DESC, bucket ASC LIMIT ?"
+        params.append(limit)
+
+    with _session_store.connect() as conn:
+        rows = conn.execute(sql, params).fetchall()
+    buckets = [{"value": r[0], "count": int(r[1])} for r in rows if r[0]]
+    return {"kind": kind, "buckets": buckets}
 
 
 @app.get("/api/jobs/source-status")
@@ -2446,13 +2952,13 @@ def _is_underlying_dev_request(request: Request) -> bool:
     view. Without this, a dev who flips `Test as Customer` would be
     locked out of every /api/dev/* endpoint and have no way back.
     """
-    _DEV_EMAIL = "jonnyliu4@gmail.com"
+    _DEV_EMAILS = {"jonnyliu4@gmail.com", "saosithisak@gmail.com"}
     auth_user = _auth_token_lookup(request.cookies.get(_AUTH_COOKIE, ""))
     if auth_user and auth_user.get("id") and _user_store is not None:
         fresh = _user_store.get_user_by_id(auth_user["id"])
         if fresh and bool(fresh.get("is_developer")):
             return True
-    if auth_user and auth_user.get("email", "").lower() == _DEV_EMAIL:
+    if auth_user and auth_user.get("email", "").lower() in _DEV_EMAILS:
         return True
     return False
 
@@ -2720,9 +3226,32 @@ def dev_users_list(request: Request):
     return {"users": _user_store.list_users(limit=500)}
 
 
+def _apply_plan_change(user_id: str, tier: str) -> None:
+    """Persist a plan_tier flip and propagate it across the auth caches.
+
+    Single source of truth for "user just upgraded / downgraded": writes the
+    DB column, refreshes every persisted ``auth_tokens.user_json`` row, and
+    updates the in-memory ``_AUTH_SESSIONS_FALLBACK`` so a token issued
+    before the SQLite store came up still picks up the new tier on the next
+    request.
+    """
+    if _user_store is None:
+        return
+    _user_store.set_user_plan_tier(user_id, tier)
+    try:
+        _user_store.refresh_user_plan_in_tokens(user_id, tier)
+    except Exception:
+        import traceback as _tb
+        _tb.print_exc()
+    for payload in _AUTH_SESSIONS_FALLBACK.values():
+        if payload.get("id") == user_id:
+            payload["plan_tier"] = tier
+
+
 @app.post("/api/dev/users/{user_id}/plan")
 async def dev_users_set_plan(user_id: str, request: Request):
-    """Manually grant or revoke Pro for a user. Stub for the eventual Stripe webhook."""
+    """Manually grant or revoke Pro for a user. Useful for ops escapes when
+    the Stripe webhook is offline or for granting comp Pro to testers."""
     if not _is_underlying_dev_request(request):
         raise HTTPException(403, "Developer access denied")
     body = await request.json()
@@ -2731,25 +3260,280 @@ async def dev_users_set_plan(user_id: str, request: Request):
         raise HTTPException(400, f"Invalid tier: {tier!r} (expected 'free' or 'pro')")
     if _user_store is None:
         raise HTTPException(503, "User store unavailable")
-    _user_store.set_user_plan_tier(user_id, tier)
-    # Refresh any cached auth tokens for this user so plan_tier propagates
-    # immediately on the user's next /api/state poll without forcing re-login.
-    if hasattr(_user_store, "_connect"):
-        try:
-            with _user_store._connect() as conn:
-                rows = conn.execute(
-                    "SELECT token, user_json FROM auth_tokens WHERE user_id = ?", (user_id,)
-                ).fetchall()
-                for row in rows:
-                    payload = json.loads(row[1] or "{}")
-                    payload["plan_tier"] = tier
-                    conn.execute(
-                        "UPDATE auth_tokens SET user_json = ? WHERE token = ?",
-                        (json.dumps(payload), row[0]),
-                    )
-        except Exception:
-            pass
+    _apply_plan_change(user_id, tier)
     return {"ok": True, "user_id": user_id, "plan_tier": tier}
+
+
+# ── Billing (Stripe) ──────────────────────────────────────────────────────────
+#
+# Three endpoints + one webhook. The user upgrade flow is:
+#   1. SPA POSTs /api/billing/checkout      → returns {url}
+#   2. Browser → Stripe Checkout (hosted)   → user pays
+#   3. Browser → success_url (back to /app#plans?upgraded=1)
+#   4. Stripe → POST /api/webhooks/stripe   → flips plan_tier=pro server-side
+#
+# The success redirect alone never grants Pro — the webhook is the source of
+# truth. Until the webhook fires, /api/state still reports plan_tier=free.
+# Typical lag is < 5 seconds.
+
+_STRIPE_PRICE_ID_PRO_MONTHLY = (os.environ.get("STRIPE_PRICE_ID_PRO_MONTHLY") or "").strip()
+_STRIPE_WEBHOOK_SECRET = (os.environ.get("STRIPE_WEBHOOK_SECRET") or "").strip()
+_PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL") or "").strip().rstrip("/")
+
+
+def _public_base_url(request: Request) -> str:
+    """Resolve the public origin for Checkout / Portal redirects.
+
+    Prefer the ``PUBLIC_BASE_URL`` env var — when running behind Tailscale
+    Funnel or a proxy the inbound URL FastAPI sees can be the internal
+    address (e.g. ``http://localhost:8000``), which Stripe would happily
+    redirect users to and produce a broken back-button experience. The env
+    override is the contract.
+    """
+    if _PUBLIC_BASE_URL:
+        return _PUBLIC_BASE_URL
+    base = str(request.base_url).rstrip("/")
+    return base or "http://localhost:8000"
+
+
+def _billing_unavailable() -> JSONResponse:
+    return JSONResponse(
+        {"ok": False, "error": "Billing is not configured on this server."},
+        status_code=503,
+    )
+
+
+@app.post("/api/billing/checkout")
+async def billing_checkout(request: Request):
+    """Create a Stripe Checkout Session for the Pro monthly subscription
+    and return the redirect URL. The caller's browser does the navigation —
+    the SPA is intentionally not loading any Stripe.js, so this is a pure
+    server-issued redirect."""
+    auth_user = _require_auth_user(request)
+
+    if not _stripe_billing.is_configured():
+        return _billing_unavailable()
+    if not _STRIPE_PRICE_ID_PRO_MONTHLY:
+        return JSONResponse(
+            {"ok": False,
+             "error": "STRIPE_PRICE_ID_PRO_MONTHLY is not set — run scripts/setup_stripe.py."},
+            status_code=503,
+        )
+    if _user_store is None:
+        return _billing_unavailable()
+
+    user = _user_store.get_user_by_id(auth_user["id"])
+    if not user:
+        raise HTTPException(404, "User not found")
+
+    # Already Pro? Send them to the portal instead so they can manage the
+    # existing subscription rather than creating a duplicate.
+    if (user.get("plan_tier") or "free") == "pro":
+        return JSONResponse(
+            {"ok": False, "error": "Already on Pro — use the portal to manage the subscription.",
+             "code": "already_pro"},
+            status_code=409,
+        )
+
+    base = _public_base_url(request)
+    success_url = f"{base}/app#plans?upgraded=1&session_id={{CHECKOUT_SESSION_ID}}"
+    cancel_url = f"{base}/app#plans?cancel=1"
+
+    try:
+        customer_id = _stripe_billing.ensure_customer(_user_store, user)
+        session = _stripe_billing.create_checkout_session(
+            customer_id=customer_id,
+            client_reference_id=user["id"],
+            price_id=_STRIPE_PRICE_ID_PRO_MONTHLY,
+            success_url=success_url,
+            cancel_url=cancel_url,
+        )
+    except Exception as exc:
+        import traceback as _tb
+        _tb.print_exc()
+        return JSONResponse(
+            {"ok": False, "error": f"Could not start checkout: {type(exc).__name__}: {exc}"},
+            status_code=502,
+        )
+    return {"ok": True, "url": session["url"], "id": session["id"]}
+
+
+@app.post("/api/billing/portal")
+async def billing_portal(request: Request):
+    """Return a Stripe Customer Portal URL for the authenticated user.
+    Requires a previously created customer — i.e. the user has gone through
+    Checkout at least once. Free users with no customer record get a 404
+    so the SPA can hide the button."""
+    auth_user = _require_auth_user(request)
+
+    if not _stripe_billing.is_configured():
+        return _billing_unavailable()
+    if _user_store is None:
+        return _billing_unavailable()
+
+    user = _user_store.get_user_by_id(auth_user["id"])
+    if not user:
+        raise HTTPException(404, "User not found")
+    customer_id = (user.get("stripe_customer_id") or "").strip()
+    if not customer_id:
+        raise HTTPException(404, "No Stripe customer for this user yet")
+
+    base = _public_base_url(request)
+    return_url = f"{base}/app#plans"
+    try:
+        session = _stripe_billing.create_portal_session(customer_id=customer_id, return_url=return_url)
+    except Exception as exc:
+        import traceback as _tb
+        _tb.print_exc()
+        return JSONResponse(
+            {"ok": False, "error": f"Could not open portal: {type(exc).__name__}: {exc}"},
+            status_code=502,
+        )
+    return {"ok": True, "url": session["url"]}
+
+
+def _resolve_user_for_event(event_obj: dict, customer_id: str | None) -> dict | None:
+    """Map a Stripe event payload back to one of our users.
+
+    Tries (in order):
+      1. ``client_reference_id`` on the Checkout Session
+      2. ``metadata.user_id`` on the Subscription
+      3. lookup by persisted ``stripe_customer_id``
+
+    Returns None when the event genuinely isn't ours — e.g. a customer
+    created out-of-band in the Stripe dashboard.
+    """
+    if _user_store is None:
+        return None
+    cri = event_obj.get("client_reference_id") if isinstance(event_obj, dict) else None
+    if cri:
+        u = _user_store.get_user_by_id(cri)
+        if u:
+            return u
+    md = (event_obj.get("metadata") or {}) if isinstance(event_obj, dict) else {}
+    md_uid = md.get("user_id") if isinstance(md, dict) else None
+    if md_uid:
+        u = _user_store.get_user_by_id(md_uid)
+        if u:
+            return u
+    if customer_id:
+        u = _user_store.get_user_by_stripe_customer(customer_id)
+        if u:
+            return u
+    return None
+
+
+@app.post("/api/webhooks/stripe")
+async def stripe_webhook(request: Request):
+    """Stripe webhook endpoint. Authenticated by HMAC signature only — NEVER
+    by cookie. Idempotent: every handler is an UPDATE, so duplicate
+    deliveries are no-ops.
+
+    Events we act on:
+      - ``checkout.session.completed`` — link customer/subscription IDs to user.
+        Does NOT flip plan_tier (subscription may still be ``incomplete``).
+      - ``customer.subscription.created`` / ``.updated`` — drive plan_tier from
+        ``status``. ``active`` / ``trialing`` / ``past_due`` → ``pro``;
+        anything else → ``free``.
+      - ``customer.subscription.deleted`` — flip to ``free`` and clear
+        subscription_id, but keep customer_id so the user can resubscribe.
+
+    Everything else is logged and returned 200 so Stripe doesn't retry.
+    """
+    if not _STRIPE_WEBHOOK_SECRET:
+        return JSONResponse(
+            {"ok": False, "error": "STRIPE_WEBHOOK_SECRET is not set"},
+            status_code=503,
+        )
+    payload_bytes = await request.body()
+    sig_header = request.headers.get("stripe-signature", "")
+
+    try:
+        event = _stripe_billing.verify_webhook(payload_bytes, sig_header, _STRIPE_WEBHOOK_SECRET)
+    except _stripe_billing.WebhookVerifyError as exc:
+        print(f"[stripe webhook] verify failed: {exc}", file=sys.stderr)
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+    etype = event.get("type") or ""
+    obj = (event.get("data") or {}).get("object") or {}
+    customer_id = obj.get("customer") if isinstance(obj.get("customer"), str) else None
+
+    if _user_store is None:
+        # Acknowledge so Stripe stops retrying; nothing we can persist.
+        print(f"[stripe webhook] {etype}: no user_store, dropping", file=sys.stderr)
+        return {"ok": True, "type": etype, "ignored": True}
+
+    try:
+        if etype == "checkout.session.completed":
+            user = _resolve_user_for_event(obj, customer_id)
+            if not user:
+                print(f"[stripe webhook] {etype}: could not resolve user", file=sys.stderr)
+                return {"ok": True, "type": etype, "ignored": True}
+            sub_id = obj.get("subscription") if isinstance(obj.get("subscription"), str) else None
+            if customer_id and not user.get("stripe_customer_id"):
+                _user_store.set_user_stripe_customer(user["id"], customer_id)
+            if sub_id:
+                _user_store.set_user_subscription(user["id"], sub_id, tier=None)
+            print(
+                f"[stripe webhook] checkout.session.completed: user={user['id']} "
+                f"customer={customer_id} subscription={sub_id} (plan_tier deferred)",
+                file=sys.stderr,
+            )
+
+        elif etype in ("customer.subscription.created", "customer.subscription.updated"):
+            user = _resolve_user_for_event(obj, customer_id)
+            if not user:
+                print(f"[stripe webhook] {etype}: could not resolve user", file=sys.stderr)
+                return {"ok": True, "type": etype, "ignored": True}
+            status = obj.get("status") or ""
+            sub_id = obj.get("id") or ""
+            new_tier = "pro" if _stripe_billing.subscription_active(status) else "free"
+            _user_store.set_user_subscription(user["id"], sub_id or None, tier=new_tier)
+            try:
+                _user_store.refresh_user_plan_in_tokens(user["id"], new_tier)
+            except Exception:
+                import traceback as _tb
+                _tb.print_exc()
+            for payload in _AUTH_SESSIONS_FALLBACK.values():
+                if payload.get("id") == user["id"]:
+                    payload["plan_tier"] = new_tier
+            print(
+                f"[stripe webhook] {etype}: user={user['id']} status={status} → tier={new_tier}",
+                file=sys.stderr,
+            )
+
+        elif etype == "customer.subscription.deleted":
+            user = _resolve_user_for_event(obj, customer_id)
+            if not user:
+                return {"ok": True, "type": etype, "ignored": True}
+            _user_store.set_user_subscription(user["id"], None, tier="free")
+            try:
+                _user_store.refresh_user_plan_in_tokens(user["id"], "free")
+            except Exception:
+                import traceback as _tb
+                _tb.print_exc()
+            for payload in _AUTH_SESSIONS_FALLBACK.values():
+                if payload.get("id") == user["id"]:
+                    payload["plan_tier"] = "free"
+            print(
+                f"[stripe webhook] subscription.deleted: user={user['id']} → free",
+                file=sys.stderr,
+            )
+
+        else:
+            # invoice.paid, invoice.payment_failed, etc. — Stripe handles
+            # dunning, we just log so it shows up in server output.
+            print(f"[stripe webhook] {etype}: no-op", file=sys.stderr)
+    except Exception as exc:
+        # Returning 500 makes Stripe retry — but a buggy handler can retry
+        # forever. Log the trace, return 200, so it goes to the dead-letter
+        # tab in the Stripe dashboard for manual inspection.
+        import traceback as _tb
+        _tb.print_exc()
+        print(f"[stripe webhook] {etype}: handler raised {exc}", file=sys.stderr)
+        return {"ok": False, "type": etype, "error": str(exc)}
+
+    return {"ok": True, "type": etype}
 
 
 def _clear_phases_after(phase: int):
@@ -2758,11 +3542,12 @@ def _clear_phases_after(phase: int):
         _clear_phases_after(1)
         return
     clear_map = {
-        1: ("jobs", "scored", "applications", "tracker_path"),
-        2: ("scored", "applications", "tracker_path"),
-        3: ("applications", "tracker_path"),
-        4: ("applications", "tracker_path"),
-        5: ("tracker_path",),
+        1: ("jobs", "scored", "applications", "tracker_path", "tracker_data", "report"),
+        2: ("scored", "applications", "tracker_path", "tracker_data", "report"),
+        3: ("applications", "tracker_path", "tracker_data", "report"),
+        4: ("applications", "tracker_path", "tracker_data", "report"),
+        5: ("tracker_path", "tracker_data", "report"),
+        6: ("report",),
     }
     for k in clear_map.get(phase, []):
         _S[k] = None
@@ -2816,12 +3601,17 @@ def rerun_phase1():
 def run_phase2(request: Request = None):
     if not _S.get("profile"):
         raise HTTPException(400, "Run Phase 1 first")
+    # Empty fallbacks: phase2_discover_jobs / _resolve_effective_titles will
+    # fall back to profile.target_titles for empty `titles`, and an empty
+    # location is treated as "no location filter" by SearchFilters. We no
+    # longer pin generic "Engineer" / "United States" placeholders here —
+    # they leaked into the SQL filter even when the resume said otherwise.
     titles = [
         t.strip()
-        for t in (_S.get("job_titles") or "Engineer").split(",")
+        for t in (_S.get("job_titles") or "").split(",")
         if t.strip()
     ]
-    loc = _S.get("location") or "United States"
+    loc = (_S.get("location") or "").strip()
     params = request.query_params if request else {}
     deep = str(params.get("deep", "")).lower() in ("1", "true", "yes")
     append = str(params.get("append", "")).lower() in ("1", "true", "yes")
@@ -2830,21 +3620,25 @@ def run_phase2(request: Request = None):
     def _fn():
         prov = _make_provider()
         offset = len(_S.get("jobs") or []) if append else 0
+        # Push every user-declared filter into the DB-level query so the
+        # cap (max_scrape_jobs) reflects post-filter results, not pre-.
+        bl = tuple(c.strip() for c in (_S.get("blacklist") or "").split(",") if c.strip())
+        wl = tuple(c.strip() for c in (_S.get("whitelist") or "").split(",") if c.strip())
         result = phase2_discover_jobs(
             _S["profile"], titles, loc, prov,
             use_simplify=_S.get("use_simplify", True),
-            max_jobs=_S.get("max_scrape_jobs", 20),
+            max_jobs=_S.get("max_scrape_jobs", 50),
             days_old=_S.get("days_old", 30),
             education_filter=_S.get("education_filter") or None,
             include_unknown_education=_S.get("include_unknown_education", True),
             deep_search=deep,
             force_live=force_live,
             offset=offset,
+            blacklist=bl,
+            whitelist=wl,
+            citizenship_filter=_S.get("citizenship_filter") or "all",
+            experience_levels=_S.get("experience_levels") or None,
         )
-        # Apply blacklist
-        bl = {c.strip().lower() for c in (_S.get("blacklist") or "").split(",") if c.strip()}
-        if bl:
-            result = [j for j in result if j.get("company", "").lower() not in bl]
         if append:
             result = _dedupe_jobs_for_state((_S.get("jobs") or []) + result)
         _S["jobs"] = result
@@ -2875,8 +3669,9 @@ def run_phase3(request: Request = None):
         params = request.query_params if request else {}
         fast_only = str(params.get("fast", "")).lower() in ("1", "true", "yes")
         result = phase3_score_jobs(
-            _S["jobs"], _S["profile"], prov, min_score=60,
+            _S["jobs"], _S["profile"], prov, min_score=50,
             experience_levels=_S.get("experience_levels") or None,
+            include_unknown_experience=_S.get("include_unknown_experience", True),
             citizenship_filter=_S.get("citizenship_filter", "all"),
             llm_score_limit=_S.get("llm_score_limit", 10),
             fast_only=fast_only,
@@ -2952,21 +3747,52 @@ def run_phase5():
         raise HTTPException(400, "Run Phase 4 first")
 
     def _fn():
-        apps      = _S["applications"] or []
-        thr       = _S.get("threshold", 75)
-        max_apps  = _S.get("max_apps", 10)
-        already   = _load_existing_applications(_session_output_dir())
-        results   = []
-        submitted = 0
-        for job in apps:
-            if job.get("score", 0) >= thr and submitted < max_apps:
-                res = phase5_simulate_submission(job, already_applied=already)
-                if res.get("status") != "Skipped":
-                    submitted += 1
-                already.add((job.get("company", "").lower(), job.get("title", "").lower()))
-                results.append({**job, **res})
+        # Phase 5 is a *curation* step, not an auto-applier. We surface the
+        # top N high-confidence picks (N = llm_score_limit, the same limit
+        # the user already tunes on the Settings page for LLM scoring) with
+        # tailored resumes from Phase 4 attached, ready for manual submission.
+        # Real auto-submission lived in phase5_simulate_submission, which was
+        # a randomized stub — removing it here so the user isn't misled by
+        # fake "Applied" rows in the tracker.
+        apps    = _S["applications"] or []
+        limit   = max(1, int(_S.get("llm_score_limit", 10) or 10))
+        already = _load_existing_applications(_session_output_dir())
+
+        ranked = sorted(apps, key=lambda j: float(j.get("score") or 0), reverse=True)
+
+        results: list = []
+        picked = 0
+        for job in ranked:
+            key = (str(job.get("company", "")).lower(), str(job.get("title", "")).lower())
+            if key in already:
+                results.append({
+                    **job,
+                    "status": "Skipped",
+                    "confirmation": "N/A",
+                    "notes": "Already applied — skipped",
+                })
+                continue
+            if picked < limit:
+                picked += 1
+                results.append({
+                    **job,
+                    "status": "Manual Required",
+                    "confirmation": "N/A",
+                    "notes": f"High-confidence pick — top {picked} of {limit}",
+                })
             else:
-                results.append({**job, "status": "Manual Required", "confirmation": "N/A"})
+                results.append({
+                    **job,
+                    "status": "Skipped",
+                    "confirmation": "N/A",
+                    "notes": f"Below top {limit} picks",
+                })
+
+        skipped_total = len(results) - picked
+        print(f"  🎯 Top {picked} high-confidence picks (limit={limit})", flush=True)
+        if skipped_total:
+            print(f"  ⏭️  {skipped_total} below cutoff or already applied", flush=True)
+
         _S["applications"] = results
         return results
 
@@ -2989,10 +3815,13 @@ def run_phase6():
         raise HTTPException(400, "Run Phase 5 first")
 
     def _fn():
-        apps          = _S["applications"] or []
-        tracker_path  = phase6_update_tracker(apps, output_dir=_session_output_dir())
-        _S["tracker_path"] = tracker_path
-        return tracker_path
+        # write_file=False → no .xlsx is generated; the tracker lives entirely
+        # in session state and renders as an in-page spreadsheet on the SPA.
+        apps   = _S["applications"] or []
+        result = phase6_update_tracker(apps, write_file=False)
+        _S["tracker_data"] = result
+        _S["tracker_path"] = None       # no file artifact under this flow
+        return result
 
     return StreamingResponse(
         _run_phase_sse(6, _fn, _S.current(), _S.session_id()),
@@ -3013,9 +3842,11 @@ def run_phase7():
         raise HTTPException(400, "Run Phase 6 first")
 
     def _fn():
+        # write_file=False → no .md report is generated; the SPA renders the
+        # markdown text inline. SMTP notification (when configured) still fires.
         prov   = _make_provider()
         apps   = _S["applications"] or []
-        report = phase7_run_report(apps, _S.get("tracker_path"), prov, output_dir=_session_output_dir())
+        report = phase7_run_report(apps, None, prov, output_dir=None, write_file=False)
         _S["report"] = report
         return report
 

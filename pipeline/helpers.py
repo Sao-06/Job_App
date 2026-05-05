@@ -237,12 +237,23 @@ _GENERAL_CATEGORY = "general"
 
 def infer_job_category(job: dict) -> str:
     """Return a coarse job-family label (engineering, sales, marketing,
-    healthcare, finance, design, …) from the title and description.
-    Falls back to ``"general"`` when nothing matches.
+    healthcare, finance, design, …) from the job TITLE alone.
+
+    Description matching was removed in 2026-05 because long postings (e.g.
+    a Cashier role whose first paragraph said "engineer a great customer
+    experience") got false-tagged into wildly wrong industries. Every
+    keyword in ``_CATEGORY_KEYWORDS`` is title-shaped — "engineer",
+    "designer", "nurse", "account executive" — so dropping the description
+    sweep loses very little signal and removes the headline noise source.
+
+    Falls back to ``"general"`` when no keyword matches the title. The
+    "general" bucket is intentionally large; users who pick an industry
+    chip don't see it, and users who don't pick any chip get the full mix.
     """
     title = (job.get("title") or "").lower()
-    desc = (job.get("description") or "").lower()
-    text = " " + title + " " + desc[:400] + " "
+    if not title.strip():
+        return _GENERAL_CATEGORY
+    text = " " + title + " "
     for label, keywords in _CATEGORY_KEYWORDS:
         for kw in keywords:
             if kw in text:

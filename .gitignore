@@ -19,3 +19,16 @@ data/
 *.sqlite3-wal
 *.corrupt-*
 resources/profile_cache_*.json
+
+# Runtime / test scratch — never commit. test_cookies.txt holds session
+# bearer tokens from the integration suite; test_signup_resp.json holds
+# generated user emails. Server.log + app_import_err.txt are diagnostic
+# spew. .coverage is the pytest-cov binary db.
+.coverage
+.coverage.*
+htmlcov/
+server.log
+app_import_err.txt
+test_cookies.txt
+test_signup_resp.json
+.claude/scheduled_tasks.lock

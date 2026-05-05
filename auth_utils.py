@@ -2,23 +2,41 @@ import os
 
 try:
     import bcrypt
-except ImportError:  # Password auth can fail without disabling Google OAuth.
+    _bcrypt_import_error: str | None = None
+except (ImportError, OSError) as _exc:
+    # ImportError covers the missing-package case. OSError catches Windows
+    # DLL-load failures (bcrypt 4+ ships native code; if libffi or VC++
+    # runtime is mismatched the import raises OSError on Windows, not
+    # ImportError). Either way we keep the rest of auth_utils importable
+    # so Google OAuth still works without password support.
     bcrypt = None
+    _bcrypt_import_error = f"{type(_exc).__name__}: {_exc}"
 
 
 def _is_dev_dummy_enabled() -> bool:
     return os.environ.get("GOOGLE_OAUTH_DEV_DUMMY", "").lower() in ("1", "true", "yes")
 
+
+def _bcrypt_unavailable_message() -> str:
+    detail = f" Underlying error: {_bcrypt_import_error}." if _bcrypt_import_error else ""
+    return (
+        "Password sign-in requires the `bcrypt` package, which isn't installed "
+        "in this Python environment. Run `pip install 'bcrypt>=4.1.0'` in the "
+        "same interpreter you used to launch app.py, then restart the server."
+        f"{detail}"
+    )
+
+
 # Password hashing
 def hash_password(password: str) -> str:
     if bcrypt is None:
-        raise RuntimeError("bcrypt is required for password auth")
+        raise RuntimeError(_bcrypt_unavailable_message())
     salt = bcrypt.gensalt()
     return bcrypt.hashpw(password.encode('utf-8'), salt).decode('utf-8')
 
 def verify_password(password: str, hashed: str) -> bool:
     if bcrypt is None:
-        raise RuntimeError("bcrypt is required for password auth")
+        raise RuntimeError(_bcrypt_unavailable_message())
     if not hashed:
         return False
     return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('utf-8'))

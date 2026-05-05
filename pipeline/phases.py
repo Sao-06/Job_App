@@ -237,7 +237,11 @@ def phase2_discover_jobs(profile: dict, job_titles: list, location: str,
                           deep_search: bool = False,
                           cache_ttl_minutes: int = 30,         # noqa: ARG001
                           force_live: bool = False,
-                          offset: int = 0) -> list:
+                          offset: int = 0,
+                          blacklist=None,
+                          whitelist=None,
+                          citizenship_filter: str = "all",
+                          experience_levels=None) -> list:
     """Read the local job index (populated by ``pipeline.ingest``) and return
     a ranked list of legacy-shape job dicts so phases 3-7 keep working.
 
@@ -297,22 +301,33 @@ def phase2_discover_jobs(profile: dict, job_titles: list, location: str,
         "target_titles": job_titles or (profile.get("target_titles") or []),
         "top_hard_skills": profile.get("top_hard_skills") or [],
     }
+    # Push every filter the user already declared into the DB-level query
+    # rather than post-filtering after the cap. Otherwise a user with a
+    # 30-company blacklist requesting cap=50 could get back 30 results
+    # because 20 of the top-50 ranked rows were dropped after the fact.
     filters = SearchFilters(
         location=("" if not location or location.strip().lower() in ("united states", "us")
                   else location),
         posted_within_days=days,
         education_levels=tuple(education_filter or ()),
         include_unknown_education=include_unknown_education,
+        experience_levels=tuple(experience_levels or ()),
+        citizenship_filter=citizenship_filter or "all",
+        blacklist=tuple(blacklist or ()),
+        whitelist=tuple(whitelist or ()),
     )
 
     import sqlite3 as _sqlite3
     conn = _sqlite3.connect(db_path)
     try:
-        # rank a wider pool when offset > 0 so "page 2" actually advances
+        # Rank a wider pool than `cap` so the top-N ranking has room to
+        # exercise the BM25 + skill_overlap + freshness + title_match
+        # weighted score. Higher floor = better top-50 quality at the cost
+        # of one more SELECT join per phase run.
         page = search(
             conn=conn, filters=filters, profile=profile_for_search,
             cursor=None, limit=cap + offset,
-            rank_pool=max(300, cap + offset),
+            rank_pool=max(600, (cap + offset) * 6),
         )
     finally:
         conn.close()
@@ -365,6 +380,7 @@ def phase3_score_jobs(jobs: list, profile: dict, provider: BaseProvider,
                        education_filter=None,  # noqa: ARG001 — moved to phase 2; kept for back-compat
                        citizenship_filter: str = "all",
                        include_unknown_education: bool = False,  # noqa: ARG001
+                       include_unknown_experience: bool = True,
                        llm_score_limit: int = 10,
                        fast_only: bool = False) -> list:
     """Score every job that survived Phase 2's filters.
@@ -379,6 +395,11 @@ def phase3_score_jobs(jobs: list, profile: dict, provider: BaseProvider,
     Note: education filtering now happens in Phase 2. The `education_filter`
     and `include_unknown_education` params are accepted for back-compat but
     ignored here.
+
+    `include_unknown_experience=True` (default) keeps jobs whose experience_level
+    couldn't be inferred from the title/description. Most ingested rows store
+    metadata only — the inference is essentially a coin flip on a bare "Engineer"
+    title — so a hard exclusion drops ~30% of relevant rows for no real reason.
     """
     console.print("\n[bold cyan]Phase 3 — Relevance Scoring & Shortlisting[/bold cyan]")
 
@@ -386,16 +407,28 @@ def phase3_score_jobs(jobs: list, profile: dict, provider: BaseProvider,
     to_score:     list = list(jobs)
 
     if experience_levels and experience_levels != ["all"]:
+        # Build the accept set: the user's chosen levels, plus "unknown" iff the
+        # caller hasn't opted out. Without the unknown passthrough we drop every
+        # job whose body was metadata-only at ingest time — and that's the
+        # majority of our index.
+        accept = set(experience_levels)
+        if include_unknown_experience:
+            accept.add("unknown")
         kept, dropped = [], []
         for j in to_score:
-            if j.get("experience_level", "unknown") in experience_levels:
+            level = j.get("experience_level") or "unknown"
+            if level in accept:
                 kept.append(j)
             else:
                 dropped.append({**j, "score": 0, "filter_status": "filtered_experience",
-                                "filter_reason": f"experience={j.get('experience_level', 'unknown')}"})
+                                "filter_reason": f"experience={level}"})
         to_score = kept
         pre_filtered.extend(dropped)
-        console.print(f"  🎯 Experience filter {experience_levels}: {len(to_score)} jobs remain")
+        unk_note = " (unknowns kept)" if include_unknown_experience else ""
+        console.print(
+            f"  🎯 Experience filter {experience_levels}{unk_note}: "
+            f"{len(to_score)} jobs remain ({len(dropped)} dropped)"
+        )
 
     if citizenship_filter == "exclude_required":
         # Hard filter: trust the inferred field, AND regex-scan the raw text
@@ -778,7 +811,91 @@ def phase5_simulate_submission(job: dict, already_applied: set = None) -> dict:
 
 # ── Phase 6 ────────────────────────────────────────────────────────────────────
 
-def phase6_update_tracker(applications: list, output_dir: Path = None) -> Path:
+# Canonical column schema for the application tracker. Used for both the
+# in-page UI spreadsheet (web flow) and the .xlsx export (CLI flow).
+TRACKER_COLUMNS: list[dict] = [
+    {"key": "n",                "label": "#",                 "type": "int",    "width":  60},
+    {"key": "date_applied",     "label": "Date Applied",      "type": "date",   "width": 110},
+    {"key": "title",            "label": "Job Title",         "type": "text",   "width": 240},
+    {"key": "company",          "label": "Company",           "type": "text",   "width": 160},
+    {"key": "industry",         "label": "Industry",          "type": "text",   "width": 160},
+    {"key": "location",         "label": "Location",          "type": "text",   "width": 140},
+    {"key": "url",              "label": "Job Posting URL",   "type": "url",    "width": 180},
+    {"key": "company_website",  "label": "Company Website",   "type": "url",    "width": 160},
+    {"key": "platform",         "label": "Application Portal","type": "text",   "width": 130},
+    {"key": "score",            "label": "Match Score",       "type": "score",  "width": 100},
+    {"key": "reasoning",        "label": "Score Reasoning",   "type": "text",   "width": 260},
+    {"key": "resume_version",   "label": "Resume Version",    "type": "text",   "width": 220},
+    {"key": "cover_letter_sent","label": "Cover Letter",      "type": "yesno",  "width":  90},
+    {"key": "status",           "label": "Status",            "type": "status", "width": 130},
+    {"key": "confirmation",     "label": "Confirmation #",    "type": "text",   "width": 150},
+    {"key": "notes",            "label": "Notes",             "type": "text",   "width": 220},
+    {"key": "follow_up",        "label": "Follow-Up Date",    "type": "date",   "width": 110},
+    {"key": "response",         "label": "Response Received", "type": "text",   "width": 140},
+]
+
+# Excel header order, derived from TRACKER_COLUMNS so the .xlsx export and the
+# in-page table can never drift apart.
+_XLSX_HEADERS: list[str] = [c["label"] for c in TRACKER_COLUMNS]
+
+
+def _build_tracker_row(app: dict, row_num: int) -> dict:
+    """Project a Phase-5 application dict onto the canonical TRACKER_COLUMNS keys."""
+    applied_str = app.get("date_applied", datetime.now().strftime("%m/%d/%Y"))
+    try:
+        follow_up = (
+            datetime.strptime(applied_str, "%m/%d/%Y") + timedelta(days=7)
+        ).strftime("%m/%d/%Y")
+    except (ValueError, TypeError):
+        follow_up = ""
+    company = app.get("company", "") or ""
+    company_slug = company.lower().replace(" ", "")
+    return {
+        "n":                row_num,
+        "date_applied":     applied_str,
+        "title":            app.get("title", ""),
+        "company":          company,
+        "industry":         app.get("industry") or "Technology / Semiconductor",
+        "location":         app.get("location", ""),
+        "url":              app.get("application_url", ""),
+        "company_website":  f"https://www.{company_slug}.com" if company_slug else "",
+        "platform":         app.get("platform", ""),
+        "score":            int(app.get("score") or 0),
+        "reasoning":        app.get("reasoning") or app.get("reason", "") or "",
+        "resume_version":   app.get("resume_version", ""),
+        "cover_letter_sent": bool(app.get("cover_letter_sent")),
+        "status":           app.get("status", "Applied"),
+        "confirmation":     app.get("confirmation", "N/A"),
+        "notes":            app.get("notes", ""),
+        "follow_up":        follow_up,
+        "response":         app.get("response", ""),
+    }
+
+
+def _build_tracker_summary(rows: list[dict]) -> dict:
+    total   = len(rows)
+    applied = sum(1 for r in rows if r.get("status") == "Applied")
+    manual  = sum(1 for r in rows if r.get("status") == "Manual Required")
+    skipped = sum(1 for r in rows if r.get("status") == "Skipped")
+    errors  = sum(1 for r in rows if r.get("status") == "Error")
+    scores  = [int(r.get("score") or 0) for r in rows if r.get("score") is not None]
+    avg     = round(sum(scores) / len(scores), 1) if scores else 0.0
+    return {
+        "run_date":  date.today().isoformat(),
+        "total":     total,
+        "applied":   applied,
+        "manual":    manual,
+        "skipped":   skipped,
+        "errors":    errors,
+        "avg_score": avg,
+    }
+
+
+def _write_tracker_xlsx(rows: list[dict], summary: dict, tracker_path: Path) -> Path | None:
+    """Render the tracker rows + summary into the legacy .xlsx file. Used only
+    by the CLI flow (and any caller that explicitly requests file output).
+    Returns the saved path on success or None when openpyxl isn't installed.
+    """
     try:
         import openpyxl
         from openpyxl.styles import PatternFill, Font, Alignment
@@ -787,27 +904,14 @@ def phase6_update_tracker(applications: list, output_dir: Path = None) -> Path:
         console.print("  [yellow]openpyxl missing — run: pip install openpyxl[/yellow]")
         return None
 
-    console.print("\n[bold cyan]Phase 6 — Excel Tracker[/bold cyan]")
-
-    month        = datetime.now().strftime("%Y-%m")
-    out_dir = output_dir or OUTPUT_DIR
-    out_dir.mkdir(parents=True, exist_ok=True)
-    tracker_path = out_dir / f"Job_Applications_Tracker_{month}.xlsx"
-    headers = [
-        "#", "Date Applied", "Job Title", "Company", "Industry",
-        "Location", "Job Posting URL", "Company Website", "Application Portal",
-        "Match Score", "Score Reasoning", "Resume Version", "Cover Letter Sent",
-        "Status", "Confirmation #", "Notes", "Follow-Up Date", "Response Received",
-    ]
-
+    headers = _XLSX_HEADERS
     if tracker_path.exists():
         wb = openpyxl.load_workbook(tracker_path)
         ws = wb["Applications"] if "Applications" in wb.sheetnames else wb.active
         ws.title = "Applications"
         existing_headers = [cell.value for cell in ws[1]]
         if existing_headers != headers:
-            ws.delete_rows(1)
-            ws.insert_rows(1)
+            ws.delete_rows(1); ws.insert_rows(1)
             for col, hdr in enumerate(headers, 1):
                 ws.cell(row=1, column=col, value=hdr)
     else:
@@ -821,8 +925,7 @@ def phase6_update_tracker(applications: list, output_dir: Path = None) -> Path:
     hdr_font = Font(color="FFFFFF", bold=True)
     for col, hdr in enumerate(headers, 1):
         cell = ws.cell(row=1, column=col, value=hdr)
-        cell.fill      = hdr_fill
-        cell.font      = hdr_font
+        cell.fill, cell.font = hdr_fill, hdr_font
         cell.alignment = Alignment(horizontal="center", wrap_text=True)
 
     status_fills = {
@@ -832,44 +935,29 @@ def phase6_update_tracker(applications: list, output_dir: Path = None) -> Path:
         "Error":           PatternFill("solid", fgColor="D9D9D9"),
     }
 
-    existing_rows = {}
+    existing_rows: dict = {}
     for row_idx in range(2, ws.max_row + 1):
         company = ws.cell(row=row_idx, column=headers.index("Company") + 1).value
-        title = ws.cell(row=row_idx, column=headers.index("Job Title") + 1).value
+        title   = ws.cell(row=row_idx, column=headers.index("Job Title") + 1).value
         if company and title:
             existing_rows[(str(company).lower(), str(title).lower())] = row_idx
 
-    def _row_values(app: dict, row_num: int) -> list:
-        applied_str = app.get("date_applied", datetime.now().strftime("%m/%d/%Y"))
-        try:
-            follow_up = (
-                datetime.strptime(applied_str, "%m/%d/%Y") + timedelta(days=7)
-            ).strftime("%m/%d/%Y")
-        except ValueError:
-            follow_up = ""
-        company_slug = app.get("company", "").lower().replace(" ", "")
-        return [
-            row_num, applied_str, app.get("title", ""), app.get("company", ""),
-            "Technology / Semiconductor", app.get("location", ""),
-            app.get("application_url", ""), f"https://www.{company_slug}.com",
-            app.get("platform", ""), app.get("score", 0),
-            app.get("reasoning") or app.get("reason", ""),
-            app.get("resume_version", ""),
-            "Yes" if app.get("cover_letter_sent") else "No",
-            app.get("status", "Applied"), app.get("confirmation", "N/A"),
-            app.get("notes", ""), follow_up, "",
-        ]
-
-    for app in applications:
-        key = (str(app.get("company", "")).lower(), str(app.get("title", "")).lower())
+    for r in rows:
+        key = (str(r.get("company", "")).lower(), str(r.get("title", "")).lower())
         row_idx = existing_rows.get(key)
         if not row_idx:
             row_idx = ws.max_row + 1
             existing_rows[key] = row_idx
-        values = _row_values(app, row_idx - 1)
+        values = [
+            r["n"], r["date_applied"], r["title"], r["company"], r["industry"],
+            r["location"], r["url"], r["company_website"], r["platform"],
+            r["score"], r["reasoning"], r["resume_version"],
+            "Yes" if r["cover_letter_sent"] else "No",
+            r["status"], r["confirmation"], r["notes"], r["follow_up"], r["response"],
+        ]
         for col, value in enumerate(values, 1):
             ws.cell(row=row_idx, column=col, value=value)
-        fill = status_fills.get(app.get("status", "Applied"), status_fills["Applied"])
+        fill = status_fills.get(r.get("status", "Applied"), status_fills["Applied"])
         for col in range(1, len(headers) + 1):
             ws.cell(row=row_idx, column=col).fill = fill
 
@@ -880,30 +968,77 @@ def phase6_update_tracker(applications: list, output_dir: Path = None) -> Path:
 
     if "Dashboard" in wb.sheetnames:
         del wb["Dashboard"]
-    ws_d    = wb.create_sheet("Dashboard")
-    all_rows = [
-        dict(zip(headers, row))
-        for row in ws.iter_rows(min_row=2, values_only=True)
-        if any(row)
-    ]
-    total   = len(all_rows)
-    applied = sum(1 for a in all_rows if a.get("Status") == "Applied")
-    manual  = sum(1 for a in all_rows if a.get("Status") == "Manual Required")
-    skipped = sum(1 for a in all_rows if a.get("Status") == "Skipped")
-    avg_sc  = sum(float(a.get("Match Score") or 0) for a in all_rows) / max(total, 1)
+    ws_d = wb.create_sheet("Dashboard")
     for row in [
-        ("Metric", "Value"), ("Run Date", date.today().isoformat()),
-        ("Total Jobs Evaluated", total), ("Applications Submitted", applied),
-        ("Manual Review Required", manual), ("Skipped (Low Match)", skipped),
-        ("Average Match Score", f"{avg_sc:.1f}"),
+        ("Metric", "Value"),
+        ("Run Date", summary["run_date"]),
+        ("Total Jobs Evaluated", summary["total"]),
+        ("Applications Submitted", summary["applied"]),
+        ("Manual Review Required", summary["manual"]),
+        ("Skipped (Low Match)", summary["skipped"]),
+        ("Errors", summary["errors"]),
+        ("Average Match Score", f"{summary['avg_score']:.1f}"),
     ]:
         ws_d.append(row)
     ws_d["A1"].font = Font(bold=True)
     ws_d["B1"].font = Font(bold=True)
 
     wb.save(tracker_path)
-    console.print(f"  ✅ Tracker saved → [bold]{tracker_path}[/bold]")
     return tracker_path
+
+
+def phase6_update_tracker(applications: list,
+                          output_dir: Path = None,
+                          write_file: bool = True) -> dict:
+    """Build the tracker rows + summary stats from Phase-5 applications.
+
+    Returns a dict shaped for both UI rendering and file export:
+
+        {
+          "month":        "YYYY-MM",
+          "columns":      [{key, label, type, width}, ...],
+          "rows":         [{key: value, ...}, ...],
+          "summary":      {run_date, total, applied, manual, skipped, errors, avg_score},
+          "tracker_path": Path | None,    # populated only when an .xlsx was written
+        }
+
+    File-write behaviour is opt-in via ``write_file``. The web flow passes
+    ``write_file=False`` to keep the run fully in-page; the CLI keeps the
+    default ``True`` so the existing offline workflow still produces an
+    .xlsx in ``output/``.
+    """
+    console.print("\n[bold cyan]Phase 6 — Application Tracker[/bold cyan]")
+
+    rows = [_build_tracker_row(a, i + 1) for i, a in enumerate(applications)]
+    summary = _build_tracker_summary(rows)
+    month = datetime.now().strftime("%Y-%m")
+
+    saved_path: Path | None = None
+    if write_file:
+        out_dir = output_dir or OUTPUT_DIR
+        out_dir.mkdir(parents=True, exist_ok=True)
+        target = out_dir / f"Job_Applications_Tracker_{month}.xlsx"
+        try:
+            saved_path = _write_tracker_xlsx(rows, summary, target)
+            if saved_path:
+                console.print(f"  ✅ Tracker saved → [bold]{saved_path}[/bold]")
+        except Exception as exc:
+            console.print(f"  [yellow]Could not write {target.name}: {exc}[/yellow]")
+            saved_path = None
+
+    console.print(
+        f"  📊 {summary['total']} rows · "
+        f"applied={summary['applied']} · manual={summary['manual']} · "
+        f"skipped={summary['skipped']} · avg score {summary['avg_score']}"
+    )
+
+    return {
+        "month":        month,
+        "columns":      list(TRACKER_COLUMNS),
+        "rows":         rows,
+        "summary":      summary,
+        "tracker_path": saved_path,
+    }
 
 
 # ── Email notification ─────────────────────────────────────────────────────────
@@ -940,8 +1075,18 @@ def _send_email_notification(report_text: str, n_applied: int) -> None:
 
 # ── Phase 7 ────────────────────────────────────────────────────────────────────
 
-def phase7_run_report(applications: list, tracker_path: Path,
-                       provider: BaseProvider, output_dir: Path = None) -> str:
+def phase7_run_report(applications: list, tracker_path: Path | None,
+                       provider: BaseProvider,
+                       output_dir: Path | None = None,
+                       write_file: bool = True) -> str:
+    """Generate the end-of-run summary text via the provider.
+
+    File output is opt-in. Pass ``write_file=False`` (or ``output_dir=None``
+    on a caller that wants the in-page experience) to skip writing the .md.
+    The SMTP notification still fires when configured — that's a transport,
+    not a file. CLI keeps the default ``write_file=True`` so the offline
+    workflow still produces a markdown artifact in ``output/``.
+    """
     console.print("\n[bold cyan]Phase 7 — End-of-Run Report[/bold cyan]")
 
     applied_list = [a for a in applications if a.get("status") == "Applied"]
@@ -960,17 +1105,20 @@ def phase7_run_report(applications: list, tracker_path: Path,
 
     report_text = provider.generate_report(summary_data)
 
-    out_dir = output_dir or OUTPUT_DIR
-    out_dir.mkdir(parents=True, exist_ok=True)
-    report_path = out_dir / f"{datetime.now().strftime('%Y%m%d')}_job-application-run-report.md"
-    with open(report_path, "w", encoding="utf-8") as f:
-        f.write(f"# Job Application Run Report\n**Date:** {date.today().isoformat()}\n\n")
-        f.write(report_text)
-        if tracker_path:
-            f.write(f"\n\n---\n**Tracker:** `{tracker_path.name}`\n")
+    if write_file and output_dir is not None:
+        try:
+            output_dir.mkdir(parents=True, exist_ok=True)
+            report_path = output_dir / f"{datetime.now().strftime('%Y%m%d')}_job-application-run-report.md"
+            with open(report_path, "w", encoding="utf-8") as f:
+                f.write(f"# Job Application Run Report\n**Date:** {date.today().isoformat()}\n\n")
+                f.write(report_text)
+                if tracker_path:
+                    f.write(f"\n\n---\n**Tracker:** `{Path(tracker_path).name}`\n")
+            console.print(f"  📄 Report saved → [bold]{report_path}[/bold]")
+        except Exception as exc:
+            console.print(f"  [yellow]Could not write report: {exc}[/yellow]")
 
     console.print(Panel(report_text, title="[bold]Run Summary[/bold]", border_style="green"))
-    console.print(f"  📄 Report saved → [bold]{report_path}[/bold]")
     _send_email_notification(report_text, len(applied_list))
     return report_text
 

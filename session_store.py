@@ -200,6 +200,24 @@ class SQLiteSessionStore:
                 )
             except sqlite3.OperationalError:
                 pass
+            # Stripe billing — idempotent migrations. customer_id is permanent
+            # once issued (a returning user reuses the same Customer record);
+            # subscription_id rotates as users cancel and resubscribe.
+            try:
+                conn.execute("ALTER TABLE users ADD COLUMN stripe_customer_id TEXT")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                conn.execute("ALTER TABLE users ADD COLUMN stripe_subscription_id TEXT")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS ix_users_stripe_customer "
+                    "ON users(stripe_customer_id)"
+                )
+            except sqlite3.OperationalError:
+                pass
             # One-shot purge of any auth_tokens rows that pre-date the
             # SHA-256 hashing migration. Existing rows store the raw bearer
             # cookie verbatim, which would still allow impersonation if
@@ -243,6 +261,13 @@ class SQLiteSessionStore:
             )
         return user_id
 
+    # Canonical column order for every user-row SELECT. Keep this in sync with
+    # _user_row_to_dict — every caller of get_user_by_* must SELECT in this order.
+    _USER_COLUMNS = (
+        "id, email, password_hash, google_id, is_developer, plan_tier, "
+        "stripe_customer_id, stripe_subscription_id"
+    )
+
     def _user_row_to_dict(self, row) -> dict:
         return {
             "id": row[0],
@@ -251,12 +276,14 @@ class SQLiteSessionStore:
             "google_id": row[3],
             "is_developer": bool(row[4]) if len(row) > 4 else False,
             "plan_tier": (row[5] if len(row) > 5 and row[5] else "free"),
+            "stripe_customer_id": row[6] if len(row) > 6 else None,
+            "stripe_subscription_id": row[7] if len(row) > 7 else None,
         }
 
     def get_user_by_email(self, email: str) -> dict | None:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT id, email, password_hash, google_id, is_developer, plan_tier FROM users WHERE email = ?",
+                f"SELECT {self._USER_COLUMNS} FROM users WHERE email = ?",
                 (email,),
             ).fetchone()
             if row:
@@ -266,7 +293,7 @@ class SQLiteSessionStore:
     def get_user_by_google_id(self, google_id: str) -> dict | None:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT id, email, password_hash, google_id, is_developer, plan_tier FROM users WHERE google_id = ?",
+                f"SELECT {self._USER_COLUMNS} FROM users WHERE google_id = ?",
                 (google_id,),
             ).fetchone()
             if row:
@@ -276,8 +303,23 @@ class SQLiteSessionStore:
     def get_user_by_id(self, user_id: str) -> dict | None:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT id, email, password_hash, google_id, is_developer, plan_tier FROM users WHERE id = ?",
+                f"SELECT {self._USER_COLUMNS} FROM users WHERE id = ?",
                 (user_id,),
+            ).fetchone()
+            if row:
+                return self._user_row_to_dict(row)
+        return None
+
+    def get_user_by_stripe_customer(self, customer_id: str) -> dict | None:
+        """Lookup used by the Stripe webhook. Returns None when no user is
+        linked to the given customer (e.g. a customer that was created but
+        never went through Checkout, or a webhook for a deleted account)."""
+        if not customer_id:
+            return None
+        with self._connect() as conn:
+            row = conn.execute(
+                f"SELECT {self._USER_COLUMNS} FROM users WHERE stripe_customer_id = ?",
+                (customer_id,),
             ).fetchone()
             if row:
                 return self._user_row_to_dict(row)
@@ -299,15 +341,72 @@ class SQLiteSessionStore:
                 (tier, user_id),
             )
 
+    def set_user_stripe_customer(self, user_id: str, customer_id: str | None) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE users SET stripe_customer_id = ? WHERE id = ?",
+                (customer_id, user_id),
+            )
+
+    def set_user_subscription(self, user_id: str, subscription_id: str | None,
+                              tier: str | None = None) -> None:
+        """Persist subscription_id and (optionally) plan_tier in one round trip.
+
+        Pass ``tier=None`` to leave plan_tier untouched — used when a webhook
+        only needs to record the subscription_id (e.g. on
+        ``checkout.session.completed`` before the subscription is active).
+        """
+        if tier is not None and tier not in ("free", "pro"):
+            raise ValueError(f"invalid plan tier: {tier}")
+        with self._connect() as conn:
+            if tier is None:
+                conn.execute(
+                    "UPDATE users SET stripe_subscription_id = ? WHERE id = ?",
+                    (subscription_id, user_id),
+                )
+            else:
+                conn.execute(
+                    "UPDATE users SET stripe_subscription_id = ?, plan_tier = ? WHERE id = ?",
+                    (subscription_id, tier, user_id),
+                )
+
+    def refresh_user_plan_in_tokens(self, user_id: str, tier: str) -> int:
+        """Update the cached plan_tier in every active auth_token for this user.
+
+        Without this, a user who just upgraded would still see ``plan_tier='free'``
+        in ``/api/state`` until they signed out and back in (the auth token's
+        cached user_json wins over the live users-row read inside ``get_auth_user``).
+        Returns the number of token rows touched.
+        """
+        if tier not in ("free", "pro"):
+            raise ValueError(f"invalid plan tier: {tier}")
+        touched = 0
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT token, user_json FROM auth_tokens WHERE user_id = ?", (user_id,)
+            ).fetchall()
+            for row in rows:
+                try:
+                    payload = json.loads(row[1] or "{}")
+                except (TypeError, ValueError):
+                    payload = {}
+                payload["plan_tier"] = tier
+                conn.execute(
+                    "UPDATE auth_tokens SET user_json = ? WHERE token = ?",
+                    (json.dumps(payload), row[0]),
+                )
+                touched += 1
+        return touched
+
     def list_users(self, limit: int = 200) -> list[dict]:
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT id, email, password_hash, google_id, is_developer, plan_tier, created_at "
+                f"SELECT {self._USER_COLUMNS}, created_at "
                 "FROM users ORDER BY created_at DESC LIMIT ?",
                 (limit,),
             ).fetchall()
             return [
-                {**self._user_row_to_dict(row), "created_at": row[6] if len(row) > 6 else None}
+                {**self._user_row_to_dict(row), "created_at": row[8] if len(row) > 8 else None}
                 for row in rows
             ]
 

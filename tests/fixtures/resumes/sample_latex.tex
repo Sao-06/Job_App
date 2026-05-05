@@ -1,0 +1,34 @@
+\documentclass[11pt,letterpaper]{article}
+\usepackage[margin=0.75in]{geometry}
+\usepackage{enumitem}
+\usepackage{titlesec}
+\setlist[itemize]{leftmargin=*,nosep}
+\titleformat{\section}{\large\bfseries\uppercase}{}{0pt}{}[\titlerule]
+\pagenumbering{gobble}
+\begin{document}
+
+\begin{center}
+{\LARGE \textbf{Jane Tester}}\\[2pt]
+\small jane.tester@example.com \textbullet{} (415) 555-0199 \textbullet{} Berkeley, CA
+\end{center}
+
+\section*{Education}
+\noindent University of California, Berkeley \textbar{} B.S.\ Electrical Engineering \textbar{} 2026\\
+GPA: 3.85 / 4.00
+
+\section*{Skills}
+Python, Verilog, SystemVerilog, MATLAB, Cadence Virtuoso, HSPICE, Lumerical, FPGA, PCB Design.
+
+\section*{Projects}
+\noindent\textbf{8-bit ALU in Verilog}\\
+Designed and verified an 8-bit ALU in SystemVerilog with a UVM testbench.\\
+\textit{Skills:} SystemVerilog, ModelSim, Vivado
+
+\section*{Experience}
+\noindent\textbf{FPGA Engineering Intern \textbar{} NovaSemi Inc. \textbar{} May 2023 -- Aug 2023}\\
+\begin{itemize}
+\item Implemented a SerDes equalizer block in SystemVerilog targeting Xilinx UltraScale+.
+\item Wrote constrained-random tests covering 95\% of the block's RTL paths.
+\end{itemize}
+
+\end{document}

@@ -1,0 +1,290 @@
+{
+  "name": "Your Name",
+  "email": "your.email@university.edu",
+  "phone": "",
+  "linkedin": "https://www.linkedin.com/in/your-profile",
+  "github": "",
+  "website": "",
+  "location": "City, State",
+  "summary": "[Degree] student seeking a summer internship in [target field, e.g. IC design, photonics, hardware engineering, FPGA development].",
+  "target_titles": [
+    "IC Design / VLSI",
+    "Analog / Mixed-Signal Design",
+    "Semiconductor Process / Device Engineering",
+    "Photonics / Optoelectronics Engineering",
+    "IC Design / VLSI Engineering Intern",
+    "FPGA / Digital Design Engineering Intern",
+    "Photonics / Optoelectronics Engineering Intern",
+    "Hardware Engineering Intern"
+  ],
+  "top_hard_skills": [
+    "MATLAB",
+    "Python",
+    "Verilog",
+    "SPICE",
+    "FPGA",
+    "PBDS",
+    "Linux",
+    "SolidWorks",
+    "Fusion 360",
+    "AutoCAD",
+    "PCB Design",
+    "Photolithography",
+    "Cleanroom",
+    "SEM",
+    "RIE",
+    "PL"
+  ],
+  "top_soft_skills": [],
+  "education": [
+    {
+      "degree": "B.S.",
+      "institution": "[University Name]",
+      "year": "[Graduation Year]",
+      "gpa": "[GPA/4.00]",
+      "location": "[City, State]",
+      "coursework": [],
+      "honors": []
+    }
+  ],
+  "experience": [
+    {
+      "title": "[Job Title]",
+      "company": "[Company / Lab]",
+      "dates": "",
+      "bullets": []
+    },
+    {
+      "title": "[What you did",
+      "company": "use action verbs and quantify where possible.]",
+      "dates": "",
+      "bullets": [
+        "[Technology or skill applied.]"
+      ]
+    }
+  ],
+  "research_experience": [],
+  "work_experience": [
+    {
+      "title": "[Job Title]",
+      "company": "[Company / Lab]",
+      "dates": "",
+      "bullets": []
+    },
+    {
+      "title": "[What you did",
+      "company": "use action verbs and quantify where possible.]",
+      "dates": "",
+      "bullets": [
+        "[Technology or skill applied.]"
+      ]
+    }
+  ],
+  "projects": [
+    {
+      "name": "[Project Name 1]",
+      "description": "[Brief description of what you built or researched.]",
+      "bullets": [
+        "[Tools and techniques used.]"
+      ],
+      "skills_used": [],
+      "dates": "",
+      "url": ""
+    },
+    {
+      "name": "[Project Name 2]",
+      "description": "[Brief description.]",
+      "bullets": [
+        "[Outcome or result.]"
+      ],
+      "skills_used": [],
+      "dates": "",
+      "url": ""
+    }
+  ],
+  "resume_gaps": [
+    "Few quantified outcomes \u2014 add metrics to bullets",
+    "No GitHub/portfolio link \u2014 let reviewers verify project claims"
+  ],
+  "work_authorization": "",
+  "target_salary": "",
+  "_extraction_method": "heuristic+llm",
+  "top_hard_skills_detailed": [
+    {
+      "skill": "MATLAB",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Python",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Verilog",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "SPICE",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "FPGA",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "PBDS",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Linux",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "SolidWorks",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Fusion 360",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "AutoCAD",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "PCB Design",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Photolithography",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Cleanroom",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "SEM",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "RIE",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "PL",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    }
+  ],
+  "target_titles_detailed": [
+    {
+      "title": "IC Design / VLSI",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "Analog / Mixed-Signal Design",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "Semiconductor Process / Device Engineering",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "Photonics / Optoelectronics Engineering",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "IC Design / VLSI Engineering Intern",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "FPGA / Digital Design Engineering Intern",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "Photonics / Optoelectronics Engineering Intern",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "Hardware Engineering Intern",
+      "family": "",
+      "evidence": ""
+    }
+  ],
+  "_audit_log": [
+    "retention_audit recovered 2 missing skills: ['RIE', 'PL']"
+  ],
+  "insights": {
+    "version": 1,
+    "overall_score": 46,
+    "metrics": {
+      "word_count": 150,
+      "bullet_count": 0,
+      "quantified_count": 0,
+      "quantified_pct": 0,
+      "action_verb_count": 0,
+      "action_verb_pct": 0,
+      "weak_phrase_count": 0,
+      "buzzword_count": 0,
+      "avg_bullet_len": 0,
+      "longest_bullet": 0,
+      "section_count": 7,
+      "sections": [
+        "education",
+        "experience",
+        "gpa: [x.xx] / 4.00",
+        "interests",
+        "objective",
+        "projects",
+        "technical skills"
+      ],
+      "skill_density": 10.7,
+      "skill_count": 16,
+      "reading_seconds": 38,
+      "repeated_verb": null,
+      "has_email": true,
+      "has_linkedin": true,
+      "has_github": false,
+      "has_phone": false,
+      "has_location": true
+    },
+    "strengths": [
+      "Clear 7-section structure: Education, Experience, Gpa: [X.Xx] / 4.00, Interests, Objective \u2014 easy to skim and ATS-parser friendly.",
+      "Skill density of 10.7 keywords per 100 words is well above the ~5.0 average for technical resumes \u2014 strong ATS surface area.",
+      "2 project(s) listed \u2014 gives reviewers concrete artifacts beyond job titles, especially valuable for early-career applicants."
+    ],
+    "red_flags": [
+      "Only 0 bullets detected \u2014 most resumes need 8-15 to establish credibility. Are sections being missed by the parser?"
+    ],
+    "suggestions": [
+      "Link a GitHub or portfolio so reviewers can verify project claims in 30 seconds.",
+      "Phase-1 audit flagged: Few quantified outcomes \u2014 add metrics to bullets \u00b7 No GitHub/portfolio link \u2014 let reviewers verify project claims"
+    ],
+    "narrative": "Scanned 150 words across 0 bullets in 7 sections. The resume reads as a ~38-second skim \u2014 recruiters typically allocate 6\u201315 seconds, so the top third has to carry the strongest signals on its own.\n\nOn the rubric that matters most, quantification sits at 0% (industry benchmark is 60%+) and action-verb usage at 0% (target 70%+). Weak phrasings detected: 0, buzzwords: 0. Closing these gaps is the highest-leverage edit on this resume; they directly translate into interview conversion.\n\nFor IC Design / VLSI alignment: 16 hard skills extracted with density 10.7 per 100 words. First red flag worth attention: only 0 bullets detected \u2014 most resumes need 8-15 to establish credibility. are sections being missed by the parser?\n\nHighest-leverage edits next: Link a GitHub or portfolio so reviewers can verify project claims in 30 seconds. \u00b7 Phase-1 audit flagged: Few quantified outcomes \u2014 add metrics to bullets \u00b7 No GitHub/portfolio link \u2014 let reviewers verify project claims",
+    "verified_by": "heuristic",
+    "verification_notes": "Ollama (`llama3.2:latest`) returned non-JSON content. Try a stronger model: `ollama pull llama3.2`.",
+    "verification_error": "parse_content"
+  }
+}

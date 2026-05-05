@@ -1,0 +1,189 @@
+{
+  "name": "",
+  "email": "",
+  "linkedin": "",
+  "github": "",
+  "phone": "",
+  "location": "",
+  "target_titles": [
+    "IC Design",
+    "VLSI",
+    "Analog/Mixed-Signal Design",
+    "Semiconductor Process/Device Engineering",
+    "Photonics/Optoelectronics Engineering",
+    "Nanofabrication/MEMS",
+    "FPGA/Digital Design",
+    "RF/Hardware Engineering",
+    "Embedded Systems/Firmware",
+    "Research Assistant"
+  ],
+  "top_hard_skills": [
+    "CAD tools",
+    "Verilog",
+    "VHDL",
+    "SPICE",
+    "Analog/LAB",
+    "Mixed-Signal/MAC",
+    "FPGA/DISCRETE",
+    "Embedded Systems/MICRONETWORKS"
+  ],
+  "top_soft_skills": [
+    "Teamwork",
+    "Communication",
+    "Problem-solving",
+    "Adaptability",
+    "Time Management"
+  ],
+  "education": [
+    {
+      "degree": "",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    }
+  ],
+  "research_experience": [],
+  "work_experience": [],
+  "projects": [],
+  "resume_gaps": [],
+  "critical_analysis": "",
+  "top_hard_skills_detailed": [
+    {
+      "skill": "CAD tools",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Verilog",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "VHDL",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "SPICE",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Analog/LAB",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Mixed-Signal/MAC",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "FPGA/DISCRETE",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Embedded Systems/MICRONETWORKS",
+      "category": "unknown",
+      "evidence": ""
+    }
+  ],
+  "target_titles_detailed": [
+    {
+      "title": "IC Design",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "VLSI",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "Analog/Mixed-Signal Design",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "Semiconductor Process/Device Engineering",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "Photonics/Optoelectronics Engineering",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "Nanofabrication/MEMS",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "FPGA/Digital Design",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "RF/Hardware Engineering",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "Embedded Systems/Firmware",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "Research Assistant",
+      "family": "",
+      "evidence": ""
+    }
+  ],
+  "experience": [],
+  "insights": {
+    "version": 1,
+    "overall_score": 25,
+    "metrics": {
+      "word_count": 1,
+      "bullet_count": 0,
+      "quantified_count": 0,
+      "quantified_pct": 0,
+      "action_verb_count": 0,
+      "action_verb_pct": 0,
+      "weak_phrase_count": 0,
+      "buzzword_count": 0,
+      "avg_bullet_len": 0,
+      "longest_bullet": 0,
+      "section_count": 0,
+      "sections": [],
+      "skill_density": 800.0,
+      "skill_count": 8,
+      "reading_seconds": 1,
+      "repeated_verb": null,
+      "has_email": false,
+      "has_linkedin": false,
+      "has_github": false,
+      "has_phone": false,
+      "has_location": false
+    },
+    "strengths": [
+      "Skill density of 800.0 keywords per 100 words is well above the ~5.0 average for technical resumes \u2014 strong ATS surface area."
+    ],
+    "red_flags": [
+      "Only 0 bullets detected \u2014 most resumes need 8-15 to establish credibility. Are sections being missed by the parser?",
+      "Only 0 sections detected \u2014 Education, Skills, Experience, and Projects are baseline.",
+      "No email address detected at the top \u2014 recruiters can't reply.",
+      "No LinkedIn URL \u2014 reviewers expect one to verify identity in seconds.",
+      "Photonics target with no fab/sim tools listed (Photolithography, COMSOL, Lumerical) \u2014 add the ones you've actually used."
+    ],
+    "suggestions": [
+      "Add a LinkedIn URL to the contact line \u2014 non-negotiable for technical recruiting.",
+      "Add the missing baseline section(s); even a 3-line Skills block helps ATS keyword matching."
+    ],
+    "narrative": "Scanned 1 words across 0 bullets in 0 sections. The resume reads as a ~1-second skim \u2014 recruiters typically allocate 6\u201315 seconds, so the top third has to carry the strongest signals on its own.\n\nOn the rubric that matters most, quantification sits at 0% (industry benchmark is 60%+) and action-verb usage at 0% (target 70%+). Weak phrasings detected: 0, buzzwords: 0. Closing these gaps is the highest-leverage edit on this resume; they directly translate into interview conversion.\n\nFor IC Design alignment: 8 hard skills extracted with density 800.0 per 100 words. First red flag worth attention: only 0 bullets detected \u2014 most resumes need 8-15 to establish credibility. are sections being missed by the parser?\n\nHighest-leverage edits next: Add a LinkedIn URL to the contact line \u2014 non-negotiable for technical recruiting. \u00b7 Add the missing baseline section(s); even a 3-line Skills block helps ATS keyword matching.",
+    "verified_by": "heuristic",
+    "verification_notes": ""
+  }
+}

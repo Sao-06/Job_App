@@ -135,11 +135,13 @@ def _extract_pdf_text(path: Path) -> tuple[str, str]:
     try:
         import pypdfium2
         pdf = pypdfium2.PdfDocument(str(path))
-        pages = []
-        for page in pdf:
-            textpage = page.get_textpage()
-            pages.append(textpage.get_text_range() or "")
-        pdf.close()
+        try:
+            pages = []
+            for page in pdf:
+                textpage = page.get_textpage()
+                pages.append(textpage.get_text_range() or "")
+        finally:
+            pdf.close()
         text = _normalise_pdf_text("\n".join(pages))
         if text.strip():
             return text, "pypdfium2"
@@ -198,7 +200,7 @@ def _extract_pdf_text(path: Path) -> tuple[str, str]:
     except Exception as e:
         console.print(f"  [yellow]pypdf failed ({e}) — trying pdfminer[/yellow]")
 
-    # ── 3. pdfminer.six ───────────────────────────────────────────────────────
+    # ── 4. pdfminer.six ───────────────────────────────────────────────────────
     try:
         from pdfminer.high_level import extract_text as pdfminer_extract
         raw = pdfminer_extract(str(path))

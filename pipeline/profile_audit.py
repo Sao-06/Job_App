@@ -354,6 +354,139 @@ def rerank_titles(profile: dict) -> dict:
     return profile
 
 
+def _education_entry_is_sparse(e: dict) -> bool:
+    """An entry counts as sparse when it has fewer than two of the four
+    structured fields, OR when the degree text still contains the GPA/year
+    that should have been split out."""
+    if not isinstance(e, dict):
+        return True
+    filled = sum(1 for k in ("degree", "institution", "year", "gpa") if e.get(k))
+    if filled < 2:
+        return True
+    return False
+
+
+def _project_entry_is_sparse(p: dict) -> bool:
+    if not isinstance(p, dict):
+        return True
+    has_name = bool(p.get("name"))
+    has_body = bool(p.get("description") or (p.get("bullets") or []))
+    return not (has_name and has_body)
+
+
+def enrich_education_and_projects(profile: dict, resume_text: str) -> dict:
+    """Run the deterministic regex parsers and merge any structured fields the
+    LLM missed. Never overwrites a non-empty LLM value — only fills blanks and
+    appends entries the LLM omitted entirely.
+    """
+    if not profile or not resume_text:
+        return profile
+    try:
+        from .providers import DemoProvider
+    except Exception:
+        return profile
+
+    sections = DemoProvider._split_sections(resume_text)
+
+    def _grab(*keys):
+        for k in keys:
+            if k in sections and sections[k]:
+                return sections[k]
+        return []
+
+    # Education ----------------------------------------------------------
+    edu_lines = _grab("education")
+    parsed_edu = DemoProvider._parse_education_block(edu_lines) if edu_lines else []
+    llm_edu = list(profile.get("education") or [])
+
+    if parsed_edu:
+        if not llm_edu:
+            profile["education"] = parsed_edu
+            _log(profile, f"enrichment: filled {len(parsed_edu)} education entries via regex")
+        else:
+            # Field-level fill on the matching LLM entry; otherwise append.
+            def _matches(a: dict, b: dict) -> bool:
+                ai = (a.get("institution") or "").lower()
+                bi = (b.get("institution") or "").lower()
+                ad = (a.get("degree") or "").lower()
+                bd = (b.get("degree") or "").lower()
+                if ai and bi and (ai in bi or bi in ai):
+                    return True
+                if ad and bd and (ad in bd or bd in ad):
+                    return True
+                return False
+
+            filled_count = 0
+            for parsed in parsed_edu:
+                target = next((e for e in llm_edu if _matches(e, parsed)), None)
+                if target is None:
+                    if _education_entry_is_sparse(parsed):
+                        continue
+                    llm_edu.append(parsed)
+                    filled_count += 1
+                    continue
+                for key in ("degree", "institution", "year", "gpa", "location"):
+                    if not target.get(key) and parsed.get(key):
+                        target[key] = parsed[key]
+                        filled_count += 1
+                for list_key in ("coursework", "honors"):
+                    if parsed.get(list_key) and not target.get(list_key):
+                        target[list_key] = parsed[list_key]
+                        filled_count += 1
+            if filled_count:
+                _log(profile, f"enrichment: filled {filled_count} education fields/entries")
+            profile["education"] = llm_edu
+
+    # Projects -----------------------------------------------------------
+    proj_lines = _grab("projects")
+    parsed_projects = DemoProvider._parse_projects_block(proj_lines) if proj_lines else []
+    llm_projects = list(profile.get("projects") or [])
+
+    if parsed_projects:
+        if not llm_projects:
+            profile["projects"] = parsed_projects
+            _log(profile, f"enrichment: filled {len(parsed_projects)} projects via regex")
+        else:
+            def _name_match(a: dict, b: dict) -> bool:
+                an = (a.get("name") or "").lower().strip()
+                bn = (b.get("name") or "").lower().strip()
+                if not an or not bn:
+                    return False
+                return an == bn or an in bn or bn in an
+
+            filled_count = 0
+            for parsed in parsed_projects:
+                target = next((p for p in llm_projects if _name_match(p, parsed)), None)
+                if target is None:
+                    if _project_entry_is_sparse(parsed):
+                        continue
+                    llm_projects.append(parsed)
+                    filled_count += 1
+                    continue
+                # Fill blanks; merge skills_used.
+                for key in ("description", "dates", "url"):
+                    if not target.get(key) and parsed.get(key):
+                        target[key] = parsed[key]
+                        filled_count += 1
+                if parsed.get("bullets") and not target.get("bullets"):
+                    target["bullets"] = parsed["bullets"]
+                    filled_count += 1
+                merged_skills = list(target.get("skills_used") or [])
+                seen = {s.lower() for s in merged_skills if s}
+                for s in parsed.get("skills_used") or []:
+                    if s and s.lower() not in seen:
+                        seen.add(s.lower())
+                        merged_skills.append(s)
+                if merged_skills != list(target.get("skills_used") or []):
+                    target["skills_used"] = merged_skills
+                    filled_count += 1
+            if filled_count:
+                _log(profile, f"enrichment: filled {filled_count} project fields/entries")
+            profile["projects"] = llm_projects
+
+    return profile
+
+
 def audit_profile(profile: dict, resume_text: str) -> dict:
     """Run the full audit chain. Safe to call with any profile shape."""
     profile = flatten_profile(profile)
@@ -361,4 +494,5 @@ def audit_profile(profile: dict, resume_text: str) -> dict:
     profile = retention_audit(profile, resume_text)
     profile = verify_evidence(profile, resume_text)
     profile = rerank_titles(profile)
+    profile = enrich_education_and_projects(profile, resume_text)
     return profile

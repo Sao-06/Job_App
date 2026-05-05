@@ -135,6 +135,25 @@ def apply_tailoring_to_latex(latex_source: str, tailored: dict, job: dict) -> st
     return latex
 
 
+_LATEX_DANGEROUS = re.compile(
+    r"\\(?:input|include|openin|openout|read|write|immediate|catcode|"
+    r"directlua|luaexec|ShellEscape|usepackage\s*\{\s*shellesc)",
+    re.IGNORECASE,
+)
+
+
+def _sanitize_latex_source(latex_source: str) -> str:
+    """Strip directives that could read/write arbitrary files.
+
+    pdflatex can be coerced into reading the user's filesystem (\\input,
+    \\openin) or invoking external programs (\\write18 / shell-escape).
+    Even with -no-shell-escape, \\input{/etc/passwd} still leaks file
+    contents into the produced PDF — so neutralise these directives
+    before compilation.
+    """
+    return _LATEX_DANGEROUS.sub(r"% [removed unsafe directive] ", latex_source)
+
+
 def compile_latex_to_pdf(latex_source: str, output_path: Path) -> bool:
     """Compile *latex_source* to a PDF via pdflatex.  Returns True on success."""
     if not shutil.which("pdflatex"):
@@ -143,12 +162,20 @@ def compile_latex_to_pdf(latex_source: str, output_path: Path) -> bool:
         )
         return False
 
+    safe_source = _sanitize_latex_source(latex_source)
+
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
-        (tmp / "resume.tex").write_text(latex_source, encoding="utf-8")
+        (tmp / "resume.tex").write_text(safe_source, encoding="utf-8")
         try:
             result = subprocess.run(
-                ["pdflatex", "-interaction=nonstopmode", "resume.tex"],
+                [
+                    "pdflatex",
+                    "-interaction=nonstopmode",
+                    "-no-shell-escape",
+                    "-halt-on-error",
+                    "resume.tex",
+                ],
                 cwd=tmpdir, capture_output=True, text=True, timeout=60,
             )
             pdf_file = tmp / "resume.pdf"

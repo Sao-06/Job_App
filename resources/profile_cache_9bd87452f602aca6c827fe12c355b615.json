@@ -1,0 +1,239 @@
+{
+  "name": "Mariana L\u00f3pez",
+  "email": "mariana.lopez@bu.edu",
+  "phone": "(617) 555-7788",
+  "linkedin": "https://linkedin.com/in/marianalopez",
+  "github": "https://github.com/mlopez",
+  "website": "",
+  "location": "Boston, MA",
+  "summary": "Mariana L\u00f3pez is a FPGA/Hardware Engineering Intern with hands-on experience across Verilog, FPGA, Rtl, Python, MATLAB, C++ and 1 structured resume role(s) extracted for job matching.",
+  "target_titles": [
+    "FPGA/Hardware Engineering Intern",
+    "IC Design Engineering Intern",
+    "IC Design / VLSI Engineering Intern",
+    "FPGA / Digital Design Engineering Intern"
+  ],
+  "top_hard_skills": [
+    "Verilog",
+    "FPGA",
+    "Rtl",
+    "Python",
+    "MATLAB",
+    "C++",
+    "Linux",
+    "CAD",
+    "Vivado",
+    "ModelSim",
+    "Cadence",
+    "Git",
+    "SoC",
+    "RIE"
+  ],
+  "top_soft_skills": [
+    "Teamwork",
+    "Problem-solving",
+    "Communication",
+    "Attention to detail",
+    "Time management"
+  ],
+  "education": [
+    {
+      "degree": "B.S. Computer Engineering",
+      "institution": "Boston University",
+      "year": "2026",
+      "gpa": "3.7",
+      "location": "",
+      "coursework": [],
+      "honors": []
+    }
+  ],
+  "experience": [
+    {
+      "title": "Hardware Engineering Intern",
+      "company": "Texas Instruments",
+      "dates": "Summer 2024",
+      "bullets": [
+        "Designed FPGA control logic that improved throughput 18%",
+        "Verified RTL on Cortex-M7 SoC across 64 corner cases"
+      ]
+    }
+  ],
+  "research_experience": [],
+  "work_experience": [
+    {
+      "title": "Hardware Engineering Intern",
+      "company": "Texas Instruments",
+      "dates": "Summer 2024",
+      "bullets": [
+        "Designed FPGA control logic that improved throughput 18%",
+        "Verified RTL on Cortex-M7 SoC across 64 corner cases"
+      ]
+    }
+  ],
+  "projects": [
+    {
+      "name": "Audio DSP Pipeline",
+      "description": "Built a real-time FFT-based equalizer in Verilog targeting Cyclone V FPGAs.",
+      "bullets": [],
+      "skills_used": [
+        "Verilog",
+        "FPGA"
+      ],
+      "dates": "",
+      "url": ""
+    }
+  ],
+  "resume_gaps": [
+    "Missing professional summary/objective",
+    "No summary or objective section detected"
+  ],
+  "work_authorization": "",
+  "target_salary": "",
+  "_extraction_method": "heuristic+llm",
+  "critical_analysis": "Impact: add numeric outcomes to the strongest bullets wherever possible. Skill density: the parser found the technical keywords listed in hard skills; add any missing tools, instruments, and methods explicitly. ATS structure: keep Education, Experience, Projects, and Skills as clear headings. Next actions: add LinkedIn, work authorization, target salary, and target titles to improve matching and autofill.",
+  "top_hard_skills_detailed": [
+    {
+      "skill": "Verilog",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "FPGA",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Rtl",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Python",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "MATLAB",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "C++",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Linux",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "CAD",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Vivado",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "ModelSim",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Cadence",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Git",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "SoC",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "RIE",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    }
+  ],
+  "target_titles_detailed": [
+    {
+      "title": "FPGA/Hardware Engineering Intern",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "IC Design Engineering Intern",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "IC Design / VLSI Engineering Intern",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "FPGA / Digital Design Engineering Intern",
+      "family": "",
+      "evidence": ""
+    }
+  ],
+  "_audit_log": [
+    "retention_audit recovered 1 missing skills: ['RIE']"
+  ],
+  "insights": {
+    "version": 1,
+    "overall_score": 88,
+    "metrics": {
+      "word_count": 83,
+      "bullet_count": 2,
+      "quantified_count": 2,
+      "quantified_pct": 100,
+      "action_verb_count": 2,
+      "action_verb_pct": 100,
+      "weak_phrase_count": 0,
+      "buzzword_count": 0,
+      "avg_bullet_len": 8,
+      "longest_bullet": 9,
+      "section_count": 4,
+      "sections": [
+        "education",
+        "experience",
+        "projects",
+        "skills"
+      ],
+      "skill_density": 16.9,
+      "skill_count": 14,
+      "reading_seconds": 21,
+      "repeated_verb": null,
+      "has_email": true,
+      "has_linkedin": true,
+      "has_github": true,
+      "has_phone": true,
+      "has_location": true
+    },
+    "strengths": [
+      "100% of bullets contain hard numbers \u2014 you're already past the 40% bar most resumes never clear.",
+      "100% of bullets open with assertive action verbs (2/2); recruiters scan exactly that signal in the first 6 seconds.",
+      "Skill density of 16.9 keywords per 100 words is well above the ~5.0 average for technical resumes \u2014 strong ATS surface area.",
+      "Both LinkedIn and GitHub linked \u2014 reviewers can verify identity and inspect work in two clicks."
+    ],
+    "red_flags": [
+      "Only 2 bullets detected \u2014 most resumes need 8-15 to establish credibility. Are sections being missed by the parser?",
+      "At 83 words, the resume is sparse \u2014 most internships expect 350-650."
+    ],
+    "suggestions": [
+      "Phase-1 audit flagged: Missing professional summary/objective \u00b7 No summary or objective section detected"
+    ],
+    "narrative": "Scanned 83 words across 2 bullets in 4 sections. The resume reads as a ~21-second skim \u2014 recruiters typically allocate 6\u201315 seconds, so the top third has to carry the strongest signals on its own.\n\nOn the rubric that matters most, quantification sits at 100% (industry benchmark is 60%+) and action-verb usage at 100% (target 70%+). Weak phrasings detected: 0, buzzwords: 0. This is competitive territory \u2014 focus refinement on the specifics, not the basics.\n\nFor FPGA/Hardware Engineering Intern alignment: 14 hard skills extracted with density 16.9 per 100 words. First red flag worth attention: only 2 bullets detected \u2014 most resumes need 8-15 to establish credibility. are sections being missed by the parser?\n\nHighest-leverage edits next: Phase-1 audit flagged: Missing professional summary/objective \u00b7 No summary or objective section detected",
+    "verified_by": "heuristic",
+    "verification_notes": ""
+  }
+}

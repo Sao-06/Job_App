@@ -11,12 +11,14 @@ Or launch automatically via:
     python agent.py --demo --dashboard
 """
 
+import os
+import secrets
 import sys
 from pathlib import Path
 from datetime import datetime
 
 try:
-    from flask import Flask, render_template_string, redirect, url_for, jsonify
+    from flask import Flask, abort, render_template_string, redirect, request, session, url_for, jsonify
 except ImportError:
     print("Flask not installed. Run: pip install flask")
     sys.exit(1)
@@ -31,6 +33,38 @@ except ImportError:
 OUTPUT_DIR = Path(__file__).parent.parent / "output"
 
 app = Flask(__name__)
+# Secret key required for the signed session cookie (used for CSRF tokens).
+app.secret_key = os.environ.get("DASHBOARD_SECRET") or secrets.token_urlsafe(32)
+# Shared secret required on every request. Set DASHBOARD_TOKEN to enable auth.
+_DASHBOARD_TOKEN = os.environ.get("DASHBOARD_TOKEN", "")
+
+
+def _csrf_token() -> str:
+    tok = session.get("_csrf")
+    if not tok:
+        tok = secrets.token_urlsafe(24)
+        session["_csrf"] = tok
+    return tok
+
+
+def _require_dashboard_auth() -> None:
+    """Block unauthenticated access if a token is configured.
+
+    Without DASHBOARD_TOKEN set the dashboard runs open *only* on loopback
+    (the bind below enforces that). With DASHBOARD_TOKEN set, callers must
+    present it via either a `?token=` query arg or the `X-Dashboard-Token`
+    header — checked with constant-time comparison.
+    """
+    if not _DASHBOARD_TOKEN:
+        return
+    provided = request.args.get("token") or request.headers.get("X-Dashboard-Token") or ""
+    if not secrets.compare_digest(provided, _DASHBOARD_TOKEN):
+        abort(401)
+
+
+@app.before_request
+def _enforce_dashboard_auth():
+    _require_dashboard_auth()
 
 _TEMPLATE = """<!DOCTYPE html>
 <html lang="en">
@@ -103,6 +137,7 @@ _TEMPLATE = """<!DOCTYPE html>
   <td>
     {% if j.status == 'Manual Required' %}
     <form method="post" action="/approve/{{ j.num }}" style="display:inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <button class="approve-btn" type="submit">Approve</button>
     </form>
     {% endif %}
@@ -156,30 +191,58 @@ def _load_jobs():
 def index():
     jobs, tracker_name = _load_jobs()
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
-    return render_template_string(_TEMPLATE, jobs=jobs, tracker_name=tracker_name, now=now)
+    return render_template_string(
+        _TEMPLATE,
+        jobs=jobs,
+        tracker_name=tracker_name,
+        now=now,
+        csrf_token=_csrf_token(),
+    )
 
 
 @app.route("/approve/<int:job_id>", methods=["POST"])
 def approve(job_id):
     """Mark a Manual Required row as Approved in the tracker."""
+    submitted = request.form.get("csrf_token", "")
+    expected = session.get("_csrf", "")
+    if not expected or not secrets.compare_digest(submitted, expected):
+        abort(400, "Invalid CSRF token")
+    if job_id < 1:
+        abort(400, "Invalid row id")
+
     path = _tracker_path()
     if not path.exists():
         return jsonify({"error": "Tracker not found"}), 404
     wb = openpyxl.load_workbook(path)
-    ws = wb.active
-    headers     = [cell.value for cell in ws[1]]
-    status_col  = headers.index("Status") + 1 if "Status" in headers else None
-    target_row  = job_id + 1  # row 1 = header
-    if status_col and target_row <= ws.max_row:
-        ws.cell(row=target_row, column=status_col).value = "Approved"
-        # Update row fill to light blue
-        blue_fill = PatternFill("solid", fgColor="BDD7EE")
-        for col in range(1, len(headers) + 1):
-            ws.cell(row=target_row, column=col).fill = blue_fill
-        wb.save(path)
+    try:
+        ws = wb.active
+        headers = [cell.value for cell in ws[1]]
+        status_col = headers.index("Status") + 1 if "Status" in headers else None
+        target_row = job_id + 1  # row 1 = header
+        if status_col and 2 <= target_row <= ws.max_row:
+            current = ws.cell(row=target_row, column=status_col).value
+            # Only flip rows that were waiting on manual review; refuse otherwise
+            # so a stale browser tab can't clobber an Applied row.
+            if current != "Manual Required":
+                abort(409, "Row is not in Manual Required state")
+            ws.cell(row=target_row, column=status_col).value = "Approved"
+            blue_fill = PatternFill("solid", fgColor="BDD7EE")
+            for col in range(1, len(headers) + 1):
+                ws.cell(row=target_row, column=col).fill = blue_fill
+            wb.save(path)
+    finally:
+        wb.close()
     return redirect(url_for("index"))
 
 
 if __name__ == "__main__":
+    bind_host = os.environ.get("DASHBOARD_HOST", "127.0.0.1")
+    bind_port = int(os.environ.get("DASHBOARD_PORT", "5000"))
     print(f"Dashboard reading from: {OUTPUT_DIR}")
-    app.run(port=5000, debug=False)
+    if not _DASHBOARD_TOKEN and bind_host not in ("127.0.0.1", "localhost", "::1"):
+        print(
+            "Refusing to bind to non-loopback host without DASHBOARD_TOKEN set.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    app.run(host=bind_host, port=bind_port, debug=False)

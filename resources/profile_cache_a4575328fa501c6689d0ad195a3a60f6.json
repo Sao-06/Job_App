@@ -1,0 +1,170 @@
+{
+  "name": "",
+  "email": "",
+  "linkedin": "",
+  "github": "",
+  "phone": "",
+  "location": "",
+  "target_titles": [],
+  "top_hard_skills": [
+    "Matlab",
+    "Verilog",
+    "Spice",
+    "FPGA",
+    "PL",
+    "Cleanroom",
+    "Autocad",
+    "RIE",
+    "Photolithography",
+    "Lithography",
+    "Solidworks",
+    "SEM",
+    "Linux",
+    "Pcb Design",
+    "Python",
+    "Fusion 360"
+  ],
+  "top_soft_skills": [],
+  "education": [],
+  "research_experience": [],
+  "work_experience": [],
+  "projects": [],
+  "resume_gaps": [],
+  "critical_analysis": "",
+  "top_hard_skills_detailed": [
+    {
+      "skill": "Matlab",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Verilog",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Spice",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "FPGA",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "PL",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Cleanroom",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Autocad",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "RIE",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Photolithography",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Lithography",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Solidworks",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "SEM",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Linux",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Pcb Design",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Python",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Fusion 360",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    }
+  ],
+  "target_titles_detailed": [],
+  "_audit_log": [
+    "retention_audit recovered 16 missing skills: ['Matlab', 'Verilog', 'Spice', 'FPGA', 'PL', 'Cleanroom', 'Autocad', 'RIE', 'Photolithography', 'Lithography', 'Solidworks', 'SEM', 'Linux', 'Pcb Design', 'Python', 'Fusion 360']"
+  ],
+  "experience": [],
+  "insights": {
+    "version": 1,
+    "overall_score": 44,
+    "metrics": {
+      "word_count": 150,
+      "bullet_count": 0,
+      "quantified_count": 0,
+      "quantified_pct": 0,
+      "action_verb_count": 0,
+      "action_verb_pct": 0,
+      "weak_phrase_count": 0,
+      "buzzword_count": 0,
+      "avg_bullet_len": 0,
+      "longest_bullet": 0,
+      "section_count": 7,
+      "sections": [
+        "education",
+        "experience",
+        "gpa: [x.xx] / 4.00",
+        "interests",
+        "objective",
+        "projects",
+        "technical skills"
+      ],
+      "skill_density": 10.7,
+      "skill_count": 16,
+      "reading_seconds": 38,
+      "repeated_verb": null,
+      "has_email": false,
+      "has_linkedin": false,
+      "has_github": false,
+      "has_phone": false,
+      "has_location": false
+    },
+    "strengths": [
+      "Clear 7-section structure",
+      "Skill density of 10.7 keywords per 100 words"
+    ],
+    "red_flags": [
+      "Only 0 bullets detected \u2013 most resumes need 8-15 to establish credibility",
+      "No LinkedIn URL detected at the top"
+    ],
+    "suggestions": [
+      "Add a LinkedIn URL to the contact line \u2013 non-negotiable for technical recruiting"
+    ],
+    "narrative": "The resume effectively conveys the candidate's clear education, experience, and skills, but falls short in quantifying achievements and utilizing bullets to establish credibility. The addition of a LinkedIn URL is crucial for verifiable identity verification. By focusing on enhancing action verbs and bullet points, the candidate can strengthen their ATS surface area and increase interview conversion rates.\n\nThe resume's skimmable structure and strong technical skills suggest a solid foundation, but further refinement will be necessary to reach industry benchmarks. With attention to quantified achievements and credible sections, the candidate can elevate their application and better compete in the job market.\n\nA key insight is that the applicant has identified relevant target fields (IC design and hardware engineering), which aligns with their skills and experience. Strengthening these connections will be essential for showcasing their unique value proposition.\n\nGiven its concise length, this resume could benefit from further optimization to maximize impact within a 6-15 second recruiter window.",
+    "verified_by": "ollama:llama3.2",
+    "verification_notes": "Added emphasis to key red flags and suggested solutions, while rewriting narrative to highlight remaining strengths and areas for improvement."
+  }
+}

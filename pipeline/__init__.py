@@ -41,11 +41,6 @@ from .providers import (  # noqa: F401
     BaseProvider, AnthropicProvider, DemoProvider, OllamaProvider, get_provider,
 )
 
-# Scrapers
-from .scrapers import (  # noqa: F401
-    JobBoardClient, JobSpyClient, IndeedClient, SimplifyJobsScraper,
-)
-
 # Phase functions & supporting classes
 from .phases import (  # noqa: F401
     phase1_ingest_resume,

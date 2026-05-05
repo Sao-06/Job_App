@@ -11,6 +11,7 @@ import re
 import smtplib
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout, as_completed
 from datetime import date, datetime, timedelta
 from email.mime.text import MIMEText
 from pathlib import Path
@@ -25,7 +26,9 @@ from .helpers import (infer_experience_level, infer_education_required,
 from .providers import BaseProvider
 from .resume import _build_demo_resume, _save_tailored_resume
 from .scrapers import (JobSpyClient, SimplifyJobsScraper, JobrightScraper,
-                       InternListScraper, sanitize_salary_field)
+                       InternListScraper, HimalayasApiScraper,
+                       RemotiveApiScraper, ArbeitnowApiScraper,
+                       sanitize_salary_field)
 
 
 # ── Phase 1 ────────────────────────────────────────────────────────────────────
@@ -170,6 +173,49 @@ def _cache_titles_overlap(meta, current_titles: list) -> bool:
     return bool(cached & requested)
 
 
+def _cache_is_fresh(meta, ttl_minutes: int = 30) -> bool:
+    if not meta:
+        return False
+    try:
+        created = float(meta.get("created_at", 0))
+    except (TypeError, ValueError):
+        return False
+    return (time.time() - created) <= max(1, ttl_minutes) * 60
+
+
+def _cache_matches(meta, *, titles: list, location: str, days_old: int,
+                   deep_search: bool, ttl_minutes: int) -> bool:
+    if not _cache_is_fresh(meta, ttl_minutes):
+        return False
+    if not _cache_titles_overlap(meta, titles):
+        return False
+    if str(meta.get("location", "")).strip().lower() != str(location or "").strip().lower():
+        return False
+    if int(meta.get("days_old", 0) or 0) != int(days_old or 0):
+        return False
+    return bool(meta.get("deep_search")) == bool(deep_search)
+
+
+def _save_jobs_cache(sample_file: Path, jobs: list, *, titles: list, location: str,
+                     days_old: int, deep_search: bool) -> None:
+    try:
+        RESOURCES_DIR.mkdir(exist_ok=True)
+        payload = {
+            "_meta": {
+                "created_at": time.time(),
+                "titles": titles,
+                "location": location,
+                "days_old": days_old,
+                "deep_search": bool(deep_search),
+            },
+            "jobs": jobs,
+        }
+        with open(sample_file, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+    except Exception as exc:
+        console.print(f"  [dim]Cache save skipped: {exc}[/dim]")
+
+
 def _resolve_effective_titles(job_titles, profile: dict):
     """Decide which titles will actually drive the scrape.
 
@@ -207,7 +253,11 @@ def phase2_discover_jobs(profile: dict, job_titles: list, location: str,
                           max_jobs: int = None,
                           days_old: int = 30,
                           education_filter=None,
-                          include_unknown_education: bool = False) -> list:
+                          include_unknown_education: bool = False,
+                          deep_search: bool = False,
+                          cache_ttl_minutes: int = 30,
+                          force_live: bool = False,
+                          offset: int = 0) -> list:
     console.print("\n[bold cyan]Phase 2 — Job Discovery & Search[/bold cyan]")
 
     job_titles, _titles_source = _resolve_effective_titles(job_titles, profile)
@@ -219,26 +269,29 @@ def phase2_discover_jobs(profile: dict, job_titles: list, location: str,
     console.print(f"  📅 Posted within last {days_old} days")
     cap = max_jobs or MAX_SCRAPE_JOBS
     console.print(f"  🔢 Max jobs cap: {cap}")
+    if offset > 0:
+        console.print(f"  ⏩ Offset: {offset}")
+    console.print(f"  Search depth: {'deep' if deep_search else 'quick'}")
     _t0 = time.time()
 
-    sample_file = RESOURCES_DIR / "sample_jobs.json"
-    if sample_file.exists():
-        sample_file.unlink()
-        console.print("  🗑️  Cleared cached jobs — fresh scrape starting")
+    sample_file = RESOURCES_DIR / ("sample_jobs_deep.json" if deep_search else "sample_jobs_quick.json")
     cached_jobs, cached_meta = _load_cached_jobs(sample_file)
-    cache_hit = cached_jobs is not None and _cache_titles_overlap(
-        cached_meta, job_titles,
+    cache_hit = not force_live and cached_jobs is not None and _cache_matches(
+        cached_meta, titles=job_titles, location=location, days_old=days_old,
+        deep_search=deep_search, ttl_minutes=cache_ttl_minutes,
     )
-    if cached_jobs is not None and not cache_hit:
+    if force_live:
+        console.print("  [yellow]⚡ Force-live enabled; bypassing cache.[/yellow]")
+    elif cached_jobs is not None and not cache_hit:
         cached_titles = (cached_meta or {}).get("titles") or []
         console.print(
             "  [yellow]♻️  Cache bypassed: stored titles "
-            f"{cached_titles or '(none)'} don't overlap with current "
-            f"{job_titles}; scraping live.[/yellow]"
+            f"{cached_titles or '(none)'} or filters do not match; scraping live.[/yellow]"
         )
+
     if cache_hit:
         jobs = cached_jobs
-        console.print(f"  📂 Loaded {len(jobs)} postings from resources/sample_jobs.json")
+        console.print(f"  📂 Loaded {len(jobs)} postings from cache")
         # Always re-infer metadata — stale cache values would otherwise
         # mask upstream keyword-list improvements.
         for job in jobs:
@@ -247,89 +300,106 @@ def phase2_discover_jobs(profile: dict, job_titles: list, location: str,
             job["citizenship_required"] = infer_citizenship_required(job)
             job["salary_range"]         = sanitize_salary_field(job.get("salary_range"))
             job.setdefault("source", "cache")
-        jobs = _filter_by_posting_age(jobs, days_old)
-        if education_filter:
-            before_edu = len(jobs)
-            jobs = filter_jobs_by_education(
-                jobs, education_filter, include_unknown=include_unknown_education,
-            )
-            from .helpers import (_last_education_dropped_unknown as _du,
-                                  _last_education_dropped_mismatch as _dm)
+    else:
+        jobs: list = []
+        api_cap = min(cap, 18)
+        fast_sources = [
+            ("Himalayas", lambda: HimalayasApiScraper().fetch_jobs(job_titles, max_jobs=api_cap)),
+            ("Remotive", lambda: RemotiveApiScraper().fetch_jobs(job_titles, max_jobs=api_cap)),
+            ("Arbeitnow", lambda: ArbeitnowApiScraper().fetch_jobs(job_titles, profile, max_jobs=api_cap)),
+        ]
+        
+        # Only use API sources if offset is 0, since they don't support pagination
+        if offset == 0:
+            ex = ThreadPoolExecutor(max_workers=len(fast_sources))
+            futures = {ex.submit(fn): name for name, fn in fast_sources}
+            try:
+                for fut in as_completed(futures, timeout=7):
+                    name = futures[fut]
+                    try:
+                        found = fut.result(timeout=1)
+                    except Exception as exc:
+                        console.print(f"  [yellow]{name}: skipped ({exc})[/yellow]")
+                        continue
+                    console.print(f"  ⚡ {name}: {len(found)} API jobs")
+                    jobs.extend(found)
+                    jobs = deduplicate_jobs(jobs)
+                    if not deep_search and len(jobs) >= min(cap, 10):
+                        console.print("  Fast API results ready; skipping slower HTML scrape")
+                        break
+            except FuturesTimeout:
+                console.print("  [yellow]Fast API sources timed out; using completed results[/yellow]")
+            finally:
+                ex.shutdown(wait=False, cancel_futures=True)
+
+        board_client = JobSpyClient()
+        primary_cap = cap if deep_search else min(cap, 16)
+        site_names = None if deep_search else ["indeed", "linkedin"]
+        max_queries = None if deep_search else 3
+        if deep_search or offset > 0 or len(jobs) < min(cap, 10):
+            with _CliSpinner(
+                messages=[
+                    "Scraping primary job boards...",
+                    "Still fetching job listings — network can be slow…",
+                    "Hang tight — collecting first matches...",
+                    "Almost done collecting postings…",
+                    "Deduplicating and filtering results…",
+                ],
+                interval=20,
+            ):
+                jobspy_jobs = board_client.fetch_jobs(
+                    job_titles, location, days=days_old, max_jobs=primary_cap,
+                    priority_titles=profile.get("target_titles") or [],
+                    site_names=site_names, max_queries=max_queries,
+                    offset=offset,
+                )
+            jobs = deduplicate_jobs(jobs + jobspy_jobs)
+
+        if not jobs:
             console.print(
-                f"  🎓 Education filter: {before_edu} → {len(jobs)} "
-                f"(dropped {_dm} mismatches, {_du} unknown)"
+                "  [yellow]⚠️  JobSpy returned 0 results — "
+                "falling back to demo job postings.[/yellow]"
             )
-        jobs = _sort_newest_first(jobs)
-        if cap and len(jobs) > cap:
-            jobs = jobs[:cap]
-            console.print(f"  ✂️  Capped cached list to {cap} jobs")
-        validate_job_urls(jobs)
-        from .helpers import (_last_url_broken as _ub,
-                              _last_url_reconstructed as _ur)
-        console.print(
-            f"  🔗 URL validation: {_ur} reconstructed, {_ub} broken "
-            f"(broken kept for manual review)"
-        )
-        console.print(f"  ✅ Returning {len(jobs)} cached jobs (newest first)")
-        console.print(f"  ⏱️  Phase 2 completed in [bold]{time.time() - _t0:.1f}s[/bold]")
-        return jobs
+            console.print("  🤖 Generating demo job postings...")
+            jobs = provider.generate_demo_jobs(profile, job_titles, location)
 
-    board_client = JobSpyClient()
-    with _CliSpinner(
-        messages=[
-            "Scraping LinkedIn, Indeed, Glassdoor, ZipRecruiter…",
-            "Still fetching job listings — network can be slow…",
-            "Hang tight — scraping multiple job boards…",
-            "Almost done collecting postings…",
-            "Deduplicating and filtering results…",
-        ],
-        interval=20,
-    ):
-        jobs = board_client.fetch_jobs(
-            job_titles, location, days=days_old, max_jobs=cap,
-            priority_titles=profile.get("target_titles") or [],
-        )
+        for job in jobs:
+            job["experience_level"]     = infer_experience_level(job)
+            job["education_required"]   = infer_education_required(job)
+            job["citizenship_required"] = infer_citizenship_required(job)
+            job["salary_range"]         = sanitize_salary_field(job.get("salary_range"))
+            job.setdefault("source", "jobspy")
 
-    if not jobs:
-        console.print(
-            "  [yellow]⚠️  JobSpy returned 0 results — "
-            "falling back to demo job postings.[/yellow]"
-        )
-        console.print("  🤖 Generating demo job postings...")
-        jobs = provider.generate_demo_jobs(profile, job_titles, location)
+        if use_simplify and deep_search:
+            existing_urls = {j.get("application_url") for j in jobs if j.get("application_url")}
 
-    for job in jobs:
-        job["experience_level"]     = infer_experience_level(job)
-        job["education_required"]   = infer_education_required(job)
-        job["citizenship_required"] = infer_citizenship_required(job)
-        job["salary_range"]         = sanitize_salary_field(job.get("salary_range"))
-        job.setdefault("source", "jobspy")
-
-    if use_simplify:
-        existing_urls = {j.get("application_url") for j in jobs if j.get("application_url")}
-
-        simplify_jobs = SimplifyJobsScraper().fetch_jobs()
-        console.print(f"  📋 SimplifyJobs: {len(simplify_jobs)} listings")
-        new_simplify = [j for j in simplify_jobs
-                        if j.get("application_url") not in existing_urls]
-        jobs = jobs + new_simplify
-        existing_urls |= {j["application_url"] for j in new_simplify
-                          if j.get("application_url")}
-
-        jobright_jobs = JobrightScraper().fetch_jobs()
-        console.print(f"  📋 Jobright: {len(jobright_jobs)} listings")
-        new_jr = [j for j in jobright_jobs
-                  if j.get("application_url") not in existing_urls]
-        jobs = jobs + new_jr
-        existing_urls |= {j["application_url"] for j in new_jr
-                          if j.get("application_url")}
-
-        internlist_jobs = InternListScraper().fetch_jobs()
-        if internlist_jobs:
-            console.print(f"  📋 InternList: {len(internlist_jobs)} listings")
-            new_il = [j for j in internlist_jobs
-                      if j.get("application_url") not in existing_urls]
-            jobs = jobs + new_il
+            scrapers = [
+                ("SimplifyJobs", lambda: SimplifyJobsScraper().fetch_jobs()),
+                ("Jobright", lambda: JobrightScraper().fetch_jobs()),
+                ("InternList", lambda: InternListScraper().fetch_jobs()),
+            ]
+            ex = ThreadPoolExecutor(max_workers=len(scrapers))
+            futures = {ex.submit(fn): name for name, fn in scrapers}
+            try:
+                completed = as_completed(futures, timeout=18)
+                for fut in completed:
+                    name = futures[fut]
+                    try:
+                        found = fut.result(timeout=1)
+                    except Exception as exc:
+                        console.print(f"  [yellow]{name}: skipped ({exc})[/yellow]")
+                        continue
+                    console.print(f"  📋 {name}: {len(found)} listings")
+                    new_jobs = [j for j in found if j.get("application_url") not in existing_urls]
+                    jobs = jobs + new_jobs
+                    existing_urls |= {j["application_url"] for j in new_jobs if j.get("application_url")}
+                    if cap and len(jobs) >= cap:
+                        console.print(f"  Reached {cap} jobs; stopping secondary merge")
+                        break
+            except FuturesTimeout:
+                console.print("  [yellow]Secondary boards timed out; using completed results[/yellow]")
+            finally:
+                ex.shutdown(wait=False, cancel_futures=True)
 
     before = len(jobs)
     jobs   = deduplicate_jobs(jobs)
@@ -339,16 +409,24 @@ def phase2_discover_jobs(profile: dict, job_titles: list, location: str,
         f"({before - after} duplicates merged)"
     )
 
-    jobs = _filter_by_posting_age(jobs, days_old)
+    # (rest of existing code)
+
+    # Relaxed age filter: if deep_search is on, look back 90 days instead of 30.
+    days_to_check = 90 if deep_search else days_old
+    jobs = _filter_by_posting_age(jobs, days_to_check)
+    console.print(f"  📅 After age filter ({days_to_check} days): {len(jobs)} jobs remain")
+    
+    # Relaxed education filter: only drop if it's explicitly a mismatch, not unknown.
     if education_filter:
         before_edu = len(jobs)
+        # We now keep 'unknown' education listings, only dropping explicit mismatches.
         jobs = filter_jobs_by_education(
-            jobs, education_filter, include_unknown=include_unknown_education,
+            jobs, education_filter, include_unknown=True,
         )
         from .helpers import (_last_education_dropped_unknown as _du,
                               _last_education_dropped_mismatch as _dm)
         console.print(
-            f"  🎓 Education filter: {before_edu} → {len(jobs)} "
+            f"  🎓 Education filter (kept unknown): {before_edu} → {len(jobs)} "
             f"(dropped {_dm} mismatches, {_du} unknown)"
         )
     jobs = _sort_newest_first(jobs)
@@ -366,6 +444,23 @@ def phase2_discover_jobs(profile: dict, job_titles: list, location: str,
         f"(broken kept for manual review)"
     )
 
+    if not jobs:
+        console.print(
+            "  [yellow]⚠️  All discovered jobs were filtered out (age/education) — "
+            "falling back to demo postings.[/yellow]"
+        )
+        jobs = provider.generate_demo_jobs(profile, job_titles, location)
+        # Re-apply basic metadata to demo jobs if needed
+        for job in jobs:
+            job.setdefault("experience_level", "internship")
+            job.setdefault("education_required", "unknown")
+            job.setdefault("citizenship_required", "unknown")
+            job.setdefault("source", "demo")
+
+    _save_jobs_cache(
+        sample_file, jobs, titles=job_titles, location=location,
+        days_old=days_old, deep_search=deep_search,
+    )
     console.print(f"  ⏱️  Phase 2 completed in [bold]{time.time() - _t0:.1f}s[/bold]")
     return jobs
 
@@ -378,7 +473,8 @@ def phase3_score_jobs(jobs: list, profile: dict, provider: BaseProvider,
                        education_filter=None,  # noqa: ARG001 — moved to phase 2; kept for back-compat
                        citizenship_filter: str = "all",
                        include_unknown_education: bool = False,  # noqa: ARG001
-                       llm_score_limit: int = 10) -> list:
+                       llm_score_limit: int = 10,
+                       fast_only: bool = False) -> list:
     """Score every job that survived Phase 2's filters.
 
     Returns the FULL list (not pruned by min_score) so the UI can show why
@@ -473,11 +569,13 @@ def phase3_score_jobs(jobs: list, profile: dict, provider: BaseProvider,
         job["_fast_score"] = _fast_score(job, profile)
 
     to_score.sort(key=lambda j: j["_fast_score"], reverse=True)
-    llm_score_count = min(llm_score_limit, len(to_score))
+    llm_score_count = 0 if fast_only else min(llm_score_limit, len(to_score))
     to_llm_score = to_score[:llm_score_count]
     to_skip = to_score[llm_score_count:]
 
-    if to_skip:
+    if fast_only:
+        console.print(f"  ⚡ Fast-only scoring enabled; skipping LLM for {len(to_score)} jobs")
+    elif to_skip:
         console.print(
             f"  ⚡ Fast-scoring all {len(to_score)} jobs; "
             f"LLM-scoring top {llm_score_count} only"
@@ -502,8 +600,12 @@ def phase3_score_jobs(jobs: list, profile: dict, provider: BaseProvider,
         merged = {**job}
         s = merged.get("_fast_score", 0)
         merged["score"] = s
-        merged["filter_status"] = "below_threshold"
-        merged["filter_reason"] = f"heuristic score {s}, skipped LLM (top {llm_score_count} only)"
+        if fast_only:
+            merged["filter_status"] = "passed" if s >= min_score else "below_threshold"
+            merged["filter_reason"] = "" if s >= min_score else f"heuristic score {s} < {min_score}"
+        else:
+            merged["filter_status"] = "below_threshold"
+            merged["filter_reason"] = f"heuristic score {s}, skipped LLM (top {llm_score_count} only)"
         scored.append(merged)
 
     # Combine: scored first (sorted by score), then pre-filtered for visibility.
@@ -757,7 +859,7 @@ def phase5_simulate_submission(job: dict, already_applied: set = None) -> dict:
 
 # ── Phase 6 ────────────────────────────────────────────────────────────────────
 
-def phase6_update_tracker(applications: list) -> Path:
+def phase6_update_tracker(applications: list, output_dir: Path = None) -> Path:
     try:
         import openpyxl
         from openpyxl.styles import PatternFill, Font, Alignment
@@ -769,7 +871,9 @@ def phase6_update_tracker(applications: list) -> Path:
     console.print("\n[bold cyan]Phase 6 — Excel Tracker[/bold cyan]")
 
     month        = datetime.now().strftime("%Y-%m")
-    tracker_path = OUTPUT_DIR / f"Job_Applications_Tracker_{month}.xlsx"
+    out_dir = output_dir or OUTPUT_DIR
+    out_dir.mkdir(parents=True, exist_ok=True)
+    tracker_path = out_dir / f"Job_Applications_Tracker_{month}.xlsx"
     wb           = openpyxl.Workbook()
     ws           = wb.active
     ws.title     = "Applications"
@@ -881,7 +985,7 @@ def _send_email_notification(report_text: str, n_applied: int) -> None:
 # ── Phase 7 ────────────────────────────────────────────────────────────────────
 
 def phase7_run_report(applications: list, tracker_path: Path,
-                       provider: BaseProvider) -> str:
+                       provider: BaseProvider, output_dir: Path = None) -> str:
     console.print("\n[bold cyan]Phase 7 — End-of-Run Report[/bold cyan]")
 
     applied_list = [a for a in applications if a.get("status") == "Applied"]
@@ -900,10 +1004,9 @@ def phase7_run_report(applications: list, tracker_path: Path,
 
     report_text = provider.generate_report(summary_data)
 
-    report_path = (
-        OUTPUT_DIR
-        / f"{datetime.now().strftime('%Y%m%d')}_job-application-run-report.md"
-    )
+    out_dir = output_dir or OUTPUT_DIR
+    out_dir.mkdir(parents=True, exist_ok=True)
+    report_path = out_dir / f"{datetime.now().strftime('%Y%m%d')}_job-application-run-report.md"
     with open(report_path, "w", encoding="utf-8") as f:
         f.write(f"# Job Application Run Report\n**Date:** {date.today().isoformat()}\n\n")
         f.write(report_text)

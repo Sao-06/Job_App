@@ -1,0 +1,77 @@
+{
+  "name": "",
+  "email": "",
+  "linkedin": "",
+  "github": "",
+  "phone": "",
+  "location": "",
+  "target_titles": [
+    "IC Design / VLSI",
+    "Analog / Mixed-Signal Design",
+    "Semiconductor Process / Device Engineering",
+    "Photonics / Optoelectronics Engineering",
+    "Nanofabrication / MEMS",
+    "FPGA / Digital Design",
+    "RF / Hardware Engineering",
+    "Embedded Systems / Firmware"
+  ],
+  "top_hard_skills": [],
+  "top_soft_skills": [],
+  "education": [
+    {
+      "degree": "",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    }
+  ],
+  "research_experience": [],
+  "work_experience": [],
+  "projects": [],
+  "resume_gaps": [],
+  "critical_analysis": "",
+  "top_hard_skills_detailed": [],
+  "target_titles_detailed": [
+    {
+      "title": "IC Design / VLSI",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "Analog / Mixed-Signal Design",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "Semiconductor Process / Device Engineering",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "Photonics / Optoelectronics Engineering",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "Nanofabrication / MEMS",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "FPGA / Digital Design",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "RF / Hardware Engineering",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "Embedded Systems / Firmware",
+      "family": "",
+      "evidence": ""
+    }
+  ],
+  "experience": []
+}

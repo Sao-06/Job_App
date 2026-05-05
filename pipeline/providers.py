@@ -86,9 +86,9 @@ def _build_rubric_result(job: dict, req_raw: float, industry_raw: float,
 class AnthropicProvider(BaseProvider):
     """Uses Claude Opus 4.6 via the Anthropic SDK."""
 
-    def __init__(self):
+    def __init__(self, api_key: str = None):
         import anthropic as _anthropic
-        self.client = _anthropic.Anthropic()
+        self.client = _anthropic.Anthropic(api_key=api_key)
         self.model = "claude-opus-4-6"
 
     def _tool_call(self, tool_def: dict, prompt: str,
@@ -119,6 +119,8 @@ class AnthropicProvider(BaseProvider):
                     "name":     {"type": "string"},
                     "email":    {"type": "string"},
                     "linkedin": {"type": "string"},
+                    "github":   {"type": "string"},
+                    "phone":    {"type": "string"},
                     "location": {"type": "string"},
                     "target_titles": {
                         "type": "array",
@@ -229,8 +231,12 @@ class AnthropicProvider(BaseProvider):
                         }},
                     },
                     "resume_gaps": {"type": "array", "items": {"type": "string"}},
+                    "critical_analysis": {
+                        "type": "string",
+                        "description": "A 3-4 paragraph brutally honest and detailed critique of the resume. Analyze: 1. Impact & Quantified Achievements (or lack thereof), 2. Skill Density vs. Industry Standards, 3. Structural Clarity for ATS and Human Reviewers, 4. Specific high-value action items to land top-tier roles."
+                    },
                 },
-                "required": ["name", "top_hard_skills", "top_soft_skills", "target_titles"],
+                "required": ["name", "top_hard_skills", "top_soft_skills", "target_titles", "critical_analysis"],
             },
         }
 
@@ -644,9 +650,12 @@ class DemoProvider(BaseProvider):
         """
         known = {
             "experience", "work experience", "professional experience",
+            "research experience", "research", "lab experience",
             "projects", "personal projects", "academic projects",
             "education", "skills", "technical skills", "core competencies",
-            "objective", "summary", "interests", "certifications", "awards",
+            "coursework", "relevant coursework", "publications",
+            "objective", "summary", "profile", "interests",
+            "certifications", "awards",
         }
         sections: dict = {"header": []}
         current = "header"
@@ -745,6 +754,42 @@ class DemoProvider(BaseProvider):
             entries.append(entry)
         return entries
 
+    def _skills_from_text(self, text: str, limit: int = 40) -> list:
+        text_lower = text.lower()
+        found = [s for s in self.SKILL_KEYWORDS if s.lower() in text_lower]
+        skill_display = {
+            "verilog": "Verilog", "vhdl": "VHDL", "fpga": "FPGA", "spice": "SPICE",
+            "matlab": "MATLAB", "python": "Python", "java": "Java", "latex": "LaTeX",
+            "photolithography": "Photolithography", "cleanroom": "Cleanroom Processes",
+            "pld": "Pulsed Laser Deposition", "cmos": "CMOS", "pcb": "PCB Design",
+            "onshape": "OnShape", "fusion360": "Fusion360", "solidworks": "SolidWorks",
+            "cad": "CAD", "linux": "Linux", "c++": "C++",
+            "pulsed laser deposition": "Pulsed Laser Deposition",
+            "thin film": "Thin Film Deposition", "sem": "SEM", "afm": "AFM",
+            "digital design": "Digital Design", "analog design": "Analog Design",
+            "mixed-signal": "Mixed-Signal",
+        }
+        out = []
+        seen = set()
+        for skill in found:
+            label = skill_display.get(skill.lower(), skill.title())
+            if label.lower() not in seen:
+                seen.add(label.lower())
+                out.append(label)
+        return out[:limit]
+
+    @staticmethod
+    def _summary_from_profile(name: str, titles: list, skills: list, experience: list, research: list) -> str:
+        role = titles[0] if titles else "engineering candidate"
+        skill_text = ", ".join(skills[:6])
+        count = len(experience or []) + len(research or [])
+        base = f"{name} is a {role}"
+        if skill_text:
+            base += f" with hands-on experience across {skill_text}"
+        if count:
+            base += f" and {count} structured resume role(s) extracted for job matching"
+        return base + "."
+
     def extract_profile(self, resume_text: str, preferred_titles: list = None) -> dict:
         text_lower = resume_text.lower()
 
@@ -754,19 +799,13 @@ class DemoProvider(BaseProvider):
         linkedin_match = re.search(r'linkedin\.com/in/[\w-]+', resume_text, re.I)
         linkedin = linkedin_match.group() if linkedin_match else ""
 
-        found_skills = [s for s in self.SKILL_KEYWORDS if s in text_lower]
-        skill_display = {
-            "verilog": "Verilog", "vhdl": "VHDL", "fpga": "FPGA", "spice": "SPICE",
-            "matlab": "MATLAB", "python": "Python", "java": "Java", "latex": "LaTeX",
-            "photolithography": "Photolithography", "cleanroom": "Cleanroom Processes",
-            "pld": "Pulsed Laser Deposition", "cmos": "CMOS", "pcb": "PCB Design",
-            "onshape": "OnShape", "fusion360": "Fusion360", "solidworks": "SolidWorks",
-            "cad": "CAD", "linux": "Linux", "c++": "C++",
-            "pulsed laser deposition": "Pulsed Laser Deposition",
-            "thin film": "Thin Film Deposition", "sem": "SEM",
-            "digital design": "Digital Design", "mixed-signal": "Mixed-Signal",
-        }
-        hard_skills = [skill_display.get(s, s.title()) for s in found_skills[:10]]
+        github_match = re.search(r'github\.com/[\w-]+', resume_text, re.I)
+        github = github_match.group() if github_match else ""
+
+        phone_match = re.search(r'(\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}', resume_text)
+        phone = phone_match.group() if phone_match else ""
+
+        hard_skills = self._skills_from_text(resume_text)
         if not hard_skills:
             hard_skills = ["MATLAB", "Python", "Verilog", "FPGA", "SPICE"]
 
@@ -814,24 +853,42 @@ class DemoProvider(BaseProvider):
         experience = self._parse_experience_block(
             _grab("experience", "work experience", "professional experience")
         )
+        research = self._parse_experience_block(
+            _grab("research experience", "research", "lab experience")
+        )
         projects = self._parse_projects_block(
             _grab("projects", "personal projects", "academic projects")
         )
+        for project in projects:
+            project["skills_used"] = self._skills_from_text(
+                f"{project.get('name', '')} {project.get('description', '')}",
+                limit=10,
+            )
         education_parsed = self._parse_education_block(_grab("education"))
-        # Fallback education: leave empty rather than injecting hardcoded values.
-        # The audit layer and Phase 3 tolerate an empty education list.
+        summary = self._summary_from_profile(name, target_titles, hard_skills, experience, research)
+        critical = (
+            "Impact: add numeric outcomes to the strongest bullets wherever possible. "
+            "Skill density: the parser found the technical keywords listed in hard skills; add any missing tools, instruments, and methods explicitly. "
+            "ATS structure: keep Education, Experience, Projects, and Skills as clear headings. "
+            "Next actions: add LinkedIn, work authorization, target salary, and target titles to improve matching and autofill."
+        )
 
         return {
-            "name": name, "email": email, "linkedin": linkedin,
+            "name": name, "email": email, "linkedin": linkedin, "github": github, "phone": phone,
             "location": location,
+            "summary": summary,
             "target_titles": target_titles,
             "top_hard_skills": hard_skills,
             "top_soft_skills": ["Teamwork", "Problem-solving", "Communication",
                                  "Attention to detail", "Time management"],
             "education":  education_parsed,
             "experience": experience,
+            "work_experience": experience,
+            "research": research,
+            "research_experience": research,
             "projects":   projects,
             "resume_gaps": gaps,
+            "critical_analysis": critical,
         }
 
     def score_job(self, job: dict, profile: dict) -> dict:
@@ -1046,13 +1103,15 @@ class OllamaProvider(BaseProvider):
             pref_hint = f"\nPreferences: {', '.join(preferred_titles)}"
         prompt = (
             "Extract resume info. Return ONLY a JSON object with these fields:\n"
-            '{"name": str, "email": str, "linkedin": str, "location": str,\n'
+            '{"name": str, "email": str, "linkedin": str, "github": str, "phone": str, "location": str,\n'
             '"target_titles": [str], "top_hard_skills": [str], "top_soft_skills": [str],\n'
-            '"education": [{"degree": str, "institution": str}],\n'
-            '"research_experience": [{"title": str, "company": str, "bullets": [str]}],\n'
-            '"work_experience": [{"title": str, "company": str, "bullets": [str]}],\n'
+            '"education": [{"degree": str, "institution": str, "year": str, "gpa": str}],\n'
+            '"research_experience": [{"title": str, "company": str, "dates": str, "bullets": [str]}],\n'
+            '"work_experience": [{"title": str, "company": str, "dates": str, "bullets": [str]}],\n'
             '"projects": [{"name": str, "description": str, "skills_used": [str]}],\n'
-            '"resume_gaps": [str]}\n\n'
+            '"resume_gaps": [str],\n'
+            '"critical_analysis": str}\n\n'
+            "critical_analysis: A 3-4 paragraph brutally honest and detailed critique of the resume focusing on: 1. Impact & Quantified Achievements, 2. Skill Density, 3. Structural Clarity for ATS/Human, 4. Specific high-value action items.\n"
             f"Target title families (extract titles matching these): {', '.join(DOMAIN_TITLE_FAMILIES)}\n"
             "Hard skills: ONLY technical tools, languages, equipment. No soft skills here.\n"
             "Soft skills: ONLY behavioral (communication, teamwork, etc.).\n"

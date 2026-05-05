@@ -120,17 +120,35 @@ def _normalise_pdf_text(raw: str) -> str:
 
 
 def _extract_pdf_text(path: Path) -> tuple[str, str]:
-    """Try three PDF libraries in order; return (text, library_name).
+    """Try four PDF libraries in order; return (text, library_name).
 
     Fallback chain:
-      1. pdfplumber  — best layout awareness; recommended.
-      2. pypdf       — lightweight; handles encrypted-but-readable PDFs.
-      3. pdfminer.six — most permissive text extraction, lowest structure.
+      1. pypdfium2   — best layout & performance; recommended.
+      2. pdfplumber  — fallback layout awareness.
+      3. pypdf       — lightweight; handles encrypted-but-readable PDFs.
+      4. pdfminer.six — most permissive text extraction.
 
     Returns ("", "") when all libraries fail or produce empty output.
     """
 
-    # ── 1. pdfplumber ────────────────────────────────────────────────────────
+    # ── 1. pypdfium2 (high performance, good layout) ─────────────────────────
+    try:
+        import pypdfium2
+        pdf = pypdfium2.PdfDocument(str(path))
+        pages = []
+        for page in pdf:
+            textpage = page.get_textpage()
+            pages.append(textpage.get_text_range() or "")
+        pdf.close()
+        text = _normalise_pdf_text("\n".join(pages))
+        if text.strip():
+            return text, "pypdfium2"
+    except ImportError:
+        pass
+    except Exception as e:
+        console.print(f"  [yellow]pypdfium2 failed ({e}) — trying pdfplumber[/yellow]")
+
+    # ── 2. pdfplumber ────────────────────────────────────────────────────────
     try:
         import pdfplumber
         with pdfplumber.open(str(path)) as pdf:
@@ -151,11 +169,12 @@ def _extract_pdf_text(path: Path) -> tuple[str, str]:
     except Exception as e:
         console.print(f"  [yellow]pdfplumber failed ({e}) — trying pypdf[/yellow]")
 
-    # ── 2. pypdf ─────────────────────────────────────────────────────────────
+    # ── 3. pypdf ─────────────────────────────────────────────────────────────
     try:
         import pypdf  # pypdf >= 3.x (successor to PyPDF2)
-        reader = pypdf.PdfReader(str(path))
-        pages = [page.extract_text() or "" for page in reader.pages]
+        with open(str(path), "rb") as f:
+            reader = pypdf.PdfReader(f)
+            pages = [page.extract_text() or "" for page in reader.pages]
         text = _normalise_pdf_text("\n".join(pages))
         if text.strip():
             return text, "pypdf"
@@ -163,8 +182,9 @@ def _extract_pdf_text(path: Path) -> tuple[str, str]:
         # Try the legacy PyPDF2 name before giving up on this tier.
         try:
             import PyPDF2
-            reader = PyPDF2.PdfReader(str(path))
-            pages = [page.extract_text() or "" for page in reader.pages]
+            with open(str(path), "rb") as f:
+                reader = PyPDF2.PdfReader(f)
+                pages = [page.extract_text() or "" for page in reader.pages]
             text = _normalise_pdf_text("\n".join(pages))
             if text.strip():
                 return text, "PyPDF2"
@@ -217,7 +237,11 @@ def _read_resume(path: Path) -> tuple[str, str | None]:
         return latex_to_plaintext(raw), raw
 
     if suffix in (".txt", ".md"):
-        raw = path.read_text(encoding="utf-8")
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            raw = path.read_text(encoding="utf-8", errors="replace")
+        
         if detect_latex(raw):
             console.print(
                 "  [cyan]LaTeX content detected — converting to plain text for parsing.[/cyan]"
@@ -570,7 +594,9 @@ def _render_resume_pdf_reportlab(pdf_path: Path, profile: dict,
 
 def _save_tailored_resume(job: dict, tailored: dict, profile: dict = None,
                           latex_source: str = None,
-                          resume_text: str = "") -> dict:
+                          resume_text: str = "",
+                          output_dir: Path = None,
+                          owner_name: str = None) -> dict:
     """Write the tailored resume to OUTPUT_DIR and return file metadata.
 
     Always produces BOTH a .tex source and a .pdf (when a PDF backend is
@@ -584,15 +610,17 @@ def _save_tailored_resume(job: dict, tailored: dict, profile: dict = None,
          from the structured profile and render the PDF directly via reportlab.
     """
     safe = lambda s: re.sub(r"[^a-zA-Z0-9_\-]", "_", s)
+    name = owner_name or OWNER_NAME
     base = (
-        f"{safe(OWNER_NAME)}_Resume_{safe(job.get('company', ''))}"
+        f"{safe(name)}_Resume_{safe(job.get('company', ''))}"
         f"_{safe(job.get('title', ''))}"
     )
     profile = profile or {}
 
-    OUTPUT_DIR.mkdir(exist_ok=True)
-    tex_path = OUTPUT_DIR / (base + ".tex")
-    pdf_path = OUTPUT_DIR / (base + ".pdf")
+    out_dir = output_dir or OUTPUT_DIR
+    out_dir.mkdir(parents=True, exist_ok=True)
+    tex_path = out_dir / (base + ".tex")
+    pdf_path = out_dir / (base + ".pdf")
 
     # ── 1. Resolve LaTeX source ───────────────────────────────────────────────
     if latex_source:

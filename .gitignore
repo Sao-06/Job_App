@@ -8,3 +8,5 @@ dist/
 build/
 .venv/
 venv/
+output/jobs_ai_sessions.sqlite3*
+output/sessions/

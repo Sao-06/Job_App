@@ -5,13 +5,19 @@ Job-board scraping clients: JobSpy (LinkedIn/Indeed/Glassdoor/ZipRecruiter),
 a legacy Indeed stub, and the SimplifyJobs GitHub README scraper.
 """
 
+import json
 import re
-from datetime import date
+import urllib.parse
+import urllib.request
+from datetime import date, datetime
+import db
 
 from .config import console, MAX_SCRAPE_JOBS
 from .helpers import (infer_experience_level, infer_education_required,
                       infer_citizenship_required, deduplicate_jobs,
                       clean_location_for_glassdoor)
+
+# ... (rest of the file structure remains the same, update the methods below)
 
 
 # ── Query + salary helpers ────────────────────────────────────────────────────
@@ -100,7 +106,9 @@ class JobSpyClient(JobBoardClient):
     PRIORITY_WEIGHT = 2  # Phase-1 suggested titles get this many quota shares
 
     def fetch_jobs(self, titles: list, location: str, days: int = 14,
-                   max_jobs: int = None, priority_titles: list = None) -> list:
+                   max_jobs: int = None, priority_titles: list = None,
+                   site_names: list = None, max_queries: int = None,
+                   offset: int = 0) -> list:
         try:
             from jobspy import scrape_jobs
         except ImportError:
@@ -111,6 +119,7 @@ class JobSpyClient(JobBoardClient):
             return []
 
         cap = max_jobs or MAX_SCRAPE_JOBS
+        site_names = site_names or self.SITE_NAMES
 
         # Relevance fix: drop the bare "Engineer" placeholder and expand each
         # remaining Phase-1 title into specific search variants. Phase-1
@@ -141,6 +150,8 @@ class JobSpyClient(JobBoardClient):
                 expanded.append((q, weight))
         if not expanded:
             expanded = [(t, 1) for t in (cleaned_titles or titles)]
+        if max_queries:
+            expanded = expanded[:max_queries]
 
         # Weighted quota distribution: each share = cap / total_weight.
         total_weight = sum(w for _, w in expanded) or 1
@@ -156,22 +167,23 @@ class JobSpyClient(JobBoardClient):
             results_wanted = max(1, min(quota, remaining))
             try:
                 df = scrape_jobs(
-                    site_name=self.SITE_NAMES,
+                    site_name=site_names,
                     search_term=query,
                     location=location,
                     results_wanted=results_wanted,
                     hours_old=days * 24,
                     country_indeed="USA",
+                    offset=offset,
                 )
                 all_raw.extend(df.to_dict("records"))
-                console.print(f"  📡 '{query}': {len(df)} results scraped (quota {quota})")
+                console.print(f"  📡 '{query}': {len(df)} results scraped (quota {quota}, offset {offset})")
             except Exception as e:
                 msg = str(e).lower()
                 # Glassdoor "location not parsed" → retry without Glassdoor,
                 # using a normalized location string.
                 if "location not parsed" in msg or "glassdoor" in msg:
                     fallback_loc = clean_location_for_glassdoor(location)
-                    fallback_sites = [s for s in self.SITE_NAMES if s != "glassdoor"]
+                    fallback_sites = [s for s in site_names if s != "glassdoor"]
                     console.print(
                         f"  [yellow]Glassdoor parse failure for '{query}' — "
                         f"retrying without Glassdoor (loc={fallback_loc!r})[/yellow]"
@@ -184,6 +196,7 @@ class JobSpyClient(JobBoardClient):
                             results_wanted=results_wanted,
                             hours_old=days * 24,
                             country_indeed="USA",
+                            offset=offset,
                         )
                         all_raw.extend(df.to_dict("records"))
                         console.print(
@@ -274,24 +287,202 @@ def _strip_html(text: str) -> str:
 
 def _make_job(*, company, title, location, url, platform, source,
               posted=None) -> dict:
-    job_stub = {"title": title, "description": "", "requirements": []}
-    return {
-        "id":                   f"{source}_{abs(hash(company + title + url)) % 100000}",
-        "title":                title,
-        "company":              company,
-        "location":             location,
-        "remote":               "remote" in location.lower(),
-        "posted_date":          posted or date.today().isoformat(),
-        "description":          f"{title} at {company}.",
-        "requirements":         [],
-        "salary_range":         "Unknown",
-        "application_url":      url,
-        "platform":             platform,
-        "source":               source,
-        "experience_level":     "internship",
-        "education_required":   "unknown",
-        "citizenship_required": infer_citizenship_required(job_stub),
+    import hashlib
+    uid = hashlib.md5(f"{company}{title}{url}".encode()).hexdigest()[:10]
+    db.upsert_job(company, title, location, url, "", 0)
+    job = {
+        "id":              uid,
+        "title":           title,
+        "company":         company,
+        "location":        location,
+        "remote":          "remote" in location.lower(),
+        "posted_date":     posted or date.today().isoformat(),
+        "description":     "",
+        "requirements":    [],
+        "salary_range":    "Unknown",
+        "application_url": url,
+        "platform":        platform,
+        "source":          source,
     }
+    job["experience_level"]     = infer_experience_level(job)
+    job["education_required"]   = infer_education_required(job)
+    job["citizenship_required"] = infer_citizenship_required(job)
+    return job
+
+
+def _api_job(*, company, title, location, url, platform, source,
+             description="", posted=None, salary="Unknown", remote=True,
+             tags=None) -> dict:
+    import hashlib
+    uid = hashlib.md5(f"{company}{title}{url}".encode()).hexdigest()[:10]
+    db.upsert_job(company, title, location, url, ", ".join(tags) if tags else "", 0)
+    job = {
+        "id":              uid,
+        "title":           title,
+        "company":         company,
+        "location":        location,
+        "remote":          remote or "remote" in location.lower(),
+        "posted_date":     posted or date.today().isoformat(),
+        "description":     description,
+        "requirements":    list(tags or []),
+        "salary_range":    salary or "Unknown",
+        "application_url": url,
+        "platform":        platform,
+        "source":          source,
+    }
+    job["experience_level"]     = infer_experience_level(job)
+    job["education_required"]   = infer_education_required(job)
+    job["citizenship_required"] = infer_citizenship_required(job)
+    return job
+
+
+def _json_url(url: str, timeout: int = 5):
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "JobsAI/1.0 (+https://github.com/Sao-06/Job_App)",
+            "Accept": "application/json",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8", errors="replace"))
+
+
+def _norm_posted(value) -> str:
+    if not value:
+        return date.today().isoformat()
+    if isinstance(value, (int, float)):
+        try:
+            if value > 10_000_000_000:
+                value = value / 1000
+            return datetime.fromtimestamp(value).date().isoformat()
+        except Exception:
+            return date.today().isoformat()
+    s = str(value)
+    if s.isdigit():
+        try:
+            n = int(s)
+            if n > 10_000_000_000:
+                n = n / 1000
+            return datetime.fromtimestamp(n).date().isoformat()
+        except Exception:
+            pass
+    return s[:10]
+
+
+class HimalayasApiScraper:
+    """Fast no-key JSON search API for remote jobs."""
+
+    BASE = "https://himalayas.app/jobs/api/search"
+
+    def fetch_jobs(self, titles: list, max_jobs: int = 12) -> list:
+        jobs: list = []
+        for title in [t for t in titles if t][:3]:
+            qs = urllib.parse.urlencode({"q": title, "country": "US"})
+            try:
+                data = _json_url(f"{self.BASE}?{qs}", timeout=5)
+            except Exception as exc:
+                console.print(f"  [yellow]Himalayas API failed for '{title}': {exc}[/yellow]")
+                continue
+            for item in data.get("jobs", [])[:max_jobs]:
+                salary = "Unknown"
+                lo, hi = item.get("minSalary"), item.get("maxSalary")
+                if lo and hi:
+                    salary = f"${float(lo):,.0f}-${float(hi):,.0f}/yr"
+                locs = item.get("locationRestrictions") or []
+                loc_names = [
+                    (loc.get("name") if isinstance(loc, dict) else str(loc))
+                    for loc in locs
+                    if loc
+                ]
+                jobs.append(_api_job(
+                    company=item.get("companyName") or item.get("company") or "",
+                    title=item.get("title") or "",
+                    location=", ".join(loc_names) or "Remote",
+                    url=item.get("applicationLink") or item.get("url") or "",
+                    platform="Himalayas",
+                    source="himalayas",
+                    description=item.get("description") or "",
+                    posted=_norm_posted(item.get("pubDate") or item.get("postedAt")),
+                    salary=salary,
+                    tags=item.get("skills") or item.get("categories") or [],
+                ))
+            if len(jobs) >= max_jobs:
+                break
+        return deduplicate_jobs([j for j in jobs if j.get("application_url")])[:max_jobs]
+
+
+class RemotiveApiScraper:
+    """Fast no-key JSON API for remote jobs."""
+
+    BASE = "https://remotive.com/api/remote-jobs"
+
+    def fetch_jobs(self, titles: list, max_jobs: int = 12) -> list:
+        jobs: list = []
+        for title in [t for t in titles if t][:3]:
+            qs = urllib.parse.urlencode({"search": title})
+            try:
+                data = _json_url(f"{self.BASE}?{qs}", timeout=5)
+            except Exception as exc:
+                console.print(f"  [yellow]Remotive API failed for '{title}': {exc}[/yellow]")
+                continue
+            for item in data.get("jobs", [])[:max_jobs]:
+                jobs.append(_api_job(
+                    company=item.get("company_name") or "",
+                    title=item.get("title") or "",
+                    location=item.get("candidate_required_location") or "Remote",
+                    url=item.get("url") or "",
+                    platform="Remotive",
+                    source="remotive",
+                    description=item.get("description") or "",
+                    posted=_norm_posted(item.get("publication_date")),
+                    salary=item.get("salary") or "Unknown",
+                    tags=item.get("tags") or [],
+                ))
+            if len(jobs) >= max_jobs:
+                break
+        return deduplicate_jobs([j for j in jobs if j.get("application_url")])[:max_jobs]
+
+
+class ArbeitnowApiScraper:
+    """Fast no-key JSON API; filtered locally by target title and skills."""
+
+    URL = "https://www.arbeitnow.com/api/job-board-api"
+
+    def fetch_jobs(self, titles: list, profile: dict = None, max_jobs: int = 12) -> list:
+        try:
+            data = _json_url(self.URL, timeout=5)
+        except Exception as exc:
+            console.print(f"  [yellow]Arbeitnow API failed: {exc}[/yellow]")
+            return []
+        items = data.get("data") if isinstance(data, dict) else data
+        needles = {str(t).lower() for t in (titles or []) if t}
+        needles |= {str(s).lower() for s in ((profile or {}).get("top_hard_skills") or [])[:8] if s}
+        jobs: list = []
+        for item in items or []:
+            hay = " ".join([
+                str(item.get("title") or ""),
+                " ".join(str(t) for t in (item.get("tags") or [])),
+                str(item.get("description") or ""),
+            ]).lower()
+            if needles and not any(n in hay for n in needles):
+                continue
+            jobs.append(_api_job(
+                company=item.get("company_name") or "",
+                title=item.get("title") or "",
+                location=item.get("location") or "Remote",
+                url=item.get("url") or item.get("slug") or "",
+                platform="Arbeitnow",
+                source="arbeitnow",
+                description=item.get("description") or "",
+                posted=_norm_posted(item.get("created_at")),
+                salary="Unknown",
+                remote=item.get("remote", True),
+                tags=item.get("tags") or [],
+            ))
+            if len(jobs) >= max_jobs:
+                break
+        return deduplicate_jobs([j for j in jobs if j.get("application_url")])[:max_jobs]
 
 
 # ── SimplifyJobs (GitHub README HTML table) ────────────────────────────────────

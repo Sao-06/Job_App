@@ -1,0 +1,144 @@
+{
+  "name": "",
+  "email": "",
+  "linkedin": "",
+  "github": "",
+  "phone": "",
+  "location": "",
+  "target_titles": [],
+  "top_hard_skills": [
+    "MATLAB",
+    "Python",
+    "Verilog",
+    "SPICE",
+    "Photolithography",
+    "Cleanroom Processes",
+    "SolidWorks",
+    "Fusion 360",
+    "AutoCAD",
+    "FPGA",
+    "PCB Design",
+    "Linux",
+    "RIE",
+    "PL",
+    "SEM"
+  ],
+  "top_soft_skills": [
+    "communication",
+    "teamwork",
+    "adaptability"
+  ],
+  "education": [
+    {
+      "degree": "",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    }
+  ],
+  "research_experience": [],
+  "work_experience": [
+    {
+      "title": "",
+      "company": "",
+      "dates": "",
+      "bullets": []
+    }
+  ],
+  "projects": [
+    {
+      "name": "",
+      "description": "",
+      "skills_used": []
+    }
+  ],
+  "top_hard_skills_detailed": [
+    {
+      "skill": "MATLAB",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Python",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Verilog",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "SPICE",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Photolithography",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Cleanroom Processes",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "SolidWorks",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Fusion 360",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "AutoCAD",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "FPGA",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "PCB Design",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Linux",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "RIE",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "PL",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "SEM",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    }
+  ],
+  "target_titles_detailed": [],
+  "_audit_log": [
+    "retention_audit recovered 3 missing skills: ['RIE', 'PL', 'SEM']"
+  ],
+  "experience": [
+    {
+      "title": "",
+      "company": "",
+      "dates": "",
+      "bullets": []
+    }
+  ]
+}

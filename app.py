@@ -19,11 +19,7 @@ import sys
 import threading
 import time
 import uuid
-<<<<<<< HEAD
-from collections.abc import MutableMapping
-=======
 import contextvars
->>>>>>> 77a1a1157d53d108d83f9b01d994d4c49a1ef2df
 from datetime import datetime
 from pathlib import Path
 from collections.abc import MutableMapping
@@ -42,23 +38,6 @@ from pipeline.config import OUTPUT_DIR, RESOURCES_DIR
 
 # Auth helpers — imported lazily so missing bcrypt doesn't crash the server
 try:
-<<<<<<< HEAD
-    from auth_utils import hash_password, verify_password
-except ImportError:
-    def hash_password(pw): return pw
-    def verify_password(pw, h): return pw == h
-
-# Session and user store backed by SQLite
-try:
-    from session_store import SQLiteSessionStore
-    _session_store = SQLiteSessionStore(
-        OUTPUT_DIR / "jobs_ai_sessions.sqlite3",
-        default_state_factory=lambda: {},
-    )
-except Exception:
-    _session_store = None
-_user_store = _session_store
-=======
     from auth_utils import (
         get_google_auth_url,
         hash_password,
@@ -76,7 +55,6 @@ except ImportError:
         raise RuntimeError("Google OAuth dependencies are not installed")
 
 from session_store import SQLiteSessionStore
->>>>>>> 77a1a1157d53d108d83f9b01d994d4c49a1ef2df
 from pipeline.phases import (
     phase1_ingest_resume,
     phase2_discover_jobs,
@@ -90,15 +68,11 @@ from pipeline.phases import (
 from pipeline.resume import _build_demo_resume, _read_resume, _save_tailored_resume
 
 app = FastAPI(title="Jobs AI")
-<<<<<<< HEAD
-_STATE_COOKIE = "jobs_ai_session_id"
 _DEV_IMPERSONATE_COOKIE = "dev_impersonate_id"
-=======
 _AUTH_COOKIE = "jobs_ai_auth"
 _STATE_COOKIE = "jobs_ai_session"
 _SESSION_SWITCH_HEADER = "x-jobs-ai-session-switch"
 _AUTH_SESSIONS: dict[str, dict] = {}
->>>>>>> 77a1a1157d53d108d83f9b01d994d4c49a1ef2df
 
 # ── Serve frontend ─────────────────────────────────────────────────────────────
 
@@ -132,11 +106,8 @@ def serve_output_file(path: str):
         raise HTTPException(404, "File not found")
     return FileResponse(p)
 
-<<<<<<< HEAD
 # ── Session state ─────────────────────────────────────────────────────────────
 
-=======
->>>>>>> 77a1a1157d53d108d83f9b01d994d4c49a1ef2df
 def _default_state() -> dict:
     return {
     # LLM backend
@@ -160,11 +131,11 @@ def _default_state() -> dict:
     "citizenship_filter": "exclude_required",
     "use_simplify": True,
     "llm_score_limit": 10,
-    # Resume — scalar fields kept as the "active primary" copy for pipeline use
+    # Resume ? scalar fields kept as the "active primary" copy for pipeline use
     "resume_text": None,
     "latex_source": None,
     "resume_filename": None,
-    # Multi-resume store — list of resume records (see _new_resume_record)
+    # Multi-resume store ? list of resume records (see _new_resume_record)
     "resumes": [],
     # Set of resume IDs currently being extracted in background threads
     "extracting_ids": set(),
@@ -189,30 +160,14 @@ def _default_state() -> dict:
     "feedback": [],
 }
 
-<<<<<<< HEAD
 
-class _SessionStateProxy(MutableMapping):
-    def __init__(self):
-        self._local = threading.local()
-        self._fallback = _default_state()
-
-    def bind(self, state: dict, session_id: str | None = None):
-        self._local.state = state
-        self._local.session_id = session_id
-
-    def current(self) -> dict:
-        return getattr(self._local, "state", self._fallback)
-
-    def session_id(self) -> str | None:
-        return getattr(self._local, "session_id", None)
-=======
 class _SessionStateProxy(MutableMapping):
     def __init__(self):
         self._fallback = _default_state()
         self._state_var = contextvars.ContextVar("jobs_ai_state", default=None)
         self._session_var = contextvars.ContextVar("jobs_ai_session_id", default=None)
 
-    def bind(self, state: dict, session_id: str = None):
+    def bind(self, state: dict, session_id: str | None = None):
         self._state_var.set(state)
         self._session_var.set(session_id)
 
@@ -221,7 +176,6 @@ class _SessionStateProxy(MutableMapping):
 
     def session_id(self) -> str | None:
         return self._session_var.get()
->>>>>>> 77a1a1157d53d108d83f9b01d994d4c49a1ef2df
 
     def __getitem__(self, key):
         return self.current()[key]
@@ -238,12 +192,17 @@ class _SessionStateProxy(MutableMapping):
     def __len__(self):
         return len(self.current())
 
-<<<<<<< HEAD
 
 _S = _SessionStateProxy()
 
-if _session_store is not None:
-    _session_store.default_state_factory = _default_state
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+_store_db = OUTPUT_DIR / "jobs_ai_sessions.sqlite3"
+try:
+    _session_store = SQLiteSessionStore(_store_db, default_state_factory=_default_state)
+except Exception:
+    _session_store = None
+_user_store = _session_store
+_memory_sessions: dict[str, dict] = {}
 
 
 def _is_local_request(request: Request) -> bool:
@@ -251,161 +210,11 @@ def _is_local_request(request: Request) -> bool:
     return host in ("127.0.0.1", "::1", "localhost")
 
 
-def _is_dev_request(request: Request) -> bool:
-    return _is_local_request(request) or bool(_S.get("force_dev_mode"))
-
-
-def _bind_request_state(request: Request) -> tuple[str, dict, bool]:
-    impersonated = request.cookies.get(_DEV_IMPERSONATE_COOKIE)
-    session_id = impersonated if (_is_local_request(request) and impersonated) else request.cookies.get(_STATE_COOKIE)
-    is_new = not session_id
-    if not session_id:
-        session_id = uuid.uuid4().hex
-
-    if _session_store is None:
-        state = _default_state()
-    else:
-        state = _session_store.get_state(session_id)
-
-    _S.bind(state, session_id)
-    request.state.session_id = session_id
-    request.state.session_state = state
-    request.state.is_new_session = is_new
-    request.state.is_impersonating = bool(impersonated and impersonated == session_id and _is_local_request(request))
-    return session_id, state, is_new
-
-
-def _save_bound_state(state: dict | None = None, session_id: str | None = None) -> None:
-    sid = session_id or _S.session_id()
-    if not sid or _session_store is None:
-        return
-    _session_store.save_state(sid, state or _S.current())
-
-
-def _bind_thread_state(state: dict, session_id: str | None = None) -> None:
-    _S.bind(state, session_id)
-
-
-@app.middleware("http")
-async def session_state_middleware(request: Request, call_next):
-    session_id, state, is_new = _bind_request_state(request)
-    response = await call_next(request)
-
-    if is_new and not request.cookies.get(_DEV_IMPERSONATE_COOKIE):
-        response.set_cookie(_STATE_COOKIE, session_id, httponly=True, samesite="lax")
-
-    if not response.headers.get("content-type", "").startswith("text/event-stream"):
-        _save_bound_state(state, session_id)
-
-    return response
-
-# ── Resume helpers ────────────────────────────────────────────────────────────
-
-def _new_resume_record(filename: str, text: str, latex_source=None) -> dict:
-    now = datetime.now().isoformat()
-    return {
-        "id": uuid.uuid4().hex,
-        "filename": filename,
-        "text": text,
-        "latex_source": latex_source,
-        "profile": None,
-        "primary": False,
-        "created_at": now,
-        "updated_at": now,
-    }
-
-def _get_primary_resume() -> dict | None:
-    for r in (_S.get("resumes") or []):
-        if r.get("primary"):
-            return r
-    rs = _S.get("resumes") or []
-    return rs[0] if rs else None
-
-def _get_resume_by_id(rid: str) -> dict | None:
-    for r in (_S.get("resumes") or []):
-        if r["id"] == rid:
-            return r
-    return None
-
-def _sync_primary_scalars(record=None):
-    """Keep backward-compat scalar fields in sync with the primary resume."""
-    pr = record or _get_primary_resume()
-    if pr:
-        _S["resume_text"] = pr["text"]
-        _S["latex_source"] = pr.get("latex_source")
-        _S["resume_filename"] = pr["filename"]
-        _S["profile"] = pr.get("profile")
-        # If the primary already has an extracted profile, mark Phase 1 done
-        if pr.get("profile"):
-            _S["done"].add(1)
-        else:
-            _S["done"].discard(1)
-    else:
-        _S["resume_text"] = None
-        _S["latex_source"] = None
-        _S["resume_filename"] = None
-        _S["profile"] = None
-        _S["done"].discard(1)
-
-def _serialize_resume(r: dict) -> dict:
-    """Produce the per-resume dict returned in /api/state."""
-    p = r.get("profile") or {}
-    is_extracting = r["id"] in (_S.get("extracting_ids") or set())
-    # Pass through the full profile, stripping internal audit metadata keys
-    full_profile = {k: v for k, v in p.items() if not k.startswith("_")} if p else None
-    return {
-        "id": r["id"],
-        "filename": r["filename"],
-        "primary": bool(r.get("primary")),
-        "created_at": r.get("created_at"),
-        "updated_at": r.get("updated_at"),
-        "analyzed": bool(p) and not is_extracting,
-        "extracting": is_extracting,
-        "extract_error": r.get("extract_error"),
-        "profile": full_profile,
-    }
-
-
-def _run_extraction_bg(record: dict, state: dict, session_id: str | None) -> None:
-    """Background-thread worker: run Phase 1 for a resume record."""
-    _bind_thread_state(state, session_id)
-    rid = record["id"]
-    _S["extracting_ids"].add(rid)
-    try:
-        prov = _make_provider()
-        preferred = [
-            t.strip()
-            for t in (_S.get("job_titles") or "").split(",")
-            if t.strip() and t.strip().lower() != "engineer"
-        ]
-        result = phase1_ingest_resume(record["text"], prov, preferred_titles=preferred or None)
-        record["profile"] = result
-        record["updated_at"] = datetime.now().isoformat()
-        # If this resume is currently primary, promote its result to global state
-        if record.get("primary"):
-            _S["profile"] = result
-            _S["done"].add(1)
-    except Exception as e:
-        record["extract_error"] = str(e)
-    finally:
-        _S["extracting_ids"].discard(rid)
-        _save_bound_state(state, session_id)
-
-=======
-_S = _SessionStateProxy()
-
-_store_db = OUTPUT_DIR / "jobs_ai_sessions.sqlite3"
-_session_store = SQLiteSessionStore(_store_db, default_state_factory=_default_state)
-_user_store = _session_store
-
-def _bind_request_state(request: Request) -> tuple[str, dict, bool]:
-    session_id = request.cookies.get(_STATE_COOKIE) or uuid.uuid4().hex
-    state = _load_session_state(session_id)
-    _S.bind(state, session_id)
-    return session_id, state, not bool(request.cookies.get(_STATE_COOKIE))
-
 def _load_session_state(session_id: str) -> dict:
-    loaded = _session_store.get_state(session_id)
+    if _session_store is None:
+        loaded = _memory_sessions.get(session_id) or _default_state()
+    else:
+        loaded = _session_store.get_state(session_id)
     state = _default_state()
     state.update(loaded or {})
     state["done"] = set(state.get("done") or [])
@@ -413,11 +222,31 @@ def _load_session_state(session_id: str) -> dict:
     state["hidden_ids"] = set(state.get("hidden_ids") or [])
     return state
 
+
+def _bind_request_state(request: Request) -> tuple[str, dict, bool]:
+    impersonated = request.cookies.get(_DEV_IMPERSONATE_COOKIE)
+    session_id = impersonated if (_is_local_request(request) and impersonated) else request.cookies.get(_STATE_COOKIE) or uuid.uuid4().hex
+    state = _load_session_state(session_id)
+    _S.bind(state, session_id)
+    request.state.session_id = session_id
+    request.state.session_state = state
+    return session_id, state, not bool(request.cookies.get(_STATE_COOKIE))
+
+
 def _save_bound_state(state: dict = None, session_id: str = None) -> None:
     sid = session_id or _S.session_id()
     if not sid:
         return
-    _session_store.save_state(sid, state or _S.current())
+    payload = state or _S.current()
+    if _session_store is None:
+        _memory_sessions[sid] = payload
+        return
+    _session_store.save_state(sid, payload)
+
+
+def _bind_thread_state(state: dict, session_id: str | None = None) -> None:
+    _S.bind(state, session_id)
+
 
 def _start_session(state: dict = None, user_id: str = None) -> str:
     session_id = uuid.uuid4().hex
@@ -429,11 +258,19 @@ def _start_session(state: dict = None, user_id: str = None) -> str:
     next_state["hidden_ids"] = set(next_state.get("hidden_ids") or [])
     _S.bind(next_state, session_id)
     _save_bound_state(next_state, session_id)
-    if user_id:
+    if user_id and _session_store is not None:
         _session_store.associate_session_with_user(session_id, user_id)
     return session_id
 
+
 def _switch_to_user_session(user: dict, auth_user: dict) -> str:
+    if _session_store is None:
+        session_id = uuid.uuid4().hex
+        state = _default_state()
+        state["user"] = auth_user
+        _S.bind(state, session_id)
+        _save_bound_state(state, session_id)
+        return session_id
     sessions = _session_store.get_user_sessions(user["id"])
     session_id = sessions[0] if sessions else uuid.uuid4().hex
     state = _load_session_state(session_id)
@@ -443,12 +280,14 @@ def _switch_to_user_session(user: dict, auth_user: dict) -> str:
     _session_store.associate_session_with_user(session_id, user["id"])
     return session_id
 
+
 def _session_output_dir(session_id: str = None) -> Path:
     sid = session_id or _S.session_id() or "local"
     safe_sid = "".join(ch for ch in sid if ch.isalnum() or ch in ("-", "_")) or "local"
     out = OUTPUT_DIR / "sessions" / safe_sid
     out.mkdir(parents=True, exist_ok=True)
     return out
+
 
 def _output_url(path: Path | str) -> str:
     p = Path(path)
@@ -457,6 +296,7 @@ def _output_url(path: Path | str) -> str:
     except Exception:
         rel = p.name
     return f"/output/{rel}"
+
 
 @app.middleware("http")
 async def session_state_middleware(request: Request, call_next):
@@ -474,7 +314,96 @@ async def session_state_middleware(request: Request, call_next):
         _save_bound_state(_S.current(), current_session_id)
     return response
 
->>>>>>> 77a1a1157d53d108d83f9b01d994d4c49a1ef2df
+
+# ── Resume helpers ────────────────────────────────────────────────────────────
+
+def _new_resume_record(filename: str, text: str, latex_source=None) -> dict:
+    now = datetime.now().isoformat()
+    return {
+        "id": uuid.uuid4().hex,
+        "filename": filename,
+        "text": text,
+        "latex_source": latex_source,
+        "profile": None,
+        "primary": False,
+        "created_at": now,
+        "updated_at": now,
+    }
+
+
+def _get_primary_resume() -> dict | None:
+    for r in (_S.get("resumes") or []):
+        if r.get("primary"):
+            return r
+    rs = _S.get("resumes") or []
+    return rs[0] if rs else None
+
+
+def _get_resume_by_id(rid: str) -> dict | None:
+    for r in (_S.get("resumes") or []):
+        if r["id"] == rid:
+            return r
+    return None
+
+
+def _sync_primary_scalars(record=None):
+    pr = record or _get_primary_resume()
+    if pr:
+        _S["resume_text"] = pr["text"]
+        _S["latex_source"] = pr.get("latex_source")
+        _S["resume_filename"] = pr["filename"]
+        _S["profile"] = pr.get("profile")
+        if pr.get("profile"):
+            _S["done"].add(1)
+        else:
+            _S["done"].discard(1)
+    else:
+        _S["resume_text"] = None
+        _S["latex_source"] = None
+        _S["resume_filename"] = None
+        _S["profile"] = None
+        _S["done"].discard(1)
+
+
+def _serialize_resume(r: dict) -> dict:
+    p = r.get("profile") or {}
+    is_extracting = r["id"] in (_S.get("extracting_ids") or set())
+    full_profile = {k: v for k, v in p.items() if not k.startswith("_")} if p else None
+    return {
+        "id": r["id"],
+        "filename": r["filename"],
+        "primary": bool(r.get("primary")),
+        "created_at": r.get("created_at"),
+        "updated_at": r.get("updated_at"),
+        "analyzed": bool(p) and not is_extracting,
+        "extracting": is_extracting,
+        "extract_error": r.get("extract_error"),
+        "profile": full_profile,
+    }
+
+
+def _run_extraction_bg(record: dict, state: dict, session_id: str | None) -> None:
+    _bind_thread_state(state, session_id)
+    rid = record["id"]
+    _S["extracting_ids"].add(rid)
+    try:
+        prov = _make_provider()
+        preferred = [
+            t.strip()
+            for t in (_S.get("job_titles") or "").split(",")
+            if t.strip() and t.strip().lower() != "engineer"
+        ]
+        result = phase1_ingest_resume(record["text"], prov, preferred_titles=preferred or None)
+        record["profile"] = result
+        record["updated_at"] = datetime.now().isoformat()
+        if record.get("primary"):
+            _S["profile"] = result
+            _S["done"].add(1)
+    except Exception as e:
+        record["extract_error"] = str(e)
+    finally:
+        _S["extracting_ids"].discard(rid)
+        _save_bound_state(state, session_id)
 # ── Provider factory ──────────────────────────────────────────────────────────
 
 def _make_provider():
@@ -521,60 +450,18 @@ class _LogCapture:
     def __getattr__(self, name):
         return getattr(self.original, name)
 
-<<<<<<< HEAD
 def _run_phase_sse(phase: int, fn, state: dict | None = None, session_id: str | None = None):
     """Generator: run *fn* in a thread, stream SSE + console output."""
     result_q: "queue.Queue[tuple]" = queue.Queue()
     log_q: "queue.Queue[str]" = queue.Queue()
-    _phase_logs[phase] = log_q
-=======
-def _run_phase_sse(phase: int, fn):
-    """Run *fn* in a thread and stream SSE for this bound user session."""
-    state = _S.current()
-    session_id = _S.session_id()
+    _phase_logs[(session_id, phase)] = log_q
 
-    def _events():
-        _S.bind(state, session_id)
-        result_q: "queue.Queue[tuple]" = queue.Queue()
-        log_q: "queue.Queue[str]" = queue.Queue()
-        _phase_logs[(session_id, phase)] = log_q
-
-        def _worker():
-            import sys
-            _S.bind(state, session_id)
-            old_stdout = sys.stdout
-            try:
-                sys.stdout = _LogCapture(old_stdout, log_q)
-                val = fn()
-                result_q.put(("ok", val))
-            except Exception as exc:
-                result_q.put(("err", str(exc)))
-            finally:
-                sys.stdout = old_stdout
-
-        t = threading.Thread(target=_worker, daemon=True)
-        t.start()
-        t0 = time.time()
-
-        yield _sse({"type": "start", "phase": phase})
-
-        while t.is_alive():
-            try:
-                while True:
-                    text = log_q.get_nowait()
-                    yield _sse({"type": "log", "phase": phase, "text": text})
-            except queue.Empty:
-                pass
-
-            yield ": keep-alive\n\n"
-            t.join(timeout=0.2)
->>>>>>> 77a1a1157d53d108d83f9b01d994d4c49a1ef2df
-
+    def _worker():
+        import sys
+        old_stdout = sys.stdout
         try:
-<<<<<<< HEAD
             if state is not None:
                 _bind_thread_state(state, session_id)
-            # Wrap stdout to capture while keeping normal output
             sys.stdout = _LogCapture(old_stdout, log_q)
             val = fn()
             result_q.put(("ok", val))
@@ -590,50 +477,33 @@ def _run_phase_sse(phase: int, fn):
     yield _sse({"type": "start", "phase": phase})
 
     while t.is_alive():
-        # Stream captured logs
         try:
             while True:
                 text = log_q.get_nowait()
                 yield _sse({"type": "log", "phase": phase, "text": text})
-=======
-            status, val = result_q.get_nowait()
->>>>>>> 77a1a1157d53d108d83f9b01d994d4c49a1ef2df
         except queue.Empty:
-            state["error"][phase] = "phase timed out"
-            _save_bound_state(state, session_id)
-            yield _sse({"type": "error", "phase": phase, "message": "phase timed out"})
-            return
+            pass
+        yield ": keep-alive\n\n"
+        t.join(timeout=0.2)
 
-        elapsed = round(time.time() - t0, 1)
+    try:
+        status, val = result_q.get_nowait()
+    except queue.Empty:
+        state["error"][phase] = "phase timed out"
+        _save_bound_state(state, session_id)
+        yield _sse({"type": "error", "phase": phase, "message": "phase timed out"})
+        return
 
-        if status == "err":
-            state["error"][phase] = val
-            _save_bound_state(state, session_id)
-            yield _sse({"type": "error", "phase": phase, "message": val})
-        else:
-            state["done"].add(phase)
-            state["elapsed"][phase] = elapsed
-            state["error"].pop(phase, None)
-            data = _serialize(phase, val)
-            _save_bound_state(state, session_id)
-            yield _sse({
-                "type": "done",
-                "phase": phase,
-                "elapsed": elapsed,
-                "data": data,
-            })
-
-<<<<<<< HEAD
     elapsed = round(time.time() - t0, 1)
 
     if status == "err":
-        _S["error"][phase] = val
+        state["error"][phase] = val
         _save_bound_state(state, session_id)
         yield _sse({"type": "error", "phase": phase, "message": val})
     else:
-        _S["done"].add(phase)
-        _S["elapsed"][phase] = elapsed
-        _S["error"].pop(phase, None)
+        state["done"].add(phase)
+        state["elapsed"][phase] = elapsed
+        state["error"].pop(phase, None)
         _save_bound_state(state, session_id)
         yield _sse({
             "type": "done",
@@ -641,10 +511,6 @@ def _run_phase_sse(phase: int, fn):
             "elapsed": elapsed,
             "data": _serialize(phase, val),
         })
-=======
-    return _events()
->>>>>>> 77a1a1157d53d108d83f9b01d994d4c49a1ef2df
-
 def _serialize(phase: int, val) -> dict:
     def _title_str(t):
         return t.get("title", str(t)) if isinstance(t, dict) else str(t)
@@ -864,9 +730,7 @@ async def update_config(req: Request):
 
 @app.get("/api/state")
 def get_state(request: Request):
-<<<<<<< HEAD
-    is_dev = _is_dev_request(request)
-=======
+
     # Localhost connections are always treated as developer sessions
     client_host = getattr(request.client, "host", "") if request.client else ""
     is_local = client_host in ("127.0.0.1", "::1", "localhost")
@@ -874,7 +738,6 @@ def get_state(request: Request):
         is_local or bool(_S.get("force_dev_mode"))
     )
     auth_user = _AUTH_SESSIONS.get(request.cookies.get(_AUTH_COOKIE, ""))
->>>>>>> 77a1a1157d53d108d83f9b01d994d4c49a1ef2df
 
     profile = _S.get("profile") or {}
     scored  = _S.get("scored") or []
@@ -958,22 +821,10 @@ def get_state(request: Request):
         "output_files": files,
         # Auth / session
         "is_dev": is_dev,
-<<<<<<< HEAD
-        "user": _S.get("user") or ({"email": "dev@localhost", "name": "Developer"} if is_dev else None),
-        "resumes": [_serialize_resume(r) for r in (_S.get("resumes") or [])],
-=======
+
         "user": auth_user or _S.get("user") or ({"email": "dev@localhost", "name": "Developer"} if is_dev else None),
-        # Resume list (synthesised from single-resume state)
-        "resumes": (
-            [{
-                "id": "primary",
-                "filename": _S.get("resume_filename") or "resume.txt",
-                "primary": True,
-                "created_at": None,
-            }]
-            if _S.get("resume_text") else []
-        ),
->>>>>>> 77a1a1157d53d108d83f9b01d994d4c49a1ef2df
+        "resumes": [_serialize_resume(r) for r in (_S.get("resumes") or [])],
+
         # UI state
         "liked_ids": list(_S.get("liked_ids") or []),
         "hidden_ids": list(_S.get("hidden_ids") or []),
@@ -1012,13 +863,7 @@ async def auth_login(req: Request):
     user = _user_store.get_user_by_email(email)
     if not user or not verify_password(password, user.get("password_hash") or ""):
         return JSONResponse({"ok": False, "error": "Invalid email or password"})
-<<<<<<< HEAD
-    _S["user"] = {"id": user["id"], "email": user["email"]}
-    session_id = getattr(req.state, "session_id", None)
-    if session_id:
-        _user_store.associate_session_with_user(session_id, user["id"])
-    return {"ok": True, "user": {"email": user["email"]}}
-=======
+
     auth_user = {"id": user["id"], "email": user["email"]}
     app_session_id = _switch_to_user_session(user, auth_user)
     token = secrets.token_urlsafe(32)
@@ -1028,7 +873,6 @@ async def auth_login(req: Request):
     resp.set_cookie(_STATE_COOKIE, app_session_id, httponly=True, samesite="lax")
     resp.headers[_SESSION_SWITCH_HEADER] = app_session_id
     return resp
->>>>>>> 77a1a1157d53d108d83f9b01d994d4c49a1ef2df
 
 @app.post("/api/auth/signup")
 async def auth_signup(req: Request):
@@ -1043,13 +887,7 @@ async def auth_signup(req: Request):
         return JSONResponse({"ok": False, "error": "An account with this email already exists"})
     pw_hash = hash_password(password)
     user_id = _user_store.create_user(email, pw_hash)
-<<<<<<< HEAD
-    _S["user"] = {"id": user_id, "email": email}
-    session_id = getattr(req.state, "session_id", None)
-    if session_id:
-        _user_store.associate_session_with_user(session_id, user_id)
-    return {"ok": True, "user": {"email": email}}
-=======
+
     auth_user = {"id": user_id, "email": email}
     app_session_id = _start_session({"user": auth_user}, user_id=user_id)
     token = secrets.token_urlsafe(32)
@@ -1059,7 +897,6 @@ async def auth_signup(req: Request):
     resp.set_cookie(_STATE_COOKIE, app_session_id, httponly=True, samesite="lax")
     resp.headers[_SESSION_SWITCH_HEADER] = app_session_id
     return resp
->>>>>>> 77a1a1157d53d108d83f9b01d994d4c49a1ef2df
 
 @app.post("/api/auth/logout")
 def auth_logout(request: Request):
@@ -1290,27 +1127,48 @@ async def submit_feedback(req: Request):
 
 # ── Dev endpoints ─────────────────────────────────────────────────────────────
 
-<<<<<<< HEAD
-def _list_tracked_sessions() -> list[dict]:
-    if _session_store is None:
-        return []
-    return _session_store.list_sessions(limit=500)
 
-
-def _load_session_state(session_id: str) -> dict:
-    if _session_store is None:
-        raise HTTPException(503, "Session store unavailable")
-    known = {session["id"] for session in _list_tracked_sessions()}
-    if session_id not in known:
-        raise HTTPException(404, "Session not found")
-    return _session_store.get_state(session_id)
-=======
 def _is_dev_request(request: Request) -> bool:
     host = getattr(request.client, "host", "") if request.client else ""
     if _S.get("force_customer_mode"):
         return False
     return host in ("127.0.0.1", "::1", "localhost") or bool(_S.get("force_dev_mode"))
->>>>>>> 77a1a1157d53d108d83f9b01d994d4c49a1ef2df
+
+
+def _list_tracked_sessions() -> list[dict]:
+    if _session_store is not None:
+        return _session_store.list_sessions(limit=500)
+
+    sessions = []
+    for session_id, state in _memory_sessions.items():
+        profile = state.get("profile") or {}
+        scored = state.get("scored") or []
+        applications = state.get("applications") or []
+        feedback = state.get("feedback") or []
+        sessions.append(
+            {
+                "id": session_id,
+                "created_at": None,
+                "updated_at": None,
+                "name": profile.get("name") or "Unprofiled user",
+                "email": profile.get("email") or "",
+                "has_resume": bool(state.get("resume_text")),
+                "resume_filename": state.get("resume_filename") or "",
+                "mode": state.get("mode", "demo"),
+                "done": sorted(state.get("done") or []),
+                "errors": state.get("error") or {},
+                "job_count": len(state.get("jobs") or []),
+                "scored_count": len(scored),
+                "application_count": len(applications),
+                "applied_count": sum(1 for app in applications if app.get("status") == "Applied"),
+                "manual_count": sum(1 for app in applications if app.get("status") == "Manual Required"),
+                "target": state.get("job_titles") or "",
+                "location": state.get("location") or "",
+                "feedback_count": len(feedback),
+                "unread_feedback_count": sum(1 for f in feedback if not f.get("read")),
+            }
+        )
+    return sessions
 
 @app.get("/api/dev/overview")
 def dev_overview(request: Request):
@@ -1366,7 +1224,8 @@ def dev_session_reset(session_id: str, request: Request):
     if not _is_dev_request(request):
         raise HTTPException(403, "Developer access denied")
     if _session_store is None:
-        raise HTTPException(503, "Session store unavailable")
+        _memory_sessions[session_id] = _default_state()
+        return {"ok": True}
     _load_session_state(session_id)
     _session_store.reset_state(session_id)
     return {"ok": True}
@@ -1376,7 +1235,8 @@ def dev_session_delete(session_id: str, request: Request):
     if not _is_dev_request(request):
         raise HTTPException(403, "Developer access denied")
     if _session_store is None:
-        raise HTTPException(503, "Session store unavailable")
+        _memory_sessions.pop(session_id, None)
+        return {"ok": True}
     _load_session_state(session_id)
     _session_store.delete_session(session_id)
     return {"ok": True}
@@ -1403,7 +1263,7 @@ def dev_mark_feedback_read(session_id: str, request: Request):
     state = _load_session_state(session_id)
     for f in state.get("feedback") or []:
         f["read"] = True
-    _session_store.save_state(session_id, state)
+    _save_bound_state(state, session_id)
     return {"ok": True}
 
 @app.post("/api/dev/cli")

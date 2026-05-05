@@ -1,0 +1,489 @@
+{
+  "name": "Sao Aphisith Sithisack",
+  "email": "sao.aphisith.sithisack-1@ou.edu",
+  "linkedin": "linkedin.com/in/saoaphisithsithisack",
+  "github": "",
+  "phone": "(572) 236-9592",
+  "location": "Aphisith Sithisack\nNorman, OK",
+  "summary": "Sao Aphisith Sithisack is a Semiconductor Process Engineering Intern with hands-on experience across FPGA, Python, MATLAB, Java, LaTeX, Photolithography.",
+  "target_titles": [
+    "Semiconductor Process Engineering Intern",
+    "FPGA/Hardware Engineering Intern",
+    "Photonics Engineering Intern"
+  ],
+  "top_hard_skills": [
+    "FPGA",
+    "Python",
+    "MATLAB",
+    "Java",
+    "LaTeX",
+    "Photolithography",
+    "Cleanroom Processes",
+    "Pulsed Laser Deposition",
+    "SEM",
+    "OnShape",
+    "SolidWorks",
+    "CAD",
+    "MBE",
+    "Numpy",
+    "Vivado",
+    "Optical Spectroscopy",
+    "Fusion 360",
+    "Pandas",
+    "GO",
+    "TEM",
+    "PLD",
+    "PL",
+    "SOC",
+    "RIE"
+  ],
+  "top_soft_skills": [
+    "Teamwork",
+    "Problem-solving",
+    "Communication",
+    "Attention to detail",
+    "Time management"
+  ],
+  "education": [
+    {
+      "degree": "University of Oklahoma Norman, OK",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    },
+    {
+      "degree": "B.S. in Electrical & Computer Engineering (Honors)",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    },
+    {
+      "degree": "Minor in Mathematics & Computer Science",
+      "institution": "GPA: 3.91 Aug 2024 - Aug 2028",
+      "year": "2024",
+      "gpa": "3.91"
+    },
+    {
+      "degree": "RELEVANT EXPERIENCE",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    },
+    {
+      "degree": "Dr. Venkatesan's Semiconductor Research Lab Jan 2026 - Present",
+      "institution": "",
+      "year": "2026",
+      "gpa": ""
+    },
+    {
+      "degree": "Undergraduate Research Assistant Norman, OK",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    },
+    {
+      "degree": "\u2022 Fabricate high-aspect-ratio (HAR) micro- and nanostructures using cleanroom-based photolithography, reactive ion etching (RIE),",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    },
+    {
+      "degree": "and pulsed laser deposition (PLD).",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    },
+    {
+      "degree": "\u2022 Assist in optimizing anisotropic plasma etch parameters (gas chemistry, RF power, pressure) to achieve vertical sidewalls and controlled feature depth.",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    },
+    {
+      "degree": "\u2022 Support end-to-end process development for HAR structures, including resist patterning, etch selectivity considerations, and post-process inspection.",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    },
+    {
+      "degree": "\u2022 Document fabrication workflows and experimental results to ensure reproducibility and device characterization readiness.",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    },
+    {
+      "degree": "Sooner Competitive Robotics Jan 2026 - Present",
+      "institution": "",
+      "year": "2026",
+      "gpa": ""
+    },
+    {
+      "degree": "Electrical Systems Member Norman, OK",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    },
+    {
+      "degree": "\u2022 Designed robot power distribution architecture to ensure stable voltage delivery under dynamic load conditions.",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    },
+    {
+      "degree": "\u2022 Developed CAD layouts for electrical component placement, wire routing, and mechanical integration.",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    },
+    {
+      "degree": "Student Learning Center Aug 2025 - Present",
+      "institution": "",
+      "year": "2025",
+      "gpa": ""
+    },
+    {
+      "degree": "Peer Learning Assistant Norman, OK",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    },
+    {
+      "degree": "\u2022 Mentored 40+ students per semester in Physics I-II, Calculus I-III, and General Chemistry I using structured quantitative problem-solving methods.",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    },
+    {
+      "degree": "First Year Research Experience - Cloud Microphysics Group Jan 2025 - May 2025",
+      "institution": "",
+      "year": "2025",
+      "gpa": ""
+    },
+    {
+      "degree": "Research Apprentice Norman, OK",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    },
+    {
+      "degree": "\u2022 Modeled cloud microphysical properties and atmospheric profiles using Python, applying numerical methods and statistical analysis.",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    },
+    {
+      "degree": "\u2022 Analyzed simulation outputs to identify physical trends and evaluate modeling assumptions.",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    },
+    {
+      "degree": "Light-Matter Interaction Research (Dr. Tischler) Aug 2025 - Dec 2025",
+      "institution": "",
+      "year": "2025",
+      "gpa": ""
+    },
+    {
+      "degree": "Research Apprentice Norman, OK",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    },
+    {
+      "degree": "\u2022 Conducted literature reviews on light-matter interactions in silicon carbide nanocrystals relevant to wide-bandgap semiconductors.",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    },
+    {
+      "degree": "\u2022 Gained exposure to optical spectroscopy and pulsed-laser experimental systems.",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    },
+    {
+      "degree": "ADDITIONAL EXPERIENCE",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    },
+    {
+      "degree": "United World College Lao PDR National Committee Jul 2024 - Present",
+      "institution": "",
+      "year": "2024",
+      "gpa": ""
+    },
+    {
+      "degree": "Alumni Coordinator / Board Member Hybrid",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    },
+    {
+      "degree": "\u2022 Led fundraising efforts exceeding $2,500+ to subsidize logistics and accommodations for scholarship candidates.",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    },
+    {
+      "degree": "\u2022 Coordinated communication among alumni, scholars, volunteers, and partner organizations.",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    },
+    {
+      "degree": "Association of Southeast Asian Nations at OU Nov 2024 - Present",
+      "institution": "",
+      "year": "2024",
+      "gpa": ""
+    },
+    {
+      "degree": "Sponsorship & Volunteering Chair Norman, OK",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    },
+    {
+      "degree": "\u2022 Secured $1,000+ in external funding through proposals and outreach to 20+ donors.",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    },
+    {
+      "degree": "\u2022 Organized biweekly cultural and volunteer events promoting Southeast Asian representation and campus engagement.",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    },
+    {
+      "degree": "New Student Orientation May 2025 - Aug 2025",
+      "institution": "",
+      "year": "2025",
+      "gpa": ""
+    },
+    {
+      "degree": "Intern Norman, OK",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    },
+    {
+      "degree": "\u2022 Supported onboarding for 6,000+ incoming students by leading small-group sessions and serving as a peer mentor.",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    },
+    {
+      "degree": "Cross Restaurants Jan 2025 - May 2025",
+      "institution": "",
+      "year": "2025",
+      "gpa": ""
+    },
+    {
+      "degree": "Food Service Employee Norman, OK",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    },
+    {
+      "degree": "\u2022 Maintained efficient operations in a high-volume service environment while adhering to safety and quality standards.",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    },
+    {
+      "degree": "TECHNICAL SKILLS & ACHIEVEMENTS",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    },
+    {
+      "degree": "Semiconductor Fabrication: High-aspect-ratio etching, photolithography, anisotropic RIE, PLD, cleanroom process flow",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    },
+    {
+      "degree": "Programming & Analysis: Python (NumPy, Pandas, Matplotlib) MATLAB; numerical modeling and scientific visualization; Google AI",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    },
+    {
+      "degree": "Studio, Java, Gemini API integration.",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    },
+    {
+      "degree": "Design & Tools: SolidWorks, Fusion 360, Onshape, AMD Vivado (introductory FPGA workflows), LaTeX",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    },
+    {
+      "degree": "Honors & Certifications: Davis Scholar, Robert Vinton Clapp Scholar, Notable Efforts International Royalty",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    },
+    {
+      "degree": "Projects: Built Climb App at Hacklahoma",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    }
+  ],
+  "experience": [],
+  "work_experience": [],
+  "research": [],
+  "research_experience": [],
+  "projects": [],
+  "resume_gaps": [
+    "Missing professional summary/objective",
+    "Few quantified achievements \u2014 add metrics"
+  ],
+  "critical_analysis": "Impact: add numeric outcomes to the strongest bullets wherever possible. Skill density: the parser found the technical keywords listed in hard skills; add any missing tools, instruments, and methods explicitly. ATS structure: keep Education, Experience, Projects, and Skills as clear headings. Next actions: add LinkedIn, work authorization, target salary, and target titles to improve matching and autofill.",
+  "top_hard_skills_detailed": [
+    {
+      "skill": "FPGA",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Python",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "MATLAB",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Java",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "LaTeX",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Photolithography",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Cleanroom Processes",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Pulsed Laser Deposition",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "SEM",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "OnShape",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "SolidWorks",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "CAD",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "MBE",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Numpy",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Vivado",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Optical Spectroscopy",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Fusion 360",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Pandas",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "GO",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "TEM",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "PLD",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "PL",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "SOC",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "RIE",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    }
+  ],
+  "target_titles_detailed": [
+    {
+      "title": "Semiconductor Process Engineering Intern",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "FPGA/Hardware Engineering Intern",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "Photonics Engineering Intern",
+      "family": "",
+      "evidence": ""
+    }
+  ],
+  "_audit_log": [
+    "retention_audit recovered 12 missing skills: ['MBE', 'Numpy', 'Vivado', 'Optical Spectroscopy', 'Fusion 360', 'Pandas', 'GO', 'TEM', 'PLD', 'PL', 'SOC', 'RIE']"
+  ]
+}

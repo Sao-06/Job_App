@@ -18,8 +18,11 @@ import secrets
 import sys
 import threading
 import time
+import uuid
+import contextvars
 from datetime import datetime
 from pathlib import Path
+from collections.abc import MutableMapping
 
 # Force UTF-8 stdout/stderr so Rich emoji don't crash on Windows cp1252
 if hasattr(sys.stdout, "buffer"):
@@ -51,15 +54,7 @@ except ImportError:
     def verify_google_token(_code, _redirect_uri, _state):
         raise RuntimeError("Google OAuth dependencies are not installed")
 
-# Simple user store backed by SQLite
-try:
-    from session_store import SQLiteSessionStore
-    _user_store = SQLiteSessionStore(
-        OUTPUT_DIR / "jobs_ai_sessions.sqlite3",
-        default_state_factory=dict,
-    )
-except Exception:
-    _user_store = None
+from session_store import SQLiteSessionStore
 from pipeline.phases import (
     phase1_ingest_resume,
     phase2_discover_jobs,
@@ -74,6 +69,7 @@ from pipeline.resume import _build_demo_resume, _read_resume, _save_tailored_res
 
 app = FastAPI(title="Jobs AI")
 _AUTH_COOKIE = "jobs_ai_auth"
+_STATE_COOKIE = "jobs_ai_session"
 _AUTH_SESSIONS: dict[str, dict] = {}
 
 # ── Serve frontend ─────────────────────────────────────────────────────────────
@@ -99,13 +95,17 @@ def serve_output_file(path: str):
     p = (root / path).resolve()
     if root != p and root not in p.parents:
         raise HTTPException(403, "File access denied")
+    session_root = (root / "sessions").resolve()
+    if p == session_root or session_root in p.parents:
+        current_root = _session_output_dir().resolve()
+        if p != current_root and current_root not in p.parents:
+            raise HTTPException(403, "File access denied")
     if not p.exists() or not p.is_file():
         raise HTTPException(404, "File not found")
     return FileResponse(p)
 
-# ── Single-user in-memory state ───────────────────────────────────────────────
-
-_S: dict = {
+def _default_state() -> dict:
+    return {
     # LLM backend
     "mode": "demo",
     "api_key": "",
@@ -151,6 +151,85 @@ _S: dict = {
     "dev_tweaks": {},
     "feedback": [],
 }
+
+class _SessionStateProxy(MutableMapping):
+    def __init__(self):
+        self._fallback = _default_state()
+        self._state_var = contextvars.ContextVar("jobs_ai_state", default=None)
+        self._session_var = contextvars.ContextVar("jobs_ai_session_id", default=None)
+
+    def bind(self, state: dict, session_id: str = None):
+        self._state_var.set(state)
+        self._session_var.set(session_id)
+
+    def current(self) -> dict:
+        return self._state_var.get() or self._fallback
+
+    def session_id(self) -> str | None:
+        return self._session_var.get()
+
+    def __getitem__(self, key):
+        return self.current()[key]
+
+    def __setitem__(self, key, value):
+        self.current()[key] = value
+
+    def __delitem__(self, key):
+        del self.current()[key]
+
+    def __iter__(self):
+        return iter(self.current())
+
+    def __len__(self):
+        return len(self.current())
+
+_S = _SessionStateProxy()
+
+_store_db = OUTPUT_DIR / "jobs_ai_sessions.sqlite3"
+_session_store = SQLiteSessionStore(_store_db, default_state_factory=_default_state)
+_user_store = _session_store
+
+def _bind_request_state(request: Request) -> tuple[str, dict, bool]:
+    session_id = request.cookies.get(_STATE_COOKIE) or uuid.uuid4().hex
+    loaded = _session_store.get_state(session_id)
+    state = _default_state()
+    state.update(loaded or {})
+    state["done"] = set(state.get("done") or [])
+    state["liked_ids"] = set(state.get("liked_ids") or [])
+    state["hidden_ids"] = set(state.get("hidden_ids") or [])
+    _S.bind(state, session_id)
+    return session_id, state, not bool(request.cookies.get(_STATE_COOKIE))
+
+def _save_bound_state(state: dict = None, session_id: str = None) -> None:
+    sid = session_id or _S.session_id()
+    if not sid:
+        return
+    _session_store.save_state(sid, state or _S.current())
+
+def _session_output_dir(session_id: str = None) -> Path:
+    sid = session_id or _S.session_id() or "local"
+    safe_sid = "".join(ch for ch in sid if ch.isalnum() or ch in ("-", "_")) or "local"
+    out = OUTPUT_DIR / "sessions" / safe_sid
+    out.mkdir(parents=True, exist_ok=True)
+    return out
+
+def _output_url(path: Path | str) -> str:
+    p = Path(path)
+    try:
+        rel = p.resolve().relative_to(OUTPUT_DIR.resolve()).as_posix()
+    except Exception:
+        rel = p.name
+    return f"/output/{rel}"
+
+@app.middleware("http")
+async def session_state_middleware(request: Request, call_next):
+    session_id, state, is_new = _bind_request_state(request)
+    response = await call_next(request)
+    if is_new:
+        response.set_cookie(_STATE_COOKIE, session_id, httponly=True, samesite="lax")
+    if not response.headers.get("content-type", "").startswith("text/event-stream"):
+        _save_bound_state(state, session_id)
+    return response
 
 # ── Provider factory ──────────────────────────────────────────────────────────
 
@@ -199,63 +278,74 @@ class _LogCapture:
         return getattr(self.original, name)
 
 def _run_phase_sse(phase: int, fn):
-    """Generator: run *fn* in a thread, stream SSE + console output."""
-    result_q: "queue.Queue[tuple]" = queue.Queue()
-    log_q: "queue.Queue[str]" = queue.Queue()
-    _phase_logs[phase] = log_q
+    """Run *fn* in a thread and stream SSE for this bound user session."""
+    state = _S.current()
+    session_id = _S.session_id()
 
-    def _worker():
-        import sys
-        old_stdout = sys.stdout
+    def _events():
+        _S.bind(state, session_id)
+        result_q: "queue.Queue[tuple]" = queue.Queue()
+        log_q: "queue.Queue[str]" = queue.Queue()
+        _phase_logs[(session_id, phase)] = log_q
+
+        def _worker():
+            import sys
+            _S.bind(state, session_id)
+            old_stdout = sys.stdout
+            try:
+                sys.stdout = _LogCapture(old_stdout, log_q)
+                val = fn()
+                result_q.put(("ok", val))
+            except Exception as exc:
+                result_q.put(("err", str(exc)))
+            finally:
+                sys.stdout = old_stdout
+
+        t = threading.Thread(target=_worker, daemon=True)
+        t.start()
+        t0 = time.time()
+
+        yield _sse({"type": "start", "phase": phase})
+
+        while t.is_alive():
+            try:
+                while True:
+                    text = log_q.get_nowait()
+                    yield _sse({"type": "log", "phase": phase, "text": text})
+            except queue.Empty:
+                pass
+
+            yield ": keep-alive\n\n"
+            t.join(timeout=0.2)
+
         try:
-            # Wrap stdout to capture while keeping normal output
-            sys.stdout = _LogCapture(old_stdout, log_q)
-            val = fn()
-            result_q.put(("ok", val))
-        except Exception as exc:
-            result_q.put(("err", str(exc)))
-        finally:
-            sys.stdout = old_stdout
-
-    t = threading.Thread(target=_worker, daemon=True)
-    t.start()
-    t0 = time.time()
-
-    yield _sse({"type": "start", "phase": phase})
-
-    while t.is_alive():
-        # Stream captured logs
-        try:
-            while True:
-                text = log_q.get_nowait()
-                yield _sse({"type": "log", "phase": phase, "text": text})
+            status, val = result_q.get_nowait()
         except queue.Empty:
-            pass
+            state["error"][phase] = "phase timed out"
+            _save_bound_state(state, session_id)
+            yield _sse({"type": "error", "phase": phase, "message": "phase timed out"})
+            return
 
-        yield ": keep-alive\n\n"
-        t.join(timeout=0.2)
+        elapsed = round(time.time() - t0, 1)
 
-    try:
-        status, val = result_q.get_nowait()
-    except queue.Empty:
-        yield _sse({"type": "error", "phase": phase, "message": "phase timed out"})
-        return
+        if status == "err":
+            state["error"][phase] = val
+            _save_bound_state(state, session_id)
+            yield _sse({"type": "error", "phase": phase, "message": val})
+        else:
+            state["done"].add(phase)
+            state["elapsed"][phase] = elapsed
+            state["error"].pop(phase, None)
+            data = _serialize(phase, val)
+            _save_bound_state(state, session_id)
+            yield _sse({
+                "type": "done",
+                "phase": phase,
+                "elapsed": elapsed,
+                "data": data,
+            })
 
-    elapsed = round(time.time() - t0, 1)
-
-    if status == "err":
-        _S["error"][phase] = val
-        yield _sse({"type": "error", "phase": phase, "message": val})
-    else:
-        _S["done"].add(phase)
-        _S["elapsed"][phase] = elapsed
-        _S["error"].pop(phase, None)
-        yield _sse({
-            "type": "done",
-            "phase": phase,
-            "elapsed": elapsed,
-            "data": _serialize(phase, val),
-        })
+    return _events()
 
 def _serialize(phase: int, val) -> dict:
     def _title_str(t):
@@ -372,8 +462,8 @@ def _serialize(phase: int, val) -> dict:
             ],
         }
     if phase == 6:
-        p = Path(str(val)).name if val else ""
-        return {"tracker": p, "url": f"/output/{p}" if p else ""}
+        p = Path(str(val)) if val else None
+        return {"tracker": p.name if p else "", "url": _output_url(p) if p else ""}
     if phase == 7:
         return {"report": str(val) if val else ""}
     return {}
@@ -471,13 +561,15 @@ def get_state(request: Request):
     manual   = [j for j in passed  if j.get("score", 0) <  thr]
 
     files = []
-    if OUTPUT_DIR.exists():
-        for f in sorted(OUTPUT_DIR.glob("*"), key=lambda x: x.stat().st_mtime, reverse=True):
+    user_output = _session_output_dir()
+    if user_output.exists():
+        for f in sorted(user_output.glob("*"), key=lambda x: x.stat().st_mtime, reverse=True):
             if f.is_file() and not f.name.startswith("."):
                 files.append({
                     "name": f.name,
                     "phase": _guess_phase(f.name),
                     "size_kb": round(f.stat().st_size / 1024, 1),
+                    "url": _output_url(f),
                 })
 
     return {
@@ -550,7 +642,7 @@ def get_state(request: Request):
         "output_files": files,
         # Auth / session
         "is_dev": is_dev,
-        "user": auth_user or ({"email": "dev@localhost", "name": "Developer"} if is_dev else None),
+        "user": auth_user or _S.get("user") or ({"email": "dev@localhost", "name": "Developer"} if is_dev else None),
         # Resume list (synthesised from single-resume state)
         "resumes": (
             [{
@@ -595,6 +687,8 @@ async def auth_login(req: Request):
     if not user or not verify_password(password, user.get("password_hash") or ""):
         return JSONResponse({"ok": False, "error": "Invalid email or password"})
     auth_user = {"id": user["id"], "email": user["email"]}
+    _S["user"] = auth_user
+    _session_store.associate_session_with_user(_S.session_id(), user["id"])
     token = secrets.token_urlsafe(32)
     _AUTH_SESSIONS[token] = auth_user
     resp = JSONResponse({"ok": True, "user": {"email": user["email"]}})
@@ -615,6 +709,8 @@ async def auth_signup(req: Request):
     pw_hash = hash_password(password)
     user_id = _user_store.create_user(email, pw_hash)
     auth_user = {"id": user_id, "email": email}
+    _S["user"] = auth_user
+    _session_store.associate_session_with_user(_S.session_id(), user_id)
     token = secrets.token_urlsafe(32)
     _AUTH_SESSIONS[token] = auth_user
     resp = JSONResponse({"ok": True, "user": {"email": email}})
@@ -626,6 +722,7 @@ def auth_logout(request: Request):
     token = request.cookies.get(_AUTH_COOKIE, "")
     if token:
         _AUTH_SESSIONS.pop(token, None)
+    _S["user"] = None
     resp = JSONResponse({"ok": True})
     resp.delete_cookie(_AUTH_COOKIE)
     return resp
@@ -671,8 +768,11 @@ def auth_google_callback(request: Request, code: str = "", state: str = ""):
                 )
                 user = {"id": user_id, "email": email, "google_id": google_id}
             auth_user = {"id": user["id"], "email": user["email"], "name": name}
+            _S["user"] = auth_user
+            _session_store.associate_session_with_user(_S.session_id(), user["id"])
         else:
             auth_user = {"email": email, "name": name}
+            _S["user"] = auth_user
 
         token = secrets.token_urlsafe(32)
         _AUTH_SESSIONS[token] = auth_user
@@ -1081,10 +1181,13 @@ def run_phase4():
                     job, tailored, _S["profile"],
                     _S.get("latex_source"),
                     resume_text=_S.get("resume_text", ""),
+                    output_dir=_session_output_dir(),
                 )
                 resume_file = resume_files.get("pdf") or resume_files.get("tex")
-                tailored_map[jk] = {"job": job, "tailored": tailored, "resume_file": resume_file}
-                apps.append({**job, "resume_version": resume_file, "status": "Tailored"})
+                resume_path = _session_output_dir() / resume_file
+                resume_ref = Path(_output_url(resume_path)).as_posix().removeprefix("/output/")
+                tailored_map[jk] = {"job": job, "tailored": tailored, "resume_file": resume_ref}
+                apps.append({**job, "resume_version": resume_ref, "status": "Tailored"})
             except Exception as exc:
                 apps.append({**job, "status": "Error", "notes": str(exc)})
         _S["tailored_map"] = tailored_map
@@ -1113,7 +1216,7 @@ def run_phase5():
         apps      = _S["applications"] or []
         thr       = _S.get("threshold", 75)
         max_apps  = _S.get("max_apps", 10)
-        already   = _load_existing_applications()
+        already   = _load_existing_applications(_session_output_dir())
         results   = []
         submitted = 0
         for job in apps:
@@ -1148,7 +1251,7 @@ def run_phase6():
 
     def _fn():
         apps          = _S["applications"] or []
-        tracker_path  = phase6_update_tracker(apps)
+        tracker_path  = phase6_update_tracker(apps, output_dir=_session_output_dir())
         _S["tracker_path"] = tracker_path
         return tracker_path
 
@@ -1173,7 +1276,7 @@ def run_phase7():
     def _fn():
         prov   = _make_provider()
         apps   = _S["applications"] or []
-        report = phase7_run_report(apps, _S.get("tracker_path"), prov)
+        report = phase7_run_report(apps, _S.get("tracker_path"), prov, output_dir=_session_output_dir())
         _S["report"] = report
         return report
 

@@ -4,35 +4,53 @@
 */
 const { useState, useEffect, useRef, useCallback, useMemo } = React;
 
-/* ── API ── */
+/* ── API ──
+   All requests carry a wall-clock timeout via AbortController. Without it,
+   a hung server (e.g. restart warm-up while the ingestion backfill saturates
+   SQLite) leaves the JobsPage spinner stuck indefinitely — the user can't
+   tell the difference between "loading" and "broken". 30s is generous for
+   any normal request and short enough that the empty-state takes over before
+   the user gives up. */
+const _withTimeout = (ms = 30000) => {
+  if (typeof AbortController === 'undefined') return { signal: undefined, cancel: () => {} };
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ms);
+  return { signal: ctrl.signal, cancel: () => clearTimeout(timer) };
+};
+const _handle = async r => {
+  let data;
+  try { data = await r.json(); }
+  catch (_) { data = {}; }
+  if (!r.ok) throw new Error(data.detail || data.error || data.message || `API ${r.status}`);
+  return data;
+};
 const api = {
-  get:  url => fetch(url).then(async r => {
-    const data = await r.json();
-    if (!r.ok) throw new Error(data.detail || data.error || data.message || 'API Error');
-    return data;
-  }),
-  post: (url, body) => fetch(url, {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify(body),
-  }).then(async r => {
-    const data = await r.json();
-    if (!r.ok) throw new Error(data.detail || data.error || data.message || 'API Error');
-    return data;
-  }),
-  upload: (url, file) => {
-    const fd = new FormData(); fd.append('file', file);
-    return fetch(url, { method:'POST', body:fd }).then(async r => {
-      const data = await r.json();
-      if (!r.ok) throw new Error(data.detail || data.error || data.message || 'API Error');
-      return data;
-    });
+  get: (url, { timeoutMs = 30000 } = {}) => {
+    const t = _withTimeout(timeoutMs);
+    return fetch(url, { signal: t.signal }).then(_handle).finally(t.cancel);
   },
-  delete: url => fetch(url, { method:'DELETE' }).then(async r => {
-    if (r.status === 204) return { ok: true };
-    const data = await r.json();
-    if (!r.ok) throw new Error(data.detail || data.error || data.message || 'API Error');
-    return data;
-  }),
+  post: (url, body, { timeoutMs = 30000 } = {}) => {
+    const t = _withTimeout(timeoutMs);
+    return fetch(url, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(body), signal: t.signal,
+    }).then(_handle).finally(t.cancel);
+  },
+  upload: (url, file, { timeoutMs = 120000 } = {}) => {
+    const t = _withTimeout(timeoutMs);
+    const fd = new FormData(); fd.append('file', file);
+    return fetch(url, { method:'POST', body:fd, signal: t.signal })
+      .then(_handle).finally(t.cancel);
+  },
+  delete: (url, { timeoutMs = 30000 } = {}) => {
+    const t = _withTimeout(timeoutMs);
+    return fetch(url, { method:'DELETE', signal: t.signal })
+      .then(async r => {
+        if (r.status === 204) return { ok: true };
+        return _handle(r);
+      })
+      .finally(t.cancel);
+  },
 };
 
 function applyDevTweaks(tweaks = {}) {
@@ -690,14 +708,40 @@ function MarketPulse({ jobs, profileSkills }) {
     });
     const top = Object.entries(counts).sort((a, b) => b[1] - a[1])[0] || null;
 
-    const text = jobs.map(j => String(j.skills || j.requirements || j.description || '')).join(' ').toLowerCase();
+    // Skill-gap suggestion is derived from the user's actual job queue —
+    // never a hardcoded list. We tokenize each job's skills/requirements
+    // string, count occurrences across the queue, then pick the most
+    // frequent token that isn't already in the user's profile. Field-
+    // agnostic by construction: a marketing queue suggests marketing
+    // skills, a hardware queue suggests hardware skills.
     const userSet = new Set((profileSkills || []).map(s => String(s).toLowerCase()));
-    const candidates = [
-      'python', 'typescript', 'react', 'node.js', 'aws', 'kubernetes', 'docker', 'sql',
-      'rust', 'go', 'verilog', 'fpga', 'cmos', 'matlab', 'c++', 'linux', 'tensorflow',
-      'pytorch', 'figma', 'tailwind', 'graphql', 'kafka', 'spark', 'airflow',
-    ];
-    const gap = candidates.find(s => text.includes(s) && !userSet.has(s)) || null;
+    const tokenCounts = new Map();
+    const STOP = new Set([
+      'and','or','the','a','an','to','of','in','for','with','on','at','by','from','is','as','be',
+      'team','teams','work','working','years','year','experience','required','preferred','plus',
+      'must','should','will','can','our','your','their','this','that','these','those','more',
+      'using','knowledge','strong','good','great','solid','excellent','familiar','familiarity',
+      'including','related','similar','etc','any','all','one','two','three','five','ten',
+    ]);
+    for (const j of jobs) {
+      const s = String(j.skills || j.requirements || j.description || '').toLowerCase();
+      if (!s) continue;
+      // Token shape: alpha + optional + # . - so we keep "c++", "node.js", "c#".
+      const toks = s.match(/[a-z][a-z0-9+#.\-]{1,30}/g) || [];
+      const seenInJob = new Set();
+      for (const tok of toks) {
+        if (tok.length < 2 || STOP.has(tok)) continue;
+        if (seenInJob.has(tok)) continue;
+        seenInJob.add(tok);
+        tokenCounts.set(tok, (tokenCounts.get(tok) || 0) + 1);
+      }
+    }
+    // Most frequent token that the user doesn't already list. Need at
+    // least 2 jobs mentioning it so we don't surface a one-off oddity.
+    const ranked = [...tokenCounts.entries()]
+      .filter(([t, n]) => n >= 2 && !userSet.has(t))
+      .sort((a, b) => b[1] - a[1]);
+    const gap = ranked.length ? ranked[0][0] : null;
 
     return { remotePct, remote, total: n, median, top, gap };
   }, [jobs, profileSkills]);
@@ -1496,7 +1540,7 @@ function ScoreRing({ score }) {
   );
 }
 
-function JobCard({ job, idx, isLiked, onLike, onHide, onAsk }) {
+function JobCard({ job, idx, isLiked, onLike, onHide, onAsk, onTailor }) {
   // Prefer stable per-job values (set by JobsPage); fall back to idx-based for callers that don't enrich.
   const logo    = job._logo   ?? LOGO_VARIANTS[idx % LOGO_VARIANTS.length];
   const posted  = job._posted ?? POSTED_LABELS[idx % POSTED_LABELS.length];
@@ -1550,6 +1594,9 @@ function JobCard({ job, idx, isLiked, onLike, onHide, onAsk }) {
               <button className="btn-ghost" onClick={() => onAsk?.(job)}>
                 <Icon name="sparkles" size={12}/> Ask Atlas
               </button>
+              <button className="btn-ghost btn-tailor" onClick={() => onTailor?.(job)} title="Generate a resume tailored to this job">
+                <Icon name="wand-2" size={12}/> Tailor
+              </button>
               <button className="btn-primary" onClick={() => job.url && window.open(job.url, '_blank')}>
                 <Icon name="zap" size={12}/> Quick Apply
               </button>
@@ -1590,6 +1637,343 @@ function stableHash(s) {
   s = String(s || '');
   for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
   return h;
+}
+
+/* ── Industry filter ──────────────────────────────────────────────────────────
+ *
+ * Replaces the old "Title" chip. The user's ask:
+ *   "the positions should be more open ended too and allow for a general
+ *    industry search rather than position search"
+ *
+ * Two-mode UI inside the popover:
+ *   - Curated grid of canonical industries (icons + counts) for fast scanning.
+ *   - When the user types, the grid is filtered AND the DB is queried via
+ *     /api/jobs/facets so any uncurated bucket (e.g. legacy labels) still
+ *     surfaces.
+ *
+ * Multi-select. Selecting two industries means "engineering OR sales" at the
+ * SQL layer. The chip label shows the count when more than one is active.
+ * Canonical labels and order are pinned to the same set produced by
+ * pipeline/helpers.py::_CATEGORY_KEYWORDS — keep them in sync.
+ */
+const INDUSTRY_TILES = [
+  { value: 'engineering',   label: 'Engineering',   icon: 'code-2',         hint: 'Software, SRE, hardware' },
+  { value: 'data',          label: 'Data & AI',     icon: 'database',       hint: 'DS / ML / analytics' },
+  { value: 'product',       label: 'Product & PM',  icon: 'rocket',         hint: 'PM, program, project' },
+  { value: 'design',        label: 'Design',        icon: 'palette',        hint: 'UX, UI, brand, content' },
+  { value: 'sales',         label: 'Sales',         icon: 'handshake',      hint: 'AE, BDR, SDR, CS' },
+  { value: 'marketing',     label: 'Marketing',     icon: 'megaphone',      hint: 'Brand, growth, SEO' },
+  { value: 'finance',       label: 'Finance',       icon: 'banknote',       hint: 'Accounting, FP&A, audit' },
+  { value: 'consulting',    label: 'Consulting',    icon: 'briefcase',      hint: 'Strategy, advisory' },
+  { value: 'operations',    label: 'Operations',    icon: 'truck',          hint: 'Supply chain, logistics' },
+  { value: 'support',       label: 'Customer support', icon: 'headphones',  hint: 'CX, help desk' },
+  { value: 'hr',            label: 'People & HR',   icon: 'users',          hint: 'Recruiting, HRBP' },
+  { value: 'healthcare',    label: 'Healthcare',    icon: 'heart-pulse',    hint: 'Clinical, pharmacy' },
+  { value: 'education',     label: 'Education',     icon: 'graduation-cap', hint: 'Teaching, curriculum' },
+  { value: 'legal',         label: 'Legal',         icon: 'scale',          hint: 'Counsel, paralegal' },
+  { value: 'public_sector', label: 'Public sector', icon: 'landmark',       hint: 'Government, civic' },
+  { value: 'media',         label: 'Media',         icon: 'film',           hint: 'Editorial, video, audio' },
+  { value: 'trades',        label: 'Trades',        icon: 'wrench',         hint: 'Technician, electrician' },
+  { value: 'general',       label: 'General / other', icon: 'layers',       hint: 'Uncategorized roles' },
+];
+const INDUSTRY_BY_VALUE = INDUSTRY_TILES.reduce((m, t) => (m[t.value] = t, m), {});
+
+function IndustryFilter({ value, onChange }) {
+  // value is an array of canonical industry codes (strings); never null.
+  const selected = Array.isArray(value) ? value : [];
+  const [open, setOpen]     = useState(false);
+  const [q, setQ]           = useState('');
+  const [counts, setCounts] = useState({});       // { value: count }
+  const [extraBuckets, setExtraBuckets] = useState([]); // non-curated facets returned by DB
+  const [loading, setLoading] = useState(false);
+  const wrapRef  = useRef(null);
+  const inputRef = useRef(null);
+
+  // Close on outside click / Escape.
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = e => { if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false); };
+    const onKey = e => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDoc);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  // Focus search box on open.
+  useEffect(() => {
+    if (open && inputRef.current) {
+      const id = setTimeout(() => inputRef.current?.focus(), 30);
+      return () => clearTimeout(id);
+    }
+  }, [open]);
+
+  // Load curated counts on open. We query the full set once (limit=200 covers
+  // all 18 canonical labels with room for any drift) so the tile order matches
+  // real inventory — biggest first inside the curated row, then long-tail.
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    setLoading(true);
+    api.get('/api/jobs/facets?kind=industry&limit=200')
+      .then(data => {
+        if (cancelled) return;
+        const c = {};
+        const extras = [];
+        for (const b of data.buckets || []) {
+          c[b.value] = b.count;
+          if (!INDUSTRY_BY_VALUE[b.value] && b.value !== 'general') {
+            extras.push({ value: b.value, label: b.value, icon: 'layers', count: b.count, hint: 'DB label' });
+          }
+        }
+        setCounts(c);
+        setExtraBuckets(extras);
+      })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [open]);
+
+  const toggle = (val) => {
+    const next = selected.includes(val) ? selected.filter(v => v !== val) : [...selected, val];
+    onChange(next.length ? next : null);
+  };
+
+  const fmt = (n) => n == null ? '—' : (n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1) + 'k' : String(n));
+
+  // Canonical tiles ordered by live count (desc), with zero-count buckets
+  // pushed to the bottom but still shown so the user sees the full taxonomy.
+  const orderedTiles = useMemo(() => {
+    const withCount = INDUSTRY_TILES.map(t => ({ ...t, count: counts[t.value] || 0 }));
+    withCount.sort((a, b) => (b.count - a.count) || a.label.localeCompare(b.label));
+    return withCount.concat(extraBuckets);
+  }, [counts, extraBuckets]);
+
+  const norm = q.trim().toLowerCase();
+  const filteredTiles = norm
+    ? orderedTiles.filter(t =>
+        t.label.toLowerCase().includes(norm) ||
+        (t.hint || '').toLowerCase().includes(norm) ||
+        t.value.toLowerCase().includes(norm))
+    : orderedTiles;
+
+  const triggerLabel = selected.length === 0
+    ? 'Industry'
+    : selected.length === 1
+      ? (INDUSTRY_BY_VALUE[selected[0]]?.label || selected[0])
+      : `${selected.length} industries`;
+  const isActive = selected.length > 0;
+
+  return (
+    <div className="fd-wrap" ref={wrapRef}>
+      <button className={'f-chip fd-trigger' + (isActive ? ' on' : '') + (open ? ' open' : '')}
+              onClick={() => setOpen(o => !o)}>
+        <Icon name="layers" size={11}/>
+        <span className="fd-trigger-lbl">{triggerLabel}</span>
+        {isActive && <span className="fd-clear-x"
+                           onClick={e => { e.stopPropagation(); onChange(null); }}
+                           title="Clear all">
+          <Icon name="x" size={10}/>
+        </span>}
+        <Icon name="chevron-down" size={11}/>
+      </button>
+      {open && (
+        <div className="fd-pop fd-left fd-wide">
+          <div className="fd-search">
+            <Icon name="search" size={11} color="var(--t3)"/>
+            <input ref={inputRef} placeholder="Search industries — e.g. design, finance"
+                   value={q} onChange={e => setQ(e.target.value)}/>
+            {q && <button className="fd-search-x" onClick={() => setQ('')}><Icon name="x" size={10}/></button>}
+          </div>
+          {selected.length > 0 && (
+            <div className="fd-section-h">
+              <span><Icon name="check-square" size={10}/> Active</span>
+              <button className="fd-mini-link" onClick={() => onChange(null)}>Clear</button>
+            </div>
+          )}
+          {selected.length > 0 && (
+            <div className="fd-chips-row">
+              {selected.map(v => (
+                <button key={v} className="fd-active-chip" onClick={() => toggle(v)} title="Remove">
+                  <Icon name={(INDUSTRY_BY_VALUE[v] || extraBuckets.find(e => e.value === v))?.icon || 'layers'} size={10}/>
+                  {(INDUSTRY_BY_VALUE[v] || extraBuckets.find(e => e.value === v))?.label || v}
+                  <Icon name="x" size={9}/>
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="fd-section-h">
+            <span><Icon name="grid-3x3" size={10}/> {norm ? 'Matches' : 'Browse industries'}</span>
+            {loading && <em className="fd-mini-meta">loading…</em>}
+          </div>
+          <div className="fd-grid">
+            {filteredTiles.length === 0 && (
+              <div className="fd-empty" style={{ gridColumn: '1 / -1' }}>
+                No industries match "{q}". Try "engineering" or "finance".
+              </div>
+            )}
+            {filteredTiles.map(t => {
+              const sel = selected.includes(t.value);
+              const c   = counts[t.value] != null ? counts[t.value] : t.count;
+              return (
+                <button key={t.value} className={'fd-tile' + (sel ? ' on' : '')}
+                        onClick={() => toggle(t.value)} title={t.hint || ''}>
+                  <span className="fd-tile-ico"><Icon name={t.icon} size={14}/></span>
+                  <span className="fd-tile-body">
+                    <span className="fd-tile-lbl">{t.label}</span>
+                    <span className="fd-tile-meta">{fmt(c)}</span>
+                  </span>
+                  {sel && <span className="fd-tile-tick"><Icon name="check" size={11}/></span>}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── BackendFacetFilter — single-select chip backed by /api/jobs/facets ──────
+ *
+ * Replaces the old client-side Location chip. Lets the user pick from a small
+ * curated list of common defaults OR live-search the DB for any value
+ * (cities, regions, countries — whatever the location column actually
+ * contains). Counts come from the same facet endpoint. Used for the Location
+ * chip; could be reused for "Company" later without changes.
+ */
+function BackendFacetFilter({ placeholder, kind, value, onChange, icon, defaults = [] }) {
+  const [open, setOpen]       = useState(false);
+  const [q, setQ]             = useState('');
+  const [debouncedQ, setDQ]   = useState('');
+  const [buckets, setBuckets] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const wrapRef  = useRef(null);
+  const inputRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = e => { if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false); };
+    const onKey = e => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDoc);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (open && inputRef.current) {
+      const id = setTimeout(() => inputRef.current?.focus(), 30);
+      return () => clearTimeout(id);
+    }
+  }, [open]);
+
+  // Debounce search to avoid hammering the facet endpoint while typing.
+  useEffect(() => {
+    const id = setTimeout(() => setDQ(q.trim()), 200);
+    return () => clearTimeout(id);
+  }, [q]);
+
+  // Fetch facets when the popover is open. Empty `q` returns top buckets by
+  // count, which is what we want for the default landing view.
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    setLoading(true);
+    const url = `/api/jobs/facets?kind=${encodeURIComponent(kind)}&limit=40&q=${encodeURIComponent(debouncedQ)}`;
+    api.get(url)
+      .then(data => { if (!cancelled) setBuckets(data.buckets || []); })
+      .catch(() => { if (!cancelled) setBuckets([]); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [open, kind, debouncedQ]);
+
+  const fmt = (n) => n == null ? '' : (n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1) + 'k' : String(n));
+  const isActive = !!value;
+
+  // Hide curated defaults the moment the user starts typing — they want to
+  // see DB matches at that point, not our hand-picked shortcuts.
+  const showDefaults = debouncedQ === '';
+
+  return (
+    <div className="fd-wrap" ref={wrapRef}>
+      <button className={'f-chip fd-trigger' + (isActive ? ' on' : '') + (open ? ' open' : '')}
+              onClick={() => setOpen(o => !o)}>
+        {icon && <Icon name={icon} size={11}/>}
+        <span className="fd-trigger-lbl">{value || placeholder}</span>
+        {isActive && <span className="fd-clear-x"
+                           onClick={e => { e.stopPropagation(); onChange(null); }}
+                           title="Clear">
+          <Icon name="x" size={10}/>
+        </span>}
+        <Icon name="chevron-down" size={11}/>
+      </button>
+      {open && (
+        <div className="fd-pop fd-left">
+          <div className="fd-search">
+            <Icon name="search" size={11} color="var(--t3)"/>
+            <input ref={inputRef}
+                   placeholder={`Search ${placeholder.toLowerCase()} — type any value`}
+                   value={q} onChange={e => setQ(e.target.value)}/>
+            {q && <button className="fd-search-x" onClick={() => setQ('')}><Icon name="x" size={10}/></button>}
+          </div>
+          {showDefaults && defaults.length > 0 && (
+            <>
+              <div className="fd-section-h">
+                <span><Icon name="bookmark" size={10}/> Quick picks</span>
+              </div>
+              <div className="fd-list">
+                {defaults.map((d, i) => {
+                  const sel = value === d.value;
+                  return (
+                    <button key={'d' + i} className={'fd-opt' + (sel ? ' selected' : '')}
+                            onClick={() => { onChange(sel ? null : d.value); setOpen(false); setQ(''); }}>
+                      {d.icon && <Icon name={d.icon} size={12} color="var(--t3)"/>}
+                      <span className="fd-opt-lbl">{d.label}</span>
+                      {sel && <Icon name="check" size={12}/>}
+                    </button>
+                  );
+                })}
+              </div>
+            </>
+          )}
+          <div className="fd-section-h">
+            <span><Icon name="database" size={10}/> {showDefaults ? 'Most active in index' : 'Live DB matches'}</span>
+            {loading && <em className="fd-mini-meta">loading…</em>}
+          </div>
+          <div className="fd-list">
+            {!loading && buckets.length === 0 && (
+              <div className="fd-empty">
+                {debouncedQ
+                  ? `No ${placeholder.toLowerCase()} matches "${debouncedQ}".`
+                  : `Index empty — try again in a moment.`}
+              </div>
+            )}
+            {buckets.map((b, i) => {
+              const sel = value === b.value;
+              return (
+                <button key={'b' + i} className={'fd-opt' + (sel ? ' selected' : '')}
+                        onClick={() => { onChange(sel ? null : b.value); setOpen(false); setQ(''); }}>
+                  <span className="fd-opt-lbl">{b.value}</span>
+                  <em className="fd-meta">{fmt(b.count)}</em>
+                  {sel && <Icon name="check" size={12}/>}
+                </button>
+              );
+            })}
+          </div>
+          {isActive && (
+            <button className="fd-clear-row" onClick={() => { onChange(null); setOpen(false); setQ(''); }}>
+              <Icon name="x" size={11}/> Clear selection
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 /* ── FilterDropdown — chip trigger + searchable popover ── */
@@ -1685,14 +2069,18 @@ function JobsPage({ state, refresh, setPage }) {
   const [searchingMore, setSearchingMore] = useState(false);
   const [runLabel, setRunLabel] = useState('');
   const [askJob,  setAskJob]    = useState(null);  // active "Ask Atlas" target
+  const [tailorJob, setTailorJob] = useState(null); // active "Tailor for this job" target
 
   // Filter selections — null means "no filter for this dimension"
-  const [fLocation, setFLocation] = useState(null);
-  const [fTitle,    setFTitle]    = useState(null);
-  const [fExp,      setFExp]      = useState(null);
-  const [fModel,    setFModel]    = useState(null);
-  const [fDateMax,  setFDateMax]  = useState(null);   // max age in days
-  const [fSalary,   setFSalary]   = useState(null);   // min k$/yr
+  const [fLocation,   setFLocation]   = useState(null);
+  // fIndustries replaces the old "Title" chip. Multi-select array of canonical
+  // job_category codes (engineering / sales / healthcare / …) — see
+  // INDUSTRY_TILES above. null means "no industry filter".
+  const [fIndustries, setFIndustries] = useState(null);
+  const [fExp,        setFExp]        = useState(null);
+  const [fModel,      setFModel]      = useState(null);
+  const [fDateMax,    setFDateMax]    = useState(null);   // max age in days
+  const [fSalary,     setFSalary]     = useState(null);   // min k$/yr
   const runningRef  = useRef(false);
 
   /* ── Feed v2: locally-owned, fed by /api/jobs/feed ── */
@@ -1714,13 +2102,19 @@ function JobsPage({ state, refresh, setPage }) {
     return () => clearTimeout(id);
   }, [searchQuery]);
 
-  // Build the feed query string from the active filter chips. Title chip and
-  // salary chip are applied client-side (no server filter for those yet).
+  // Build the feed query string from the active filter chips. Industry,
+  // location, exp, work-model, and date-posted are server-filtered. Salary is
+  // applied client-side (no server filter for that yet — most rows have an
+  // unparseable "Unknown" anyway).
   const feedQS = useMemo(() => {
     const params = new URLSearchParams();
     params.set('limit', '30');
     if (debouncedQuery.trim())               params.set('q', debouncedQuery.trim());
     if (fLocation && fLocation !== 'Anywhere') params.set('location', fLocation);
+    if (Array.isArray(fIndustries) && fIndustries.length > 0) {
+      // CSV — backend splits on comma in app.py::_csv. Keeps order stable.
+      params.set('industry', fIndustries.join(','));
+    }
     if (fExp) {
       const map = { 'Internship':'internship', 'Entry-level':'entry-level',
                     'Mid-level':'mid-level',   'Senior':'senior' };
@@ -1729,9 +2123,11 @@ function JobsPage({ state, refresh, setPage }) {
     if (fModel === 'Remote')                 params.set('remote', '1');
     if (fDateMax != null)                    params.set('days', String(fDateMax));
     return params.toString();
-  }, [debouncedQuery, fLocation, fExp, fModel, fDateMax]);
+  }, [debouncedQuery, fLocation, fIndustries, fExp, fModel, fDateMax]);
 
-  // Load page 1 whenever the filters change.
+  // Load page 1 whenever the filters change. Tracks whether the last attempt
+  // ended in error so the empty-state can auto-retry during server warm-up.
+  const [feedError, setFeedError] = useState(false);
   const loadFirstPage = useCallback(async () => {
     const reqId = ++feedRequest.current;
     setFeedLoading(true);
@@ -1742,13 +2138,36 @@ function JobsPage({ state, refresh, setPage }) {
       setFeedJobs(data.jobs || []);
       setFeedCursor(data.next_cursor || null);
       setFeedTotal(data.total_estimate || 0);
-    } catch (e) { /* feed load failed — silently degrade, user sees empty state */ }
+      setFeedError(false);
+    } catch (e) {
+      // Feed load failed (timeout, 401, 5xx). Mark error so the empty-state
+      // can show a useful message and the auto-retry below kicks in.
+      if (reqId === feedRequest.current) setFeedError(true);
+    }
     finally { if (reqId === feedRequest.current) setFeedLoading(false); }
   }, [feedQS]);
 
   useEffect(() => { loadFirstPage(); }, [loadFirstPage]);
 
+  // Auto-retry empty/errored first-loads on a back-off. Without this, a
+  // server hung during ingestion warm-up leaves the user permanently on the
+  // empty state until they click Refresh — exactly the "stuck on loading"
+  // symptom we just debugged. Stops once we have any jobs.
+  useEffect(() => {
+    if (feedJobs.length > 0) return undefined;        // got jobs; nothing to do
+    if (feedLoading) return undefined;                // a fetch is already in flight
+    if (!feedError && feedTotal > 0) return undefined; // healthy 0-result page (filters)
+    const delay = feedError ? 5000 : 8000;
+    const id = setTimeout(() => { loadFirstPage(); }, delay);
+    return () => clearTimeout(id);
+  }, [feedJobs.length, feedLoading, feedError, feedTotal, loadFirstPage]);
+
   // Cursor-based "load more" — used by both the scroll handler and the button.
+  // Tracks consecutive empty responses so the IntersectionObserver doesn't
+  // fire forever when the server returns a cursor but no new (post-dedup)
+  // rows. After two empty pages in a row, drop the cursor and let the 25s
+  // polling pick up any future ingestions.
+  const emptyStreakRef = useRef(0);
   const loadMore = useCallback(async () => {
     if (!feedCursor || searchingMore) return;
     setSearchingMore(true);
@@ -1758,8 +2177,21 @@ function JobsPage({ state, refresh, setPage }) {
       );
       const fresh = (data.jobs || []).filter(j => !seenIds.current.has(j.id));
       fresh.forEach(j => seenIds.current.add(j.id));
-      setFeedJobs(prev => [...prev, ...fresh]);
-      setFeedCursor(data.next_cursor || null);
+      const nextCursor = data.next_cursor || null;
+      if (fresh.length === 0) {
+        emptyStreakRef.current += 1;
+        if (emptyStreakRef.current >= 2 || nextCursor === feedCursor) {
+          // Two empty pages in a row, OR a cursor that didn't advance →
+          // we've genuinely exhausted the index. Stop the observer loop.
+          setFeedCursor(null);
+        } else {
+          setFeedCursor(nextCursor);
+        }
+      } else {
+        emptyStreakRef.current = 0;
+        setFeedJobs(prev => [...prev, ...fresh]);
+        setFeedCursor(nextCursor);
+      }
     } catch (e) { /* load more failed — cursor resets on next filter change */ }
     finally { setSearchingMore(false); }
   }, [feedCursor, feedQS, searchingMore]);
@@ -1820,40 +2252,33 @@ function JobsPage({ state, refresh, setPage }) {
       const q = fLocation.toLowerCase();
       list = list.filter(j => (j.loc || '').toLowerCase().includes(q));
     }
-    if (fTitle) {
-      const q = fTitle.toLowerCase();
-      list = list.filter(j => (j.role || '').toLowerCase().includes(q));
-    }
+    // Industry is server-filtered (job_category column) — no client mirror
+    // needed. Doing it on the client too would require fetching every job's
+    // category which we don't ship in the JSON shape today.
     if (fExp)             list = list.filter(j => j._exp === fExp);
     if (fModel)           list = list.filter(j => j._model === fModel);
     if (fDateMax != null) list = list.filter(j => (j._posted_days ?? 0) <= fDateMax);
     return list;
   }, [enrichedJobs, tab, searchQuery, liked, hidden, apps,
-      fLocation, fTitle, fExp, fModel, fDateMax]);
+      fLocation, fExp, fModel, fDateMax]);
 
-  const locOptions = useMemo(() => {
-    const seen = new Set(); const out = [];
-    const push = (label) => {
-      const k = label.toLowerCase();
-      if (!seen.has(k)) { seen.add(k); out.push({ value: label, label }); }
-    };
-    push('Anywhere'); push('Remote');
-    enrichedJobs.forEach(j => { if (j.loc) push(j.loc); });
-    ['United States','San Francisco, CA','New York, NY','Seattle, WA','Austin, TX','Boston, MA','Los Angeles, CA','Chicago, IL']
-      .forEach(push);
-    return out;
-  }, [enrichedJobs]);
-
-  const titleOptions = useMemo(() => {
-    const seen = new Set(); const out = [];
-    const push = (label) => {
-      const k = label.toLowerCase();
-      if (!seen.has(k)) { seen.add(k); out.push({ value: label, label }); }
-    };
-    (state?.profile?.target_titles || []).forEach(push);
-    enrichedJobs.forEach(j => { if (j.role) push(j.role); });
-    return out;
-  }, [enrichedJobs, state?.profile?.target_titles]);
+  // Curated quick-pick locations shown above the live DB facets in the chip
+  // popover. Pinned to common US/global hubs + Remote/Anywhere because those
+  // are the search intents we want to land in one click. The DB-facet list
+  // below it surfaces everything else (London, Bangalore, hybrid clusters,
+  // single-city listings, …) sorted by inventory count.
+  const locationDefaults = useMemo(() => [
+    { value: 'Remote',         label: 'Remote',         icon: 'globe' },
+    { value: 'United States',  label: 'United States',  icon: 'flag' },
+    { value: 'San Francisco',  label: 'San Francisco',  icon: 'map-pin' },
+    { value: 'New York',       label: 'New York',       icon: 'map-pin' },
+    { value: 'Seattle',        label: 'Seattle',        icon: 'map-pin' },
+    { value: 'Austin',         label: 'Austin',         icon: 'map-pin' },
+    { value: 'Boston',         label: 'Boston',         icon: 'map-pin' },
+    { value: 'Los Angeles',    label: 'Los Angeles',    icon: 'map-pin' },
+    { value: 'Chicago',        label: 'Chicago',        icon: 'map-pin' },
+    { value: 'London',         label: 'London',         icon: 'map-pin' },
+  ], []);
 
   const expOptions = [
     { value:'Internship',  label:'Internship'  },
@@ -1882,10 +2307,12 @@ function JobsPage({ state, refresh, setPage }) {
   ];
 
   const activeFilterCount =
-    (fLocation && fLocation !== 'Anywhere' ? 1 : 0) + (fTitle ? 1 : 0) + (fExp ? 1 : 0) +
-    (fModel ? 1 : 0) + (fDateMax != null ? 1 : 0) + (fSalary != null ? 1 : 0);
+    (fLocation && fLocation !== 'Anywhere' ? 1 : 0) +
+    (Array.isArray(fIndustries) && fIndustries.length > 0 ? 1 : 0) +
+    (fExp ? 1 : 0) + (fModel ? 1 : 0) +
+    (fDateMax != null ? 1 : 0) + (fSalary != null ? 1 : 0);
   const clearAllFilters = () => {
-    setFLocation(null); setFTitle(null); setFExp(null);
+    setFLocation(null); setFIndustries(null); setFExp(null);
     setFModel(null); setFDateMax(null); setFSalary(null);
   };
 
@@ -1919,20 +2346,69 @@ function JobsPage({ state, refresh, setPage }) {
   const anyExtracting = (state?.resumes || []).some(r => r.extracting);
 
   // Force the ingestion worker to tick every source (dev-only) and reload
-  // the feed. For non-dev users the source-status POST is forbidden, so we
-  // just reload from the existing inventory.
+  // the feed. The source-tick fires in the BACKGROUND because force_run() in
+  // the ingestion worker waits for every registered source (16+ external
+  // APIs) to finish — that's a 30-90 s wall-clock. Awaiting it made the
+  // Refresh button look hung. Instead we fire-and-forget, return the
+  // user's existing inventory immediately, and tail the feed with a few
+  // follow-up reloads so freshly-ingested rows surface within ~12 s
+  // without a second click.
+  //
+  // A monotonic refreshSeq lets a fresh click pre-empt the in-flight
+  // polling loop without us double-clearing the running flag.
+  const refreshSeqRef = useRef(0);
+  const [refreshToast, setRefreshToast] = useState(null);
   const handleRefresh = useCallback(async () => {
-    if (runningRef.current) return;
+    const seq = ++refreshSeqRef.current;
     runningRef.current = true; setRun(true); setRunLabel('Refreshing');
+    // Snapshot the currently-visible job ids so we can show "+N new" /
+    // "Up to date" after the refresh completes — without this, a refresh
+    // that returns identical rows looks broken to the user.
+    const beforeIds = new Set(seenIds.current);
     try {
       if (state?.is_dev) {
-        try { await api.post('/api/jobs/source-status', {}); } catch (_) { /* ignore */ }
+        // Fire-and-forget. Server-side locks already serialize per-source
+        // ticks, so even rapid spam-clicks can't overload anything.
+        api.post('/api/jobs/source-status', {}).catch(() => {});
       }
+      // Immediate refresh from whatever's already indexed — this is the
+      // ~250 ms response the user actually wants from the button.
       await loadFirstPage();
+      if (seq !== refreshSeqRef.current) return;  // newer click superseded us
+
+      // Dev only: poll a few times so newly-ingested rows show up. The
+      // intervals (3 s / 4 s / 5 s) front-load updates while sources are
+      // racing to complete their fetches and back off as the wave settles.
+      if (state?.is_dev) {
+        setRunLabel('Re-indexing');
+        for (const wait of [3000, 4000, 5000]) {
+          await new Promise(r => setTimeout(r, wait));
+          if (seq !== refreshSeqRef.current) return;
+          await loadFirstPage();
+          if (seq !== refreshSeqRef.current) return;
+        }
+      }
+      // Compute what changed so the user gets a concrete confirmation.
+      let newCount = 0;
+      for (const id of seenIds.current) if (!beforeIds.has(id)) newCount++;
+      setRefreshToast(newCount > 0
+        ? { kind: 'new', text: `+${newCount} new ${newCount === 1 ? 'job' : 'jobs'}` }
+        : { kind: 'ok',  text: 'Up to date' });
     } finally {
-      runningRef.current = false; setRun(false); setRunLabel('');
+      // Only the LATEST refresh sequence resets the running flag; an
+      // older sequence pre-empted by a newer click does nothing here.
+      if (seq === refreshSeqRef.current) {
+        runningRef.current = false; setRun(false); setRunLabel('');
+      }
     }
   }, [state?.is_dev, loadFirstPage]);
+
+  // Auto-dismiss the refresh toast after a few seconds.
+  useEffect(() => {
+    if (!refreshToast) return undefined;
+    const id = setTimeout(() => setRefreshToast(null), 3500);
+    return () => clearTimeout(id);
+  }, [refreshToast]);
 
   // "Deep search" used to flip a JobSpy flag. With the new aggregated pipeline
   // the difference is just a wider date window, so we drop the date chip and
@@ -1942,14 +2418,38 @@ function JobsPage({ state, refresh, setPage }) {
     await handleRefresh();
   }, [handleRefresh]);
 
+  // Backup scroll-event handler (in case IntersectionObserver isn't supported
+  // or the sentinel hasn't mounted yet). The real driver is the sentinel
+  // below — this just handles edge cases where the observer doesn't fire.
   const onScroll = (e) => {
     if (searchingMore || feedLoading || tab !== 'recommended') return;
     if (!feedCursor) return;
     const { scrollTop, scrollHeight, clientHeight } = e.target;
-    if (scrollHeight - scrollTop - clientHeight < 400) {
+    if (scrollHeight - scrollTop - clientHeight < 800) {
       loadMore();
     }
   };
+
+  // IntersectionObserver-driven infinite scroll. Reliable across nested
+  // scroll containers, off-screen detection, and pointer-event quirks that
+  // make the scroll-event approach miss triggers near the bottom.
+  const sentinelRef = useRef(null);
+  useEffect(() => {
+    if (tab !== 'recommended') return undefined;
+    if (!feedCursor) return undefined;
+    const node = sentinelRef.current;
+    if (!node || typeof IntersectionObserver === 'undefined') return undefined;
+    const io = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (entry.isIntersecting && !searchingMore && !feedLoading) {
+          loadMore();
+          break;
+        }
+      }
+    }, { rootMargin: '600px 0px 600px 0px', threshold: 0 });
+    io.observe(node);
+    return () => io.disconnect();
+  }, [feedCursor, searchingMore, feedLoading, tab, loadMore]);
 
 
   return (
@@ -1970,9 +2470,15 @@ function JobsPage({ state, refresh, setPage }) {
           <Icon name="search" size={13} color="var(--t3)"/>
           <input placeholder="Search roles or companies" value={searchQuery} onChange={e => setQuery(e.target.value)}/>
         </div>
-        <button className="head-cta" onClick={handleRefresh} disabled={running}>
-          {running ? <><span className="spin"/> {runLabel || 'Finding jobs'}...</> : <><Icon name="refresh-cw" size={13} color="#fff"/> Refresh</>}
+        <button className="head-cta" onClick={handleRefresh}>
+          {running ? <><span className="spin"/> {runLabel || 'Refreshing'}…</> : <><Icon name="refresh-cw" size={13} color="#fff"/> Refresh</>}
         </button>
+        {refreshToast && !running && (
+          <span className={'refresh-toast ' + refreshToast.kind} aria-live="polite">
+            <Icon name={refreshToast.kind === 'new' ? 'sparkles' : 'check'} size={11}/>
+            {refreshToast.text}
+          </span>
+        )}
         <button className="btn-ghost" onClick={handleDeepSearch} disabled={running} style={{ marginLeft:8 }}>
           <Icon name="radar" size={12}/> Deep search
         </button>
@@ -1982,8 +2488,9 @@ function JobsPage({ state, refresh, setPage }) {
         <div className="col-main">
           {/* Filter chips — searchable dropdowns */}
           <div className="filters">
-            <FilterDropdown placeholder="Location"         value={fLocation} onChange={setFLocation} options={locOptions}    icon="map-pin"/>
-            <FilterDropdown placeholder="Title"            value={fTitle}    onChange={setFTitle}    options={titleOptions}  icon="briefcase"/>
+            <BackendFacetFilter placeholder="Location" kind="location" value={fLocation} onChange={setFLocation}
+                                icon="map-pin" defaults={locationDefaults}/>
+            <IndustryFilter        value={fIndustries} onChange={setFIndustries}/>
             <FilterDropdown placeholder="Experience level" value={fExp}      onChange={setFExp}      options={expOptions}    searchable={false} icon="graduation-cap"/>
             <FilterDropdown placeholder="Work model"       value={fModel}    onChange={setFModel}    options={modelOptions}  searchable={false} icon="building-2"/>
             <FilterDropdown placeholder="Date posted"      value={fDateMax}  onChange={setFDateMax}  options={dateOptions}   searchable={false} icon="calendar"/>
@@ -2043,25 +2550,31 @@ function JobsPage({ state, refresh, setPage }) {
                   isLiked={liked.has(j.id)}
                   onLike={() => handleAction(liked.has(j.id) ? 'unlike' : 'like', j)}
                   onHide={() => handleAction('hide', j)}
-                  onAsk={() => setAskJob(j)}/>
+                  onAsk={() => setAskJob(j)}
+                  onTailor={() => setTailorJob(j)}/>
               ))}
 
-              {searchingMore && (
-                <div style={{ padding: 24, textAlign: 'center', color: 'var(--t3)' }}>
+              {/* Sentinel — IntersectionObserver fires loadMore when this
+                  scrolls into view (with a 600px rootMargin lookahead).
+                  Always rendered while there's more to fetch so the scroll
+                  driver can re-attach after each load. */}
+              {tab === 'recommended' && feedCursor && (
+                <div ref={sentinelRef} style={{ padding: 24, textAlign: 'center', color: 'var(--t3)' }}>
                   <span className="spin" style={{ marginRight: 8 }}/> Loading more roles…
                 </div>
               )}
 
-              {!searchingMore && tab === 'recommended' && feedCursor && (
-                <div style={{ padding: 32, textAlign: 'center' }}>
-                  <button className="btn-ghost" onClick={loadMore}>
-                    <Icon name="chevron-down" size={14}/> Load more jobs
-                  </button>
-                </div>
-              )}
+              {/* Manual fallback — only shown when the observer was disabled
+                  (e.g. no cursor) but jobs still exist. Lets the user kick
+                  the polling tick to fetch any newly-ingested rows. */}
               {!searchingMore && tab === 'recommended' && !feedCursor && feedJobs.length > 0 && (
-                <div style={{ padding: 32, textAlign: 'center', color: 'var(--t3)', fontSize: 13 }}>
-                  You've reached the end of the current index ({feedTotal} jobs). New roles will appear here as the ingester finds them.
+                <div style={{ padding: 28, textAlign: 'center', color: 'var(--t3)', fontSize: 13.5 }}>
+                  <div style={{ marginBottom: 10 }}>
+                    Showing {feedJobs.length} of {feedTotal} jobs. New roles surface every 25 s as the ingester finds them.
+                  </div>
+                  <button className="btn-ghost" onClick={loadFirstPage}>
+                    <Icon name="refresh-cw" size={12}/> Check for new jobs
+                  </button>
                 </div>
               )}
             </div>
@@ -2126,6 +2639,10 @@ function JobsPage({ state, refresh, setPage }) {
 
       {askJob && (
         <AskAtlas job={askJob} mode={state?.mode} isPro={!!state?.is_pro} onClose={() => setAskJob(null)}/>
+      )}
+      {tailorJob && (
+        <TailorDrawer job={tailorJob} mode={state?.mode} isPro={!!state?.is_pro}
+                      hasResume={!!state?.profile} onClose={() => setTailorJob(null)}/>
       )}
     </>
   );
@@ -2288,6 +2805,152 @@ function AskAtlas({ job, mode, isPro, onClose }) {
         </footer>
         <div className="ask-foot-hint">
           <Icon name="corner-down-left" size={10}/> Enter to send · Shift+Enter for newline · Esc to close
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+/* ──────────────────────────────────────────────────────────
+   Tailor Drawer — per-job, on-demand resume tailoring.
+   Mirrors jobright.ai: user clicks one job, gets a tailored
+   resume in seconds without running the full 7-phase pipeline
+   first. Hits POST /api/resume/tailor on mount, renders the
+   same TailoredResumeCard the phase-4 batch view uses.
+   ────────────────────────────────────────────────────────── */
+function TailorDrawer({ job, mode, isPro, hasResume, onClose }) {
+  const jobId = job.id || `${job.co || job.company || ''}|${job.role || job.title || ''}`;
+  const [item, setItem]       = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError]     = useState(null);
+
+  useEffect(() => {
+    const onKey = e => { if (e.key === 'Escape') onClose?.(); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  // Trigger the tailoring run as soon as the drawer opens. Anthropic mode
+  // can take 15–25 s; Ollama varies with the local model. We surface a
+  // progress checklist while it streams so the wait doesn't feel dead.
+  useEffect(() => {
+    let cancelled = false;
+    if (!hasResume) {
+      setLoading(false);
+      setError('Upload a resume first — Atlas needs your profile to tailor against this posting.');
+      return () => { cancelled = true; };
+    }
+    setLoading(true);
+    setError(null);
+    setItem(null);
+    // 90s timeout — Claude tool-calling for tailoring runs 15-25s; Ollama on
+    // a slow box can exceed the 30s default and 504 prematurely.
+    api.post('/api/resume/tailor', { job_id: jobId }, { timeoutMs: 90000 })
+      .then(res => {
+        if (cancelled) return;
+        setItem(res?.item || null);
+        setLoading(false);
+      })
+      .catch(e => {
+        if (cancelled) return;
+        let msg = e?.message || 'Tailoring failed.';
+        // The server returns "Claude tailoring requires the Pro plan…" via
+        // JSONResponse — _handle surfaces it as e.message verbatim. We only
+        // rewrite genuinely-confusing messages.
+        if (/Job not found|API 404/i.test(msg)) {
+          msg = 'This job is no longer in the index. Refresh the feed and try again.';
+        }
+        setError(msg);
+        setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [jobId, hasResume]);
+
+  const co       = job.co || job.company || '—';
+  const role     = job.role || job.title || 'Untitled role';
+  const score    = Math.round(job.score || 0);
+  const provLbl  = mode === 'demo' ? 'Demo' : (mode === 'anthropic' ? 'Claude' : 'Ollama');
+
+  const STEPS = [
+    'Reading the full posting and extracting requirements',
+    'Comparing your resume keywords against the JD',
+    'Reordering skills to front-load the strongest matches',
+    'Rewriting experience bullets for this role',
+    'Computing the before/after ATS score',
+  ];
+
+  return (
+    <div className="ask-overlay" onClick={onClose}>
+      <aside className="ask-drawer tailor-drawer" onClick={e => e.stopPropagation()}>
+        <header className="ask-head">
+          <div className="ask-head-l">
+            <CompanyLogo company={co} fallbackVariant="v2" size={36}/>
+            <div className="ask-head-meta">
+              <div className="ask-head-eyebrow">
+                <Icon name="wand-2" size={10}/> Tailor · {provLbl}
+                {!isPro && mode === 'anthropic' && <span className="ask-pro-pill">Pro</span>}
+              </div>
+              <div className="ask-head-role">{role}</div>
+              <div className="ask-head-co">
+                <span>{co}</span>
+                {score > 0 && <span className="ask-head-score">{score}<i>/100</i></span>}
+              </div>
+            </div>
+          </div>
+          <button className="ask-close" onClick={onClose} title="Close (Esc)">
+            <Icon name="x" size={16}/>
+          </button>
+        </header>
+
+        <div className="tailor-body">
+          {loading && (
+            <div className="tailor-loading">
+              <div className="tailor-loading-eyebrow">
+                <span className="spin"/> Generating tailored resume…
+              </div>
+              <div className="tailor-loading-hint">
+                {mode === 'anthropic'
+                  ? 'Claude is doing a careful pass over the JD and your profile. Usually 15–25 seconds.'
+                  : mode === 'ollama'
+                    ? 'Your local model is running — speed depends on the model size and your hardware.'
+                    : 'Demo mode: keyword reorder + ATS score, no LLM. Should finish almost instantly.'}
+              </div>
+              <ol className="tailor-steps">
+                {STEPS.map((s, i) => (
+                  <li key={i} style={{ animationDelay: `${i * 200}ms` }}>
+                    <Icon name="check" size={11}/> {s}
+                  </li>
+                ))}
+              </ol>
+            </div>
+          )}
+
+          {error && (
+            <div className="tailor-error">
+              <Icon name="alert-triangle" size={14}/>
+              <div>
+                <div className="tailor-error-h">Couldn't tailor this job</div>
+                <div className="tailor-error-msg">{error}</div>
+              </div>
+            </div>
+          )}
+
+          {item && !loading && !error && (
+            <div className="tailor-result">
+              {/* Index-fed jobs (job_repo) don't carry a profile-relative
+                  score in their raw row — the score lives on the *feed*
+                  payload that JobsPage already has. Overlay it so the
+                  embedded card's MATCH stat reads correctly without an
+                  extra round-trip. */}
+              <TailoredResumeCard item={{
+                ...item,
+                co:    item.co    || co,
+                role:  item.role  || role,
+                loc:   item.loc   || job.loc || job.location || '',
+                score: item.score || score || 0,
+              }}/>
+            </div>
+          )}
         </div>
       </aside>
     </div>
@@ -2654,6 +3317,11 @@ function ResumePage({ state, refresh, setPage }) {
   const [isEditing, setIsEditing] = useState(false);
   const [editText, setEditText] = useState('');
   const [selectedId, setSelectedId] = useState(null);  // which row is selected
+  // 'document' embeds the original PDF in an iframe; 'text' shows the
+  // extracted plaintext (still the only option for .docx/.tex/.txt).
+  // Default to 'document' so a fresh upload renders the PDF the user just
+  // sent — that's the explicit behavior they asked for.
+  const [previewMode, setPreviewMode] = useState('document');
   const [deleteConfirmId, setDeleteConfirmId] = useState(null);
   // "Add resume" splits into two paths: upload a file, or paste text into
   // a modal that round-trips the same /api/resume/upload endpoint as a
@@ -2958,8 +3626,30 @@ function ResumePage({ state, refresh, setPage }) {
 
               {tab === 'preview' && (
                 <div className="data-card fade-in" style={{ padding:0, overflow:'hidden' }}>
-                  <div style={{ padding:'10px 16px', background:'var(--bg-2)', borderBottom:'1px solid var(--bdr)', display:'flex', alignItems:'center', justifyContent:'space-between' }}>
-                    <div style={{ fontSize:14.5, color:'var(--t3)', fontFamily:'var(--mono)' }}>{selected.filename}</div>
+                  <div style={{ padding:'10px 16px', background:'var(--bg-2)', borderBottom:'1px solid var(--bdr)', display:'flex', alignItems:'center', justifyContent:'space-between', gap:12, flexWrap:'wrap' }}>
+                    <div style={{ display:'flex', alignItems:'center', gap:12, minWidth:0 }}>
+                      <div style={{ fontSize:14.5, color:'var(--t3)', fontFamily:'var(--mono)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{selected.filename}</div>
+                      {/* Document / Text toggle — only shown when the user
+                          uploaded an actual PDF we can embed. .docx / .tex /
+                          .txt fall back to text-only because there's nothing
+                          else to render. */}
+                      {selected.original_url && selected.original_kind === 'pdf' && !isEditing && (
+                        <div className="prof-tabs" style={{ margin:0 }}>
+                          <button
+                            className={'prof-tab' + (previewMode === 'document' ? ' active' : '')}
+                            onClick={() => setPreviewMode('document')}
+                            style={{ padding:'5px 11px', fontSize:13 }}>
+                            <Icon name="file" size={12} style={{ marginRight:5 }}/> Document
+                          </button>
+                          <button
+                            className={'prof-tab' + (previewMode === 'text' ? ' active' : '')}
+                            onClick={() => setPreviewMode('text')}
+                            style={{ padding:'5px 11px', fontSize:13 }}>
+                            <Icon name="align-left" size={12} style={{ marginRight:5 }}/> Text
+                          </button>
+                        </div>
+                      )}
+                    </div>
                     <div style={{ display:'flex', gap:8 }}>
                       {isEditing ? (
                         <>
@@ -2970,13 +3660,34 @@ function ResumePage({ state, refresh, setPage }) {
                         </>
                       ) : (
                         <>
-                          <button className="icon-btn" title="Edit text" onClick={() => setIsEditing(true)}><Icon name="edit-3" size={12}/></button>
+                          <button className="icon-btn" title="Edit text" onClick={() => { setPreviewMode('text'); setIsEditing(true); }}><Icon name="edit-3" size={12}/></button>
                           <button className="icon-btn" title="Copy text" onClick={() => { navigator.clipboard.writeText(resumeText); alert('Copied!'); }}><Icon name="copy" size={12}/></button>
-                          <button className="icon-btn" title="Download"><Icon name="download" size={12}/></button>
+                          {selected.original_url ? (
+                            <a className="icon-btn" title="Download original" href={selected.original_url}
+                               download={selected.filename || true} target="_blank" rel="noopener noreferrer">
+                              <Icon name="download" size={12}/>
+                            </a>
+                          ) : (
+                            <button className="icon-btn" title="No original file" disabled style={{ opacity:.4, cursor:'not-allowed' }}><Icon name="download" size={12}/></button>
+                          )}
                         </>
                       )}
                     </div>
                   </div>
+                  {(!isEditing && selected.original_url && selected.original_kind === 'pdf' && previewMode === 'document') ? (
+                    <div style={{ padding:0, height:720, background:'#0f0f13' }}>
+                      {/* Browsers render PDFs natively in an iframe. The
+                          #toolbar=0&navpanes=0 hash hides the Chrome/Edge
+                          built-in toolbar so the embed sits flush; Firefox
+                          ignores the params, harmless. The key forces a
+                          remount when the user switches resumes. */}
+                      <iframe
+                        key={selected.original_url}
+                        src={selected.original_url + '#toolbar=0&navpanes=0'}
+                        title="Resume preview"
+                        style={{ width:'100%', height:'100%', border:'none', background:'#0f0f13' }}/>
+                    </div>
+                  ) : (
                   <div style={{ padding:isEditing ? 0 : 20, maxHeight:600, overflowY:'auto', background:'#0f0f13' }}>
                     {loading && !isEditing ? (
                       <div style={{ padding:40, textAlign:'center', color:'var(--t4)' }}><span className="spin"/> Loading content…</div>
@@ -2994,6 +3705,7 @@ function ResumePage({ state, refresh, setPage }) {
                       </pre>
                     )}
                   </div>
+                  )}
                 </div>
               )}
 
@@ -3252,9 +3964,14 @@ function ProfilePage({ state, refresh, setPage }) {
     try {
       const titles = splitList(form.target_titles).filter(Boolean);
       await api.post('/api/profile', formToProfile(form));
-      // Keep the search config in sync so Phase 2 picks up the new titles + filters.
+      // Keep the search config in sync so Phase 2 + the live job feed pick up
+      // the new preferences. Only send fields the user actually edited this
+      // session — `?? undefined` guards leave the previously-saved value intact.
       const cfg = { job_titles: titles.join(', ') };
-      if (form.search_location !== undefined && form.search_location !== '') cfg.location = form.search_location;
+      if (form.search_location !== undefined) cfg.location = form.search_location;
+      if (Array.isArray(form.search_experience_levels)) cfg.experience_levels = form.search_experience_levels;
+      if (Array.isArray(form.search_education_filter)) cfg.education_filter = form.search_education_filter;
+      if (form.search_citizenship_filter !== undefined) cfg.citizenship_filter = form.search_citizenship_filter;
       if (Number.isFinite(form.search_max_scrape_jobs)) cfg.max_scrape_jobs = form.search_max_scrape_jobs;
       if (Number.isFinite(form.search_days_old)) cfg.days_old = form.search_days_old;
       if (Number.isFinite(form.search_threshold)) cfg.threshold = form.search_threshold;
@@ -3393,19 +4110,38 @@ function ProfilePage({ state, refresh, setPage }) {
 
         <div className="col-main" style={{ width:'100%', maxWidth:'none', marginTop:24 }}>
           {activeTab === 'personal' && (
-            <div className="data-card" style={{ padding:24 }}>
-              <div className="profile-grid">
-                <ProfileInput label="Name" value={form.name} onChange={v => updateField('name', v)}/>
-                <ProfileInput label="Email" value={form.email} onChange={v => updateField('email', v)}/>
-                <ProfileInput label="Phone" value={form.phone} onChange={v => updateField('phone', v)}/>
-                <ProfileInput label="Location" value={form.location} onChange={v => updateField('location', v)}/>
-                <ProfileInput label="LinkedIn URL" value={form.linkedin} onChange={v => updateField('linkedin', v)}/>
-                <ProfileInput label="GitHub URL" value={form.github} onChange={v => updateField('github', v)}/>
-                <ProfileInput label="Work authorization" value={form.work_authorization} onChange={v => updateField('work_authorization', v)}/>
-                <ProfileInput label="Target salary" value={form.target_salary} onChange={v => updateField('target_salary', v)}/>
+            <>
+              <div className="data-card" style={{ padding:24 }}>
+                <h3 className="prof-h" style={{ fontSize:16.5, marginBottom:16 }}>
+                  <Icon name="user" size={14}/> Personal Information
+                </h3>
+                <div className="profile-grid">
+                  <ProfileInput label="Name" value={form.name} onChange={v => updateField('name', v)}/>
+                  <ProfileInput label="Email" value={form.email} onChange={v => updateField('email', v)}/>
+                  <ProfileInput label="Phone" value={form.phone} onChange={v => updateField('phone', v)}/>
+                  <ProfileInput label="Home location" value={form.location} onChange={v => updateField('location', v)}/>
+                  <ProfileSelect
+                    label="Work authorization (US)"
+                    value={form.work_authorization}
+                    onChange={v => updateField('work_authorization', v)}
+                    options={US_WORK_AUTH_OPTIONS}
+                  />
+                  <ProfileSalary
+                    amount={form.target_salary_amount}
+                    currency={form.target_salary_currency}
+                    period={form.target_salary_period}
+                    onAmount={v => updateField('target_salary_amount', v)}
+                    onCurrency={v => updateField('target_salary_currency', v)}
+                    onPeriod={v => updateField('target_salary_period', v)}
+                  />
+                </div>
+                <ProfileInput label="Professional summary" textarea value={form.summary} onChange={v => updateField('summary', v)}/>
               </div>
-              <ProfileInput label="Professional summary" textarea value={form.summary} onChange={v => updateField('summary', v)}/>
-            </div>
+              <div style={{ marginTop:18 }}>
+                <SearchPrefsCard form={form} state={state} updateField={updateField}/>
+              </div>
+              <ProfileLinksCard form={form} updateField={updateField}/>
+            </>
           )}
           {activeTab === 'experience' && (
             <div className="data-card" style={{ padding:24 }}>
@@ -3431,12 +4167,22 @@ function ProfilePage({ state, refresh, setPage }) {
                  <ProfileInput label="Soft Skills" value={form.top_soft_skills} onChange={v => updateField('top_soft_skills', v)}/>
                </div>
                <div className="data-card" style={{ padding:24 }}>
-                 <h3 className="prof-h" style={{ fontSize:16.5, marginBottom:16 }}><Icon name="search" size={14}/> Discovery & Search</h3>
-                 <ProfileInput label="Location"
-                   value={form.search_location ?? state?.location ?? ''}
-                   onChange={v => updateField('search_location', v)}/>
+                 <h3 className="prof-h" style={{ fontSize:16.5, marginBottom:6, display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
+                   <Icon name="search" size={14}/> Discovery & Search
+                   <span style={{
+                     fontSize:10.5, fontWeight:600, letterSpacing:'.04em',
+                     textTransform:'uppercase', padding:'3px 8px', borderRadius:6,
+                     color:'var(--accent-h)', background:'var(--accent-d)',
+                     border:'1px solid var(--accent-b)',
+                   }}>Agent mode only</span>
+                 </h3>
+                 <div className="set-helper" style={{ marginTop:0, marginBottom:14 }}>
+                   Runtime knobs for the legacy 7-phase agent run (the <strong>Agent</strong> tab).
+                   For target roles, location, seniority, education, or citizenship filters,
+                   use <strong>Job Search Preferences</strong> on the Personal tab.
+                 </div>
                  <ProfileInput label="Max jobs to scrape" type="number"
-                   value={form.search_max_scrape_jobs ?? state?.max_scrape_jobs ?? 20}
+                   value={form.search_max_scrape_jobs ?? state?.max_scrape_jobs ?? 50}
                    onChange={v => updateField('search_max_scrape_jobs', parseInt(v))}/>
                  <ProfileInput label="Posting age (days)" type="number"
                    value={form.search_days_old ?? state?.days_old ?? 30}
@@ -3444,7 +4190,9 @@ function ProfilePage({ state, refresh, setPage }) {
                  <ProfileInput label="Match threshold" type="number"
                    value={form.search_threshold ?? state?.threshold ?? 75}
                    onChange={v => updateField('search_threshold', parseInt(v))}/>
-                 <div className="set-helper" style={{ marginTop:6 }}>Click <strong>Save profile</strong> to apply these to your next search.</div>
+                 <div className="set-helper" style={{ marginTop:6 }}>
+                   Click <strong>Save profile</strong> to apply these to your next <em>agent</em> run.
+                 </div>
                </div>
             </div>
           )}
@@ -3467,11 +4215,17 @@ function emptyRole() {
 }
 function profileToForm(p) {
   p = p || {};
+  const salary = parseTargetSalary(p);
   return {
     name: p.name || '', email: p.email || '', phone: p.phone || '',
     location: p.location || '', linkedin: p.linkedin || '', github: p.github || '',
+    website: p.website || '',
     summary: p.summary || '', work_authorization: p.work_authorization || '',
-    target_salary: p.target_salary || '', critical_analysis: p.critical_analysis || '',
+    target_salary: p.target_salary || '',
+    target_salary_amount: salary.amount,
+    target_salary_currency: salary.currency,
+    target_salary_period: salary.period,
+    critical_analysis: p.critical_analysis || '',
     target_titles: (p.target_titles || []).join(', '),
     top_hard_skills: (p.top_hard_skills || []).join(', '),
     top_soft_skills: (p.top_soft_skills || []).join(', '),
@@ -3480,6 +4234,10 @@ function profileToForm(p) {
     experience: p.experience || [],
     research: p.research || p.research_experience || [],
     projects: p.projects || [],
+    // Industry-specific profile URLs round-trip as a single nested dict so
+    // the form can carry ~25 fields without polluting the top level. We
+    // shallow-clone so React state stays isolated from the source profile.
+    links: { ...(p.links || {}) },
   };
 }
 
@@ -3488,11 +4246,22 @@ function formToProfile(form) {
     ...r,
     bullets: (Array.isArray(r.bullets) ? r.bullets : splitBullets(r.bullets)).filter(Boolean),
   }));
+  // Strip empty/whitespace-only link entries before saving so we don't
+  // re-persist placeholder strings the user never typed in.
+  const cleanLinks = {};
+  for (const [k, v] of Object.entries(form.links || {})) {
+    if (typeof v === 'string' && v.trim()) cleanLinks[k] = v.trim();
+  }
   return {
     name: form.name, email: form.email, phone: form.phone,
     location: form.location, linkedin: form.linkedin, github: form.github,
+    website: form.website,
     summary: form.summary, work_authorization: form.work_authorization,
-    target_salary: form.target_salary, critical_analysis: form.critical_analysis,
+    target_salary: composeTargetSalary(form),
+    target_salary_amount: String(form.target_salary_amount || '').trim(),
+    target_salary_currency: form.target_salary_currency || '',
+    target_salary_period: form.target_salary_period || '',
+    critical_analysis: form.critical_analysis,
     target_titles: splitList(form.target_titles).filter(Boolean),
     top_hard_skills: splitList(form.top_hard_skills).filter(Boolean),
     top_soft_skills: splitList(form.top_soft_skills).filter(Boolean),
@@ -3504,12 +4273,103 @@ function formToProfile(form) {
       ...p,
       skills_used: (Array.isArray(p.skills_used) ? p.skills_used : splitList(p.skills_used)).filter(Boolean),
     })),
+    links: cleanLinks,
   };
 }
 function splitBullets(value) {
   return String(value || '').split('\n').map(s => s.trim());
 }
-function ProfileInput({ label, value, onChange, textarea=false, type='text' }) {
+/* The "Search Preferences" card lives at the top of the Personal tab so the
+   five fields that drive job matching (target roles, search location, seniority,
+   degree level, citizenship gate) are the FIRST thing a new user sees after
+   their resume is parsed — and they can be edited at any time without hunting
+   through Settings. Each field has a fallback chain:
+     form.search_X  (user has typed something this session)
+     ?? state.X     (persisted value from a previous save / resume extraction)
+     ?? sane default
+   so the inputs always have a controlled value and the user's edits stick. */
+const _EXP_LEVEL_OPTIONS = [
+  { v: 'internship',  label: 'Internship' },
+  { v: 'entry-level', label: 'Entry-level' },
+  { v: 'mid-level',   label: 'Mid-level' },
+  { v: 'senior',      label: 'Senior' },
+];
+const _EDU_LEVEL_OPTIONS = [
+  { v: 'high_school', label: 'High School' },
+  { v: 'associates',  label: 'Associate' },
+  { v: 'bachelors',   label: "Bachelor's" },
+  { v: 'masters',     label: "Master's" },
+  { v: 'phd',         label: 'PhD' },
+];
+const _CITIZENSHIP_OPTIONS = [
+  { v: 'all',               label: 'All — no citizenship filter' },
+  { v: 'exclude_required',  label: 'Exclude roles that require US citizenship / clearance' },
+  { v: 'only_required',     label: 'Only roles that require US citizenship / clearance' },
+];
+
+function SearchPrefsCard({ form, state, updateField }) {
+  const titles = form.target_titles ?? '';
+  const searchLoc = form.search_location ?? state?.location ?? '';
+  const exp = form.search_experience_levels ?? state?.experience_levels ?? [];
+  const edu = form.search_education_filter ?? state?.education_filter ?? [];
+  const cit = form.search_citizenship_filter ?? state?.citizenship_filter ?? 'all';
+  const isEmpty = !titles.trim() && !searchLoc.trim() && exp.length === 0 && edu.length === 0;
+  return (
+    <div className="data-card search-prefs" style={{ padding:24 }}>
+      <h3 className="prof-h" style={{ fontSize:16.5, marginBottom:6, display:'flex', alignItems:'center', gap:10 }}>
+        <Icon name="target" size={14}/> Job Search Preferences
+        <span className="search-prefs-pill">drives matching</span>
+      </h3>
+      <div className="set-helper" style={{ marginTop:0, marginBottom:16 }}>
+        These five fields control which roles the agent surfaces and scores. They're populated
+        automatically from your resume on first extraction — change them anytime to broaden or narrow
+        the search. Empty = no constraint.
+      </div>
+      {isEmpty && (
+        <div className="notice-strip" style={{ marginBottom:14, background:'var(--accent-d)', borderColor:'var(--accent-b)', color:'var(--accent-h)' }}>
+          <Icon name="info" size={13}/> No preferences set yet. Upload a resume on the Resume page to auto-fill these, or type them in below.
+        </div>
+      )}
+      <div className="profile-grid">
+        <ProfileInput
+          label="Target roles (comma-separated)"
+          value={titles}
+          onChange={v => updateField('target_titles', v)}
+        />
+        <ProfileInput
+          label="Job-search location"
+          value={searchLoc}
+          onChange={v => updateField('search_location', v)}
+        />
+      </div>
+      <ChipToggle
+        label="Experience level"
+        value={exp}
+        onChange={v => updateField('search_experience_levels', v)}
+        options={_EXP_LEVEL_OPTIONS}
+        helper="Pick one or more. Leave all unselected to ignore experience level entirely."
+      />
+      <ChipToggle
+        label="Highest education you hold"
+        value={edu}
+        onChange={v => updateField('search_education_filter', v)}
+        options={_EDU_LEVEL_OPTIONS}
+        helper="Used to drop roles whose required degree exceeds yours. Leave empty to skip the filter."
+      />
+      <ProfileSelect
+        label="Citizenship / clearance filter"
+        value={cit}
+        onChange={v => updateField('search_citizenship_filter', v)}
+        options={_CITIZENSHIP_OPTIONS}
+      />
+      <div className="set-helper" style={{ marginTop:8 }}>
+        Click <strong>Save profile</strong> at the top right to apply.
+      </div>
+    </div>
+  );
+}
+
+function ProfileInput({ label, value, onChange, textarea=false, type='text', placeholder }) {
   const Tag = textarea ? 'textarea' : 'input';
   const safeValue = (value === undefined || value === null || (typeof value === 'number' && Number.isNaN(value))) ? '' : value;
   return (
@@ -3519,8 +4379,440 @@ function ProfileInput({ label, value, onChange, textarea=false, type='text' }) {
         type={textarea ? undefined : type}
         className={'profile-input' + (textarea ? ' profile-textarea' : '')}
         value={safeValue}
+        placeholder={placeholder}
         onChange={e => onChange(e.target.value)}
       />
+    </label>
+  );
+}
+
+/* ────────────────────────────────────────────────────────────────
+   Profile links — industry-specific online presence
+
+   The catalog below is the result of mapping which profile sites each
+   industry's hiring pipeline actually values. It's grouped so the
+   five sites a software engineer cares about don't drown out the
+   three a journalist needs (and vice versa). Each entry has:
+
+     key      : stable id, mirrors PROFILE_LINK_KEYS in profile_extractor.py
+     label    : what we show in the input label
+     mono     : 2-letter monogram for the colored chip
+     color    : brand color used by the chip (semi-transparent so it
+                works in both dark + light themes)
+     hint     : URL example shown as the input placeholder so users see
+                the canonical shape they should paste
+   ──────────────────────────────────────────────────────────────── */
+const PROFILE_LINK_GROUPS = [
+  {
+    name: 'Universal',
+    description: 'Filled by every industry — start here.',
+    icon: 'globe',
+    defaultOpen: true,
+    items: [
+      { key: 'linkedin', label: 'LinkedIn',          mono: 'in', color: '#0A66C2', hint: 'linkedin.com/in/your-handle',     scalar: true },
+      { key: 'website',  label: 'Personal website',  mono: 'WW', color: 'var(--accent)', hint: 'https://your-name.dev',     scalar: true },
+      { key: 'twitter',  label: 'Twitter / X',       mono: '𝕏',  color: '#0F1419', hint: 'x.com/your-handle' },
+    ],
+  },
+  {
+    name: 'Software & Engineering',
+    description: 'Code repos, Q&A reputation, and interview-prep proof.',
+    icon: 'terminal',
+    items: [
+      { key: 'github',        label: 'GitHub',         mono: 'GH', color: '#1F2328', hint: 'github.com/your-handle',                scalar: true },
+      { key: 'gitlab',        label: 'GitLab',         mono: 'GL', color: '#FC6D26', hint: 'gitlab.com/your-handle' },
+      { key: 'stackoverflow', label: 'Stack Overflow', mono: 'SO', color: '#F58025', hint: 'stackoverflow.com/users/123/your-handle' },
+      { key: 'leetcode',      label: 'LeetCode',       mono: 'LC', color: '#FFA116', hint: 'leetcode.com/u/your-handle' },
+    ],
+  },
+  {
+    name: 'Data, ML & AI',
+    description: 'For data scientists, ML/AI engineers, and applied researchers.',
+    icon: 'cpu',
+    items: [
+      { key: 'kaggle',         label: 'Kaggle',           mono: 'KG', color: '#20BEFF', hint: 'kaggle.com/your-handle' },
+      { key: 'huggingface',    label: 'Hugging Face',     mono: 'HF', color: '#FFD21E', hint: 'huggingface.co/your-handle' },
+      { key: 'paperswithcode', label: 'Papers With Code', mono: 'PC', color: '#21CBCE', hint: 'paperswithcode.com/author/your-handle' },
+    ],
+  },
+  {
+    name: 'Design & Creative',
+    description: 'UI/UX, illustration, 3D — the portfolio sites recruiters open first.',
+    icon: 'palette',
+    items: [
+      { key: 'dribbble',   label: 'Dribbble',   mono: 'DR', color: '#EA4C89', hint: 'dribbble.com/your-handle' },
+      { key: 'behance',    label: 'Behance',    mono: 'BE', color: '#1769FF', hint: 'behance.net/your-handle' },
+      { key: 'artstation', label: 'ArtStation', mono: 'AS', color: '#13AFF0', hint: 'artstation.com/your-handle' },
+      { key: 'sketchfab',  label: 'Sketchfab',  mono: 'SF', color: '#1CAAD9', hint: 'sketchfab.com/your-handle' },
+    ],
+  },
+  {
+    name: 'Writing & Content',
+    description: 'Long-form writing, newsletters, video essays.',
+    icon: 'feather',
+    items: [
+      { key: 'medium',   label: 'Medium',     mono: 'MD', color: '#1A8917', hint: 'medium.com/@your-handle' },
+      { key: 'substack', label: 'Substack',   mono: 'SS', color: '#FF6719', hint: 'your-handle.substack.com' },
+      { key: 'youtube',  label: 'YouTube',    mono: 'YT', color: '#FF0000', hint: 'youtube.com/@your-handle' },
+    ],
+  },
+  {
+    name: 'Academic & Research',
+    description: 'Citations, identifiers, and peer-network sites for researchers.',
+    icon: 'graduation-cap',
+    items: [
+      { key: 'google_scholar', label: 'Google Scholar', mono: 'GS', color: '#4285F4', hint: 'scholar.google.com/citations?user=…' },
+      { key: 'orcid',          label: 'ORCID',          mono: 'OR', color: '#A6CE39', hint: 'orcid.org/0000-0000-0000-0000' },
+      { key: 'researchgate',   label: 'ResearchGate',   mono: 'RG', color: '#00CCBB', hint: 'researchgate.net/profile/Your-Name' },
+      { key: 'academia',       label: 'Academia.edu',   mono: 'AE', color: '#41637E', hint: 'your-university.academia.edu/YourName' },
+    ],
+  },
+  {
+    name: 'Visual & Media',
+    description: 'Photography, film, and short-form video.',
+    icon: 'camera',
+    items: [
+      { key: 'instagram', label: 'Instagram',  mono: 'IG', color: '#E4405F', hint: 'instagram.com/your-handle' },
+      { key: '500px',     label: '500px',      mono: '5P', color: '#0099E5', hint: '500px.com/p/your-handle' },
+      { key: 'flickr',    label: 'Flickr',     mono: 'FL', color: '#FF0084', hint: 'flickr.com/photos/your-handle' },
+      { key: 'vimeo',     label: 'Vimeo',      mono: 'VM', color: '#1AB7EA', hint: 'vimeo.com/your-handle' },
+    ],
+  },
+  {
+    name: 'Audio & Music',
+    description: 'Catalog, tracks, and producer credits.',
+    icon: 'music',
+    items: [
+      { key: 'soundcloud', label: 'SoundCloud', mono: 'SC', color: '#FF5500', hint: 'soundcloud.com/your-handle' },
+      { key: 'bandcamp',   label: 'Bandcamp',   mono: 'BC', color: '#629AA9', hint: 'your-handle.bandcamp.com' },
+    ],
+  },
+  {
+    name: 'Business & Startups',
+    description: 'Founders, investors, BD — where deal flow happens.',
+    icon: 'briefcase',
+    items: [
+      { key: 'wellfound',   label: 'Wellfound (AngelList)', mono: 'WF', color: '#000000', hint: 'wellfound.com/u/your-handle' },
+      { key: 'crunchbase',  label: 'Crunchbase',            mono: 'CB', color: '#146AFF', hint: 'crunchbase.com/person/your-handle' },
+      { key: 'producthunt', label: 'Product Hunt',          mono: 'PH', color: '#DA552F', hint: 'producthunt.com/@your-handle' },
+    ],
+  },
+  {
+    name: 'Industry Specialties',
+    description: 'Field-specific directories — fill what applies.',
+    icon: 'badge-check',
+    items: [
+      { key: 'doximity',   label: 'Doximity (healthcare)',   mono: 'DX', color: '#00A0DF', hint: 'doximity.com/pub/your-handle' },
+      { key: 'muckrack',   label: 'Muck Rack (journalism)',  mono: 'MR', color: '#2E3A89', hint: 'muckrack.com/your-handle' },
+      { key: 'imdb',       label: 'IMDb (film/TV)',          mono: 'IM', color: '#F5C518', hint: 'imdb.com/name/nm0000000' },
+      { key: 'martindale', label: 'Martindale (legal)',      mono: 'ML', color: '#BF1E2E', hint: 'martindale.com/attorney/your-name' },
+    ],
+  },
+];
+
+function ProfileLinksCard({ form, updateField }) {
+  // Three groups stay open by default (Universal + the user's most likely
+  // primary profession by inference), the rest collapse so the card doesn't
+  // dominate the page. The user can click any header to toggle a group.
+  const [openGroups, setOpenGroups] = useState(() => {
+    const open = new Set();
+    PROFILE_LINK_GROUPS.forEach(g => { if (g.defaultOpen) open.add(g.name); });
+    return open;
+  });
+  const toggleGroup = (name) => {
+    setOpenGroups(prev => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name); else next.add(name);
+      return next;
+    });
+  };
+
+  // For "scalar" entries (linkedin/github/website live as flat keys on
+  // the profile rather than under .links), read & write the top-level form
+  // field instead of going through .links. Keeps backward compatibility
+  // with profiles persisted before the .links dict existed.
+  const readValue = (item) => item.scalar
+    ? (form[item.key] ?? '')
+    : (form.links?.[item.key] ?? '');
+  const writeValue = (item, v) => {
+    if (item.scalar) {
+      updateField(item.key, v);
+    } else {
+      updateField('links', { ...(form.links || {}), [item.key]: v });
+    }
+  };
+
+  // Quick "you've filled X of Y" stat shown in the header.
+  const allItems = PROFILE_LINK_GROUPS.flatMap(g => g.items);
+  const filled = allItems.filter(it => String(readValue(it) || '').trim()).length;
+  const total = allItems.length;
+
+  return (
+    <div className="data-card profile-links-card" style={{ padding:24, marginTop:18 }}>
+      <h3 className="prof-h" style={{ fontSize:16.5, marginBottom:6, display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
+        <Icon name="link-2" size={14}/> Profiles & Online Presence
+        <span className="profile-links-count">{filled} / {total} filled</span>
+      </h3>
+      <div className="set-helper" style={{ marginTop:0, marginBottom:16 }}>
+        Industry-curated list — every site below is one a hiring manager in
+        that field actually checks. Fill what's relevant; leave the rest blank.
+        Detected URLs from your resume show up here automatically.
+      </div>
+
+      {PROFILE_LINK_GROUPS.map(group => {
+        const isOpen = openGroups.has(group.name);
+        const groupFilled = group.items.filter(it => String(readValue(it) || '').trim()).length;
+        return (
+          <div key={group.name} className={'profile-link-group' + (isOpen ? ' open' : '')}>
+            <button
+              type="button"
+              className="profile-link-group-head"
+              onClick={() => toggleGroup(group.name)}
+              aria-expanded={isOpen}
+            >
+              <span className="profile-link-group-icon"><Icon name={group.icon} size={14}/></span>
+              <span className="profile-link-group-name">{group.name}</span>
+              <span className="profile-link-group-count">
+                {groupFilled > 0 ? `${groupFilled} / ${group.items.length}` : `${group.items.length}`}
+              </span>
+              <span className="profile-link-group-chevron"><Icon name="chevron-down" size={14}/></span>
+            </button>
+            {isOpen && (
+              <div className="profile-link-group-body">
+                <div className="profile-link-group-desc">{group.description}</div>
+                <div className="profile-link-rows">
+                  {group.items.map(item => (
+                    <ProfileLinkRow
+                      key={item.key}
+                      item={item}
+                      value={readValue(item)}
+                      onChange={(v) => writeValue(item, v)}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function ProfileLinkRow({ item, value, onChange }) {
+  return (
+    <label className="profile-link-row">
+      <span
+        className="profile-link-mono"
+        style={{ background: item.color, color: _readableMonoText(item.color) }}
+        aria-hidden="true"
+      >
+        {item.mono}
+      </span>
+      <span className="profile-link-row-body">
+        <span className="profile-link-row-label">{item.label}</span>
+        <input
+          className="profile-input profile-link-input"
+          type="url"
+          value={value}
+          placeholder={item.hint}
+          onChange={e => onChange(e.target.value)}
+        />
+      </span>
+    </label>
+  );
+}
+
+/* Pick a contrasting text color for the monogram chip — yellows / pale
+   greens get black text, everything else white. Kept inline so the
+   color list stays portable. */
+function _readableMonoText(bg) {
+  if (!bg) return '#fff';
+  if (bg.startsWith('var(')) return '#fff';
+  // Convert #RRGGBB to luminance.
+  const m = /^#?([a-f0-9]{6})$/i.exec(bg);
+  if (!m) return '#fff';
+  const n = parseInt(m[1], 16);
+  const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  return lum > 0.62 ? '#0a0b1d' : '#ffffff';
+}
+
+/* US work-authorization choices used by the Profile page dropdown.
+   Mirrors the categories most US job-application forms ask for. The
+   value sent to the backend is the human-readable string itself, so
+   downstream tools (resume tailor, cover letter, ATS) can use it
+   verbatim without a translation table. */
+const US_WORK_AUTH_OPTIONS = [
+  { v: '',                                          label: '— Select work authorization —' },
+  { v: 'US Citizen',                                label: 'US Citizen' },
+  { v: 'Permanent Resident (Green Card)',           label: 'Permanent Resident (Green Card)' },
+  { v: 'Authorized to work — no sponsorship needed',label: 'Authorized to work — no sponsorship needed' },
+  { v: 'F-1 OPT',                                   label: 'F-1 OPT (Optional Practical Training)' },
+  { v: 'F-1 STEM OPT Extension',                    label: 'F-1 STEM OPT Extension' },
+  { v: 'F-1 CPT',                                   label: 'F-1 CPT (Curricular Practical Training)' },
+  { v: 'H-1B Visa',                                 label: 'H-1B Visa' },
+  { v: 'H-4 with EAD',                              label: 'H-4 with EAD' },
+  { v: 'L-1 / L-2 with EAD',                        label: 'L-1 / L-2 with EAD' },
+  { v: 'TN Visa (USMCA / NAFTA)',                   label: 'TN Visa (USMCA / NAFTA)' },
+  { v: 'E-3 Visa',                                  label: 'E-3 Visa (Australian)' },
+  { v: 'O-1 Visa',                                  label: 'O-1 Visa' },
+  { v: 'DACA',                                      label: 'DACA' },
+  { v: 'Asylum / Refugee',                          label: 'Asylum / Refugee' },
+  { v: 'Will require sponsorship now',              label: 'Will require sponsorship now' },
+  { v: 'Will require sponsorship in the future',    label: 'Will require sponsorship in the future' },
+  { v: 'Prefer not to disclose',                    label: 'Prefer not to disclose' },
+];
+
+function ProfileSelect({ label, value, onChange, options }) {
+  const safe = (value === undefined || value === null) ? '' : String(value);
+  // Preserve any legacy free-text value that predates the dropdown so the
+  // user doesn't lose data. Render it as an extra option so it stays
+  // selected; user can pick a canonical option to overwrite it.
+  const known = new Set(options.map(o => o.v));
+  const isLegacy = safe !== '' && !known.has(safe);
+  return (
+    <label className="set-field">
+      <span className="set-label">{label}</span>
+      <select
+        className="profile-input profile-select"
+        value={safe}
+        onChange={e => onChange(e.target.value)}
+      >
+        {isLegacy && <option value={safe}>{safe} (existing — pick a standard option to replace)</option>}
+        {options.map(o => (
+          <option key={o.v || '__empty'} value={o.v}>{o.label}</option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+const TARGET_SALARY_CURRENCIES = [
+  'USD', 'EUR', 'GBP', 'CAD', 'AUD', 'JPY', 'INR', 'CNY', 'CHF', 'MXN', 'SGD', 'HKD',
+];
+const TARGET_SALARY_PERIODS = [
+  { v: 'year',  label: '/ year'  },
+  { v: 'month', label: '/ month' },
+  { v: 'week',  label: '/ week'  },
+  { v: 'day',   label: '/ day'   },
+  { v: 'hour',  label: '/ hour'  },
+];
+
+function ProfileSalary({ amount, currency, period, onAmount, onCurrency, onPeriod }) {
+  const safeAmount = (amount === undefined || amount === null) ? '' : String(amount);
+  const safeCurrency = currency || 'USD';
+  const safePeriod = period || 'year';
+  return (
+    <label className="set-field">
+      <span className="set-label">Target salary</span>
+      <div style={{ display:'flex', gap:8, alignItems:'stretch' }}>
+        <input
+          type="number"
+          min="0"
+          inputMode="numeric"
+          placeholder="80000"
+          className="profile-input"
+          value={safeAmount}
+          onChange={e => onAmount(e.target.value)}
+          style={{ flex:'1 1 auto', minWidth:0 }}
+        />
+        <select
+          className="profile-input profile-select"
+          value={safeCurrency}
+          onChange={e => onCurrency(e.target.value)}
+          style={{ flex:'0 0 auto', width:88 }}
+        >
+          {TARGET_SALARY_CURRENCIES.map(c => (
+            <option key={c} value={c}>{c}</option>
+          ))}
+        </select>
+        <select
+          className="profile-input profile-select"
+          value={safePeriod}
+          onChange={e => onPeriod(e.target.value)}
+          style={{ flex:'0 0 auto', width:108 }}
+        >
+          {TARGET_SALARY_PERIODS.map(p => (
+            <option key={p.v} value={p.v}>{p.label}</option>
+          ))}
+        </select>
+      </div>
+    </label>
+  );
+}
+
+const _PERIOD_TOKEN_TO_VALUE = {
+  hour: 'hour', hr: 'hour', hourly: 'hour',
+  day: 'day', daily: 'day',
+  week: 'week', wk: 'week', weekly: 'week',
+  month: 'month', mo: 'month', monthly: 'month',
+  year: 'year', yr: 'year', yearly: 'year', annum: 'year', annual: 'year',
+};
+
+// Round-trip helpers for the 3-part salary input. Existing profiles store a
+// single combined string (e.g. "80000 USD / year") that the LLM extractor
+// produced — parse that on load so users don't lose what's there. New saves
+// always include the structured fields plus a regenerated combined string so
+// downstream readers (resume tailor, ATS) keep working.
+function parseTargetSalary(p) {
+  const out = { amount: '', currency: 'USD', period: 'year' };
+  if (p && (p.target_salary_amount || p.target_salary_currency || p.target_salary_period)) {
+    out.amount = p.target_salary_amount ? String(p.target_salary_amount) : '';
+    if (p.target_salary_currency) out.currency = String(p.target_salary_currency);
+    if (p.target_salary_period) out.period = String(p.target_salary_period);
+    return out;
+  }
+  const raw = String(p?.target_salary || '').trim();
+  if (!raw) return out;
+  const amountMatch = raw.match(/(\d[\d,]*(?:\.\d+)?)/);
+  if (amountMatch) out.amount = amountMatch[1].replace(/,/g, '');
+  const currencyMatch = raw.match(/\b([A-Z]{3})\b/);
+  if (currencyMatch && TARGET_SALARY_CURRENCIES.includes(currencyMatch[1])) {
+    out.currency = currencyMatch[1];
+  }
+  const periodMatch = raw.toLowerCase().match(/\b(hour|hr|hourly|day|daily|week|wk|weekly|month|mo|monthly|year|yr|yearly|annum|annual)\b/);
+  if (periodMatch) out.period = _PERIOD_TOKEN_TO_VALUE[periodMatch[1]] || out.period;
+  return out;
+}
+
+function composeTargetSalary(form) {
+  const amount = String(form.target_salary_amount || '').trim();
+  if (!amount) return '';
+  const currency = (form.target_salary_currency || 'USD').trim();
+  const period = (form.target_salary_period || 'year').trim();
+  return `${amount} ${currency} / ${period}`;
+}
+
+/* Multi-select chip toggle. Each chip flips one value in/out of the
+   selected array. Empty selection = "no constraint" (the convention
+   downstream filters expect). */
+function ChipToggle({ label, value, onChange, options, helper }) {
+  const selected = new Set(Array.isArray(value) ? value : []);
+  const toggle = (v) => {
+    const next = new Set(selected);
+    if (next.has(v)) next.delete(v); else next.add(v);
+    onChange(Array.from(next));
+  };
+  return (
+    <label className="set-field" style={{ display:'block' }}>
+      <span className="set-label">{label}</span>
+      <div className="chip-toggle-row">
+        {options.map(o => {
+          const on = selected.has(o.v);
+          return (
+            <button
+              key={o.v}
+              type="button"
+              className={'chip-toggle' + (on ? ' on' : '')}
+              onClick={() => toggle(o.v)}
+            >
+              {o.label}
+            </button>
+          );
+        })}
+      </div>
+      {helper && <div className="set-helper" style={{ marginTop:6 }}>{helper}</div>}
     </label>
   );
 }
@@ -3791,6 +5083,343 @@ function DetailTable({ columns, rows, empty = 'No rows yet.' }) {
   );
 }
 
+/* ── Phase 4 — Tailored resume preview card ──────────────────────────────
+   jobright.ai-style breakdown: header (company / role / match score / ATS
+   delta) + tailored sections (skills comparison, reordered skills, per-role
+   bullets, missing keywords) + download buttons. */
+function TailoredResumeCard({ item }) {
+  const [open, setOpen] = useState(true);
+
+  const ats_before = Number(item.ats_before) || 0;
+  const ats_after  = Number(item.ats_after) || 0;
+  const ats_delta  = Number(item.ats_delta != null ? item.ats_delta : ats_after - ats_before);
+  const score      = Number(item.score) || 0;
+
+  // resume_file is "sessions/<sid>/<base>.pdf" when pdflatex / reportlab
+  // produced a PDF, OR "sessions/<sid>/<base>.tex" when neither was
+  // available. Build whichever links make sense, label them accurately.
+  const fileBase = item.resume_file || '';
+  const isPdf   = /\.pdf$/i.test(fileBase);
+  const isTex   = /\.tex$/i.test(fileBase);
+  const pdfHref = isPdf ? `/output/${fileBase}` : null;
+  const texHref = isTex
+    ? `/output/${fileBase}`
+    : (fileBase ? `/output/${fileBase.replace(/\.pdf$/i, '.tex')}` : null);
+
+  const skills = Array.isArray(item.skills) ? item.skills : [];
+  const gaps   = Array.isArray(item.ats_gaps) ? item.ats_gaps : [];
+  const cmp    = Array.isArray(item.keyword_comparison) ? item.keyword_comparison : [];
+  const expBlocks = Array.isArray(item.experience_bullets) ? item.experience_bullets : [];
+
+  const errored = (item.status || '').toLowerCase() === 'error';
+
+  return (
+    <div className={'tr-card' + (errored ? ' tr-card-err' : '')}>
+      <button type="button" className="tr-head" onClick={() => setOpen(o => !o)} aria-expanded={open}>
+        <div className="tr-head-l">
+          <CompanyLogo company={item.co} size={36}/>
+          <div className="tr-head-titles">
+            <div className="tr-head-co">{item.co || 'Unknown company'}</div>
+            <div className="tr-head-role">{item.role || 'Untitled role'}</div>
+          </div>
+        </div>
+        <div className="tr-head-r">
+          <div className="tr-stat">
+            <i>MATCH</i>
+            <b>{score}</b>
+          </div>
+          <div className="tr-stat tr-stat-ats">
+            <i>ATS</i>
+            <b>
+              <span className="tr-ats-num">{ats_before}</span>
+              <span className="tr-ats-arrow">→</span>
+              <span className="tr-ats-num tr-ats-after">{ats_after}</span>
+              <span className={'tr-ats-delta' + (ats_delta >= 0 ? ' good' : ' bad')}>
+                {ats_delta >= 0 ? '+' : ''}{ats_delta}
+              </span>
+            </b>
+          </div>
+          <span className="tr-chev" aria-hidden="true">
+            <Icon name={open ? 'chevron-up' : 'chevron-down'} size={14}/>
+          </span>
+        </div>
+      </button>
+
+      {errored && item.notes && (
+        <div className="tr-err-note">
+          <Icon name="alert-triangle" size={12}/>
+          <span>{item.notes}</span>
+        </div>
+      )}
+
+      {open && !errored && (
+        <div className="tr-body">
+          {cmp.length > 0 && (
+            <section className="tr-sec">
+              <div className="tr-sec-h">
+                <Icon name="table" size={12}/>
+                <span>Skills comparison</span>
+                <em>{cmp.filter(c => c.on_resume).length}/{cmp.length} matched</em>
+              </div>
+              <div className="tr-cmp">
+                <div className="tr-cmp-row tr-cmp-head">
+                  <span>Keyword from JD</span>
+                  <span>On your resume</span>
+                  <span>Action</span>
+                </div>
+                {cmp.map((c, i) => (
+                  <div key={i} className={'tr-cmp-row' + (c.on_resume ? ' hit' : ' miss')}>
+                    <span className="tr-cmp-kw">{c.keyword}</span>
+                    <span className="tr-cmp-mark">
+                      {c.on_resume
+                        ? <span className="tr-pill tr-pill-good"><Icon name="check" size={10}/> yes</span>
+                        : <span className="tr-pill tr-pill-bad"><Icon name="x" size={10}/> no</span>}
+                    </span>
+                    <span className={'tr-cmp-act ' + (c.on_resume ? 'keep' : 'add')}>
+                      {c.action === 'add' ? '+ add to resume' : '✓ keep'}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {skills.length > 0 && (
+            <section className="tr-sec">
+              <div className="tr-sec-h">
+                <Icon name="sparkles" size={12}/>
+                <span>Reordered skills (front-loaded for this JD)</span>
+              </div>
+              <div className="tr-chips">
+                {skills.map((s, i) => (
+                  <span key={i} className={'tr-chip' + (i < 5 ? ' tr-chip-top' : '')}>{s}</span>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {expBlocks.length > 0 && (
+            <section className="tr-sec">
+              <div className="tr-sec-h">
+                <Icon name="briefcase" size={12}/>
+                <span>Tailored experience bullets</span>
+              </div>
+              <div className="tr-roles">
+                {expBlocks.map((blk, i) => (
+                  <div key={i} className="tr-role">
+                    {blk.role && <div className="tr-role-h">{blk.role}</div>}
+                    <ul className="tr-role-bullets">
+                      {(blk.bullets || []).map((b, j) => <li key={j}>{b}</li>)}
+                    </ul>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {gaps.length > 0 && (
+            <section className="tr-sec">
+              <div className="tr-sec-h">
+                <Icon name="alert-circle" size={12}/>
+                <span>Keywords still missing — consider adding</span>
+              </div>
+              <div className="tr-chips">
+                {gaps.map((g, i) => <span key={i} className="tr-chip tr-chip-gap">{g}</span>)}
+              </div>
+            </section>
+          )}
+
+          {item.has_cl && item.cover_letter && (
+            <section className="tr-sec">
+              <div className="tr-sec-h">
+                <Icon name="mail" size={12}/>
+                <span>Cover letter</span>
+              </div>
+              <pre className="tr-cl">{item.cover_letter}</pre>
+            </section>
+          )}
+
+          {(pdfHref || texHref) && (
+            <div className="tr-actions">
+              {pdfHref && (
+                <a className="tr-dl tr-dl-primary" href={pdfHref} download>
+                  <Icon name="download" size={12} color="#fff"/> Download PDF
+                </a>
+              )}
+              {texHref && pdfHref !== texHref && (
+                <a className="tr-dl" href={texHref} download>
+                  <Icon name="file-code-2" size={12}/> .tex source
+                </a>
+              )}
+              {pdfHref && (
+                <a className="tr-dl tr-dl-ghost" href={pdfHref} target="_blank" rel="noreferrer">
+                  <Icon name="external-link" size={12}/> Open in new tab
+                </a>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── Phase 6: in-page application tracker spreadsheet ─────────────────────
+   Renders the structured payload from phase6_update_tracker as a sortable
+   HTML table. Color-codes status, summary tile bar above. Replaces the
+   old "download .xlsx" link — everything stays on the page. */
+function TrackerSpreadsheet({ tracker }) {
+  const t = tracker || {};
+  const cols = t.columns || [];
+  const rows = t.rows || [];
+  const summary = t.summary || {};
+  const [sort, setSort] = useState({ key: 'n', dir: 'asc' });
+
+  const sorted = useMemo(() => {
+    const arr = rows.slice();
+    const k = sort.key;
+    arr.sort((a, b) => {
+      const av = a[k], bv = b[k];
+      if (av == null && bv == null) return 0;
+      if (av == null) return 1;
+      if (bv == null) return -1;
+      if (typeof av === 'number' && typeof bv === 'number') return av - bv;
+      return String(av).localeCompare(String(bv), undefined, { numeric: true });
+    });
+    if (sort.dir === 'desc') arr.reverse();
+    return arr;
+  }, [rows, sort]);
+
+  if (!cols.length) {
+    return <div className="phase-detail"><div className="wait-state">Tracker not generated yet — run Phase 6.</div></div>;
+  }
+
+  const STATUS_TONE = {
+    'Applied':         { bg: 'var(--good-d)',    br: 'var(--good-b)',    fg: 'var(--good)'    },
+    'Manual Required': { bg: 'var(--warn-d)',    br: 'var(--warn-b)',    fg: 'var(--warn)'    },
+    'Skipped':         { bg: 'var(--bad-d)',     br: 'var(--bad-b)',     fg: 'var(--bad)'     },
+    'Error':           { bg: 'var(--accent-d)',  br: 'var(--accent-b)',  fg: 'var(--accent-h)' },
+    'Tailored':        { bg: 'var(--accent2-d)', br: 'var(--accent2-b)', fg: 'var(--accent2)' },
+  };
+
+  const renderCell = (col, row) => {
+    const v = row[col.key];
+    if (col.type === 'url') {
+      if (!v) return <span style={{ color: 'var(--t4)' }}>—</span>;
+      return <a href={v} target="_blank" rel="noreferrer" style={{ color: 'var(--accent-h)' }}>
+        Open <Icon name="external-link" size={10}/>
+      </a>;
+    }
+    if (col.type === 'status') {
+      const tone = STATUS_TONE[v] || STATUS_TONE['Applied'];
+      return <span style={{
+        display: 'inline-block', padding: '3px 9px', borderRadius: 999,
+        fontSize: 11, fontWeight: 600, letterSpacing: '.02em',
+        background: tone.bg, border: `1px solid ${tone.br}`, color: tone.fg,
+      }}>{v || '—'}</span>;
+    }
+    if (col.type === 'score') {
+      const s = Number(v) || 0;
+      const c = s >= 85 ? 'var(--good)' : s >= 70 ? 'var(--accent-h)'
+              : s >= 50 ? 'var(--warn)' : 'var(--bad)';
+      return <span style={{ color: c, fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>
+        {s}<i style={{ color: 'var(--t4)', fontStyle: 'normal' }}>/100</i>
+      </span>;
+    }
+    if (col.type === 'yesno') {
+      return v
+        ? <span style={{ color: 'var(--good)' }}>Yes</span>
+        : <span style={{ color: 'var(--t4)' }}>No</span>;
+    }
+    if (col.type === 'int') {
+      return <span style={{ fontVariantNumeric: 'tabular-nums', color: 'var(--t3)' }}>{v ?? ''}</span>;
+    }
+    if (v == null || v === '') return <span style={{ color: 'var(--t4)' }}>—</span>;
+    return <span>{String(v)}</span>;
+  };
+
+  const headerArrow = (key) => {
+    if (sort.key !== key) return <span style={{ opacity: .25, marginLeft: 4 }}>↕</span>;
+    return <span style={{ marginLeft: 4 }}>{sort.dir === 'asc' ? '↑' : '↓'}</span>;
+  };
+
+  const onHeaderClick = (key) => {
+    setSort(prev => prev.key === key
+      ? { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' }
+      : { key, dir: 'asc' });
+  };
+
+  return (
+    <div className="phase-detail">
+      <div className="metrics" style={{ marginBottom: 14 }}>
+        <div className="met"><b>{summary.total ?? rows.length}</b><span>Tracked</span></div>
+        <div className="met"><b style={{ color: 'var(--good)' }}>{summary.applied ?? 0}</b><span>Applied</span></div>
+        <div className="met"><b style={{ color: 'var(--warn)' }}>{summary.manual ?? 0}</b><span>Manual</span></div>
+        <div className="met"><b style={{ color: 'var(--bad)' }}>{summary.skipped ?? 0}</b><span>Skipped</span></div>
+        <div className="met"><b>{summary.avg_score ?? 0}</b><span>Avg score</span></div>
+        <div className="met"><b style={{ fontSize: 14 }}>{summary.run_date || ''}</b><span>Run date</span></div>
+      </div>
+      <div style={{
+        border: '1px solid var(--bdr)', borderRadius: 10, overflow: 'auto',
+        background: 'var(--surface)', maxHeight: '60vh',
+      }}>
+        <table style={{
+          borderCollapse: 'separate', borderSpacing: 0, width: '100%',
+          fontSize: 12.5, fontVariantLigatures: 'none',
+        }}>
+          <thead>
+            <tr>
+              {cols.map(col => (
+                <th key={col.key}
+                  onClick={() => onHeaderClick(col.key)}
+                  style={{
+                    position: 'sticky', top: 0, zIndex: 2,
+                    background: 'var(--bg-2)', color: 'var(--t2)',
+                    textAlign: 'left', padding: '10px 12px',
+                    fontWeight: 600, fontSize: 11.5, letterSpacing: '.02em',
+                    textTransform: 'uppercase', cursor: 'pointer',
+                    minWidth: col.width || 100, whiteSpace: 'nowrap',
+                    borderBottom: '1px solid var(--bdr2)', userSelect: 'none',
+                  }}>
+                  {col.label}{headerArrow(col.key)}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.length === 0 && (
+              <tr><td colSpan={cols.length} style={{ padding: 24, color: 'var(--t3)', textAlign: 'center' }}>
+                No applications tracked yet.
+              </td></tr>
+            )}
+            {sorted.map((row, i) => (
+              <tr key={`${row.n}-${i}`} style={{
+                background: i % 2 ? 'var(--surface)' : 'var(--sur2)',
+              }}>
+                {cols.map(col => (
+                  <td key={col.key} style={{
+                    padding: '8px 12px', borderBottom: '1px solid var(--bdr)',
+                    color: 'var(--t1)', verticalAlign: 'top',
+                    maxWidth: (col.width || 200) + 80, overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: col.type === 'text' ? 'normal' : 'nowrap',
+                  }} title={typeof row[col.key] === 'string' ? row[col.key] : ''}>
+                    {renderCell(col, row)}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ marginTop: 8, fontSize: 11.5, color: 'var(--t4)' }}>
+        Click any column header to sort. Tracker is saved to your account — no file download required.
+      </div>
+    </div>
+  );
+}
+
+
 function PhaseDetails({ n, data = {}, state = {}, threshold }) {
   if (n === 1) {
     const p = data.name || data.email || data.top_hard_skills ? data : (state.profile || {});
@@ -3817,18 +5446,59 @@ function PhaseDetails({ n, data = {}, state = {}, threshold }) {
   }
   if (n === 4) {
     const items = data.items || [];
-    return <div className="phase-detail"><div className="metrics"><div className="met"><b>{data.count ?? items.length}</b><span>Resume variants</span></div></div><DetailTable columns={[{key:'co',label:'Company',strong:true},{key:'role',label:'Role'},{key:'score',label:'Match'},{key:'ats_after',label:'ATS after',strong:true},{key:'ats_gaps',label:'Remaining gaps',render:x=>(x.ats_gaps || []).join(', ')},{key:'resume_file',label:'Resume',render:x=>x.resume_file?<a href={`/output/${x.resume_file}`} download>{x.resume_file}</a>:'-'}]} rows={items} empty="Run or re-run Phase 4 to see tailored resume details."/></div>;
+    if (!items.length) {
+      return <div className="phase-detail"><div className="wait-state">Run or re-run Phase 4 to see tailored resume details.</div></div>;
+    }
+    const totalDelta = items.reduce((acc, it) => acc + (Number(it.ats_delta) || 0), 0);
+    const avgScore = Math.round(items.reduce((a, it) => a + (it.score || 0), 0) / items.length);
+    return (
+      <div className="phase-detail">
+        <div className="metrics">
+          <div className="met"><b>{data.count ?? items.length}</b><span>Resume variants</span></div>
+          <div className="met"><b>{avgScore}</b><span>Avg match</span></div>
+          <div className="met">
+            <b style={{ color: totalDelta >= 0 ? 'var(--good)' : 'var(--bad)' }}>
+              {totalDelta >= 0 ? '+' : ''}{totalDelta}
+            </b>
+            <span>Total ATS gain</span>
+          </div>
+        </div>
+        <div className="tr-list">
+          {items.map((it, i) => <TailoredResumeCard key={(it.resume_file || it.co) + i} item={it}/>)}
+        </div>
+      </div>
+    );
   }
   if (n === 5) {
     const apps = data.apps || state.applications || [];
     return <div className="phase-detail"><div className="metrics"><div className="met"><b>{data.applied ?? apps.filter(a=>a.app_status==='Applied'||a.status==='Applied').length}</b><span>Applied</span></div><div className="met"><b>{data.manual ?? apps.filter(a=>a.app_status==='Manual Required'||a.status==='Manual Required').length}</b><span>Manual</span></div></div><DetailTable columns={[{key:'co',label:'Company',strong:true},{key:'role',label:'Role'},{key:'score',label:'Score'},{key:'status',label:'Status',render:x=>x.status || x.app_status},{key:'confirmation',label:'Confirmation'},{key:'resume',label:'Resume',render:x=>x.resume || x.resume_version || '-'},{key:'url',label:'URL',render:x=>x.url?<a href={x.url} target="_blank" rel="noreferrer">Open</a>:'-'}]} rows={apps}/></div>;
   }
   if (n === 6) {
-    const tracker = data.tracker || state.output_files?.find(f => f.phase === 6)?.name;
-    return <div className="phase-detail">{tracker ? <a className="detail-file" href={`/output/${tracker}`} download><Icon name="download" size={13}/> {tracker}</a> : <div className="wait-state">Tracker not generated yet.</div>}</div>;
+    // Prefer the SSE payload (arrives on `done`), fall back to the persisted
+    // ``state.tracker_data`` so reloads / late mounts still show the
+    // spreadsheet without re-running Phase 6.
+    const tracker = (data && (data.rows || data.columns)) ? data : state.tracker_data;
+    return <TrackerSpreadsheet tracker={tracker}/>;
   }
   if (n === 7) {
-    return <div className="phase-detail">{data.report ? <pre className="report-pre">{data.report}</pre> : <div className="wait-state">Run report not generated yet.</div>}</div>;
+    const reportText = data.report || state.report || '';
+    if (!reportText.trim()) {
+      return <div className="phase-detail"><div className="wait-state">Run report not generated yet.</div></div>;
+    }
+    return (
+      <div className="phase-detail">
+        <div style={{
+          padding: 22, borderRadius: 12,
+          background: 'var(--surface)', border: '1px solid var(--bdr)',
+          color: 'var(--t1)', lineHeight: 1.6,
+        }}>
+          <Markdown text={reportText}/>
+        </div>
+        <div style={{ marginTop: 8, fontSize: 11.5, color: 'var(--t4)' }}>
+          Run report saved to your account — no file download required.
+        </div>
+      </div>
+    );
   }
   return null;
 }
@@ -4129,6 +5799,15 @@ function AgentPage({ state, refresh }) {
 
   const appliedCount = (state?.applications || []).filter(a => a.app_status === 'Applied' || a.status === 'Applied').length;
 
+  // Inline persistence for the Phase 2 cap slider — POSTs /api/config on
+  // commit so the value is available to the next phase run. Optimistic
+  // refresh so the displayed number tracks the slider in real time.
+  const tuneMaxJobs = async (n) => {
+    try { await api.post('/api/config', { max_scrape_jobs: n }); }
+    catch (_) { /* swallow — slider stays local until next refresh */ }
+    refresh();
+  };
+
   return (
     <div className="agent-shell">
       {/* Slim header with mono cadence — no decorative hero */}
@@ -4185,6 +5864,33 @@ function AgentPage({ state, refresh }) {
                   {running ? 'RUNNING' : pct === 100 ? 'COMPLETE' : pct > 0 ? 'IDLE' : 'READY'}
                 </b>
               </div>
+            </div>
+          </div>
+
+          {/* Inline Phase-2 cap dial. Lets the user trade scoring breadth
+              vs. run-time before clicking Run. The DB query underneath is
+              already BM25 + skill overlap + freshness + title match ranked
+              — a higher cap surfaces the next-most-relevant rows, not
+              random extras. */}
+          <div className="agent-tune">
+            <div className="agent-tune-row">
+              <div className="agent-tune-label">
+                <Icon name="briefcase" size={12}/>
+                <span>Phase 2 cap — top ranked jobs from the live index</span>
+              </div>
+              <div className="agent-tune-val"><b>{state?.max_scrape_jobs ?? 50}</b><i>jobs</i></div>
+            </div>
+            <input
+              type="range"
+              className="set-range agent-tune-range"
+              min="10" max="200" step="10"
+              value={state?.max_scrape_jobs ?? 50}
+              disabled={!!running}
+              onChange={e => tuneMaxJobs(parseInt(e.target.value))}
+            />
+            <div className="agent-tune-helper">
+              Phase 2 reads from the local jobs DB (~{state?.job_count || 0} indexed) and ranks by BM25 +
+              skill overlap + freshness + title match. Higher cap = more candidates for Phase 3 to score.
             </div>
           </div>
 
@@ -4528,6 +6234,37 @@ function SettingsPage({ state, refresh, setPage }) {
             </div>
           </div>
 
+          {/* Job Discovery — controls how many ranked rows Phase 2 pulls
+              from the local jobs index. The DB stays the same size; this
+              just sets the cap on how many of the highest-relevance rows
+              the agent examines per run. */}
+          <div className="set-sec">
+            <div className="set-sec-h"><Icon name="briefcase" size={14}/> Job Discovery</div>
+            <div className="set-field">
+              <div className="set-row">
+                <div className="set-label">Max jobs per discovery run</div>
+                <span className="set-range-val">{cfg.max_scrape_jobs ?? 50}</span>
+              </div>
+              <input type="range" className="set-range" min="10" max="200" step="10"
+                value={cfg.max_scrape_jobs ?? 50}
+                onChange={e => update({ max_scrape_jobs: parseInt(e.target.value) })}/>
+              <div className="set-helper">
+                Phase 2 reads ranked results from the live jobs index (BM25 + skill overlap + freshness + title match).
+                Higher = more candidates for Phase 3 to score; lower = faster runs.
+              </div>
+            </div>
+            <div className="set-field">
+              <div className="set-row">
+                <div className="set-label">Posting age window (days)</div>
+                <span className="set-range-val">{cfg.days_old ?? 30}</span>
+              </div>
+              <input type="range" className="set-range" min="1" max="90" step="1"
+                value={cfg.days_old ?? 30}
+                onChange={e => update({ days_old: parseInt(e.target.value) })}/>
+              <div className="set-helper">Drops postings older than N days.</div>
+            </div>
+          </div>
+
           {/* General User Settings */}
           <div className="set-sec">
             <div className="set-sec-h"><Icon name="user" size={14}/> General Settings</div>
@@ -4576,8 +6313,12 @@ function PlansPage({ state, setPage }) {
   const tier = state?.plan_tier || 'free';
   const [contactSent, setContactSent] = useState(false);
 
+  // Stripe-backed checkout/portal handlers are wired on the backend already
+  // (see /api/billing/* in app.py). This page deliberately keeps using the
+  // feedback-stub flow until the Stripe account is fully provisioned —
+  // swap the JSX below back to the startCheckout / openPortal versions
+  // once STRIPE_SECRET_KEY + STRIPE_PRICE_ID_PRO_MONTHLY are set.
   const requestUpgrade = () => {
-    // Stub. v2 swaps this for an /api/checkout/start redirect to Stripe Checkout.
     setContactSent(true);
     api.post('/api/feedback', {
       message: `Upgrade request from ${state?.user?.email || 'unknown'} — wants Pro plan.`,
@@ -4634,7 +6375,7 @@ function PlansPage({ state, setPage }) {
             <div className="plan-glow"/>
             <div className="plan-card-h">
               <div className="plan-name">Pro</div>
-              <div className="plan-price"><b>$9</b><span>/month</span></div>
+              <div className="plan-price"><b>$4</b><span>/month</span></div>
             </div>
             <div className="plan-tag">Unlock Claude — bring your own API key</div>
             <ul className="plan-features">
@@ -5426,9 +7167,9 @@ function DevPage({ state: globalState, refresh: globalRefresh }) {
                     onChange={e => saveSessionConfig({ threshold: Number(e.target.value) })}/>
                 </div>
                 <div className="sc-field">
-                  <label>Max scrape jobs <i>{globalState?.max_scrape_jobs ?? 20}</i></label>
-                  <input type="range" min="5" max="100" step="5" className="set-range"
-                    value={globalState?.max_scrape_jobs ?? 20}
+                  <label>Max scrape jobs <i>{globalState?.max_scrape_jobs ?? 50}</i></label>
+                  <input type="range" min="10" max="200" step="10" className="set-range"
+                    value={globalState?.max_scrape_jobs ?? 50}
                     onChange={e => saveSessionConfig({ max_scrape_jobs: Number(e.target.value) })}/>
                 </div>
                 <div className="sc-field">

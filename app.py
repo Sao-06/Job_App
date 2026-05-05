@@ -70,6 +70,7 @@ from pipeline.resume import _build_demo_resume, _read_resume, _save_tailored_res
 app = FastAPI(title="Jobs AI")
 _AUTH_COOKIE = "jobs_ai_auth"
 _STATE_COOKIE = "jobs_ai_session"
+_SESSION_SWITCH_HEADER = "x-jobs-ai-session-switch"
 _AUTH_SESSIONS: dict[str, dict] = {}
 
 # ── Serve frontend ─────────────────────────────────────────────────────────────
@@ -191,20 +192,48 @@ _user_store = _session_store
 
 def _bind_request_state(request: Request) -> tuple[str, dict, bool]:
     session_id = request.cookies.get(_STATE_COOKIE) or uuid.uuid4().hex
+    state = _load_session_state(session_id)
+    _S.bind(state, session_id)
+    return session_id, state, not bool(request.cookies.get(_STATE_COOKIE))
+
+def _load_session_state(session_id: str) -> dict:
     loaded = _session_store.get_state(session_id)
     state = _default_state()
     state.update(loaded or {})
     state["done"] = set(state.get("done") or [])
     state["liked_ids"] = set(state.get("liked_ids") or [])
     state["hidden_ids"] = set(state.get("hidden_ids") or [])
-    _S.bind(state, session_id)
-    return session_id, state, not bool(request.cookies.get(_STATE_COOKIE))
+    return state
 
 def _save_bound_state(state: dict = None, session_id: str = None) -> None:
     sid = session_id or _S.session_id()
     if not sid:
         return
     _session_store.save_state(sid, state or _S.current())
+
+def _start_session(state: dict = None, user_id: str = None) -> str:
+    session_id = uuid.uuid4().hex
+    next_state = _default_state()
+    if state:
+        next_state.update(state)
+    next_state["done"] = set(next_state.get("done") or [])
+    next_state["liked_ids"] = set(next_state.get("liked_ids") or [])
+    next_state["hidden_ids"] = set(next_state.get("hidden_ids") or [])
+    _S.bind(next_state, session_id)
+    _save_bound_state(next_state, session_id)
+    if user_id:
+        _session_store.associate_session_with_user(session_id, user_id)
+    return session_id
+
+def _switch_to_user_session(user: dict, auth_user: dict) -> str:
+    sessions = _session_store.get_user_sessions(user["id"])
+    session_id = sessions[0] if sessions else uuid.uuid4().hex
+    state = _load_session_state(session_id)
+    state["user"] = auth_user
+    _S.bind(state, session_id)
+    _save_bound_state(state, session_id)
+    _session_store.associate_session_with_user(session_id, user["id"])
+    return session_id
 
 def _session_output_dir(session_id: str = None) -> Path:
     sid = session_id or _S.session_id() or "local"
@@ -223,12 +252,18 @@ def _output_url(path: Path | str) -> str:
 
 @app.middleware("http")
 async def session_state_middleware(request: Request, call_next):
-    session_id, state, is_new = _bind_request_state(request)
+    request_session_id, _state, is_new = _bind_request_state(request)
     response = await call_next(request)
-    if is_new:
-        response.set_cookie(_STATE_COOKIE, session_id, httponly=True, samesite="lax")
+    switched_session_id = response.headers.get(_SESSION_SWITCH_HEADER)
+    if switched_session_id:
+        del response.headers[_SESSION_SWITCH_HEADER]
+        response.set_cookie(_STATE_COOKIE, switched_session_id, httponly=True, samesite="lax")
+        return response
+    current_session_id = _S.session_id() or request_session_id
+    if is_new or current_session_id != request_session_id:
+        response.set_cookie(_STATE_COOKIE, current_session_id, httponly=True, samesite="lax")
     if not response.headers.get("content-type", "").startswith("text/event-stream"):
-        _save_bound_state(state, session_id)
+        _save_bound_state(_S.current(), current_session_id)
     return response
 
 # ── Provider factory ──────────────────────────────────────────────────────────
@@ -687,12 +722,13 @@ async def auth_login(req: Request):
     if not user or not verify_password(password, user.get("password_hash") or ""):
         return JSONResponse({"ok": False, "error": "Invalid email or password"})
     auth_user = {"id": user["id"], "email": user["email"]}
-    _S["user"] = auth_user
-    _session_store.associate_session_with_user(_S.session_id(), user["id"])
+    app_session_id = _switch_to_user_session(user, auth_user)
     token = secrets.token_urlsafe(32)
     _AUTH_SESSIONS[token] = auth_user
     resp = JSONResponse({"ok": True, "user": {"email": user["email"]}})
     resp.set_cookie(_AUTH_COOKIE, token, httponly=True, samesite="lax")
+    resp.set_cookie(_STATE_COOKIE, app_session_id, httponly=True, samesite="lax")
+    resp.headers[_SESSION_SWITCH_HEADER] = app_session_id
     return resp
 
 @app.post("/api/auth/signup")
@@ -709,12 +745,13 @@ async def auth_signup(req: Request):
     pw_hash = hash_password(password)
     user_id = _user_store.create_user(email, pw_hash)
     auth_user = {"id": user_id, "email": email}
-    _S["user"] = auth_user
-    _session_store.associate_session_with_user(_S.session_id(), user_id)
+    app_session_id = _start_session({"user": auth_user}, user_id=user_id)
     token = secrets.token_urlsafe(32)
     _AUTH_SESSIONS[token] = auth_user
     resp = JSONResponse({"ok": True, "user": {"email": email}})
     resp.set_cookie(_AUTH_COOKIE, token, httponly=True, samesite="lax")
+    resp.set_cookie(_STATE_COOKIE, app_session_id, httponly=True, samesite="lax")
+    resp.headers[_SESSION_SWITCH_HEADER] = app_session_id
     return resp
 
 @app.post("/api/auth/logout")
@@ -722,9 +759,11 @@ def auth_logout(request: Request):
     token = request.cookies.get(_AUTH_COOKIE, "")
     if token:
         _AUTH_SESSIONS.pop(token, None)
-    _S["user"] = None
+    app_session_id = _start_session()
     resp = JSONResponse({"ok": True})
     resp.delete_cookie(_AUTH_COOKIE)
+    resp.set_cookie(_STATE_COOKIE, app_session_id, httponly=True, samesite="lax")
+    resp.headers[_SESSION_SWITCH_HEADER] = app_session_id
     return resp
 
 @app.get("/api/auth/google")
@@ -768,17 +807,18 @@ def auth_google_callback(request: Request, code: str = "", state: str = ""):
                 )
                 user = {"id": user_id, "email": email, "google_id": google_id}
             auth_user = {"id": user["id"], "email": user["email"], "name": name}
-            _S["user"] = auth_user
-            _session_store.associate_session_with_user(_S.session_id(), user["id"])
+            app_session_id = _switch_to_user_session(user, auth_user)
         else:
             auth_user = {"email": email, "name": name}
-            _S["user"] = auth_user
+            app_session_id = _start_session({"user": auth_user})
 
         token = secrets.token_urlsafe(32)
         _AUTH_SESSIONS[token] = auth_user
         _S.pop("google_oauth_state", None)
         resp = RedirectResponse("/app")
         resp.set_cookie(_AUTH_COOKIE, token, httponly=True, samesite="lax")
+        resp.set_cookie(_STATE_COOKIE, app_session_id, httponly=True, samesite="lax")
+        resp.headers[_SESSION_SWITCH_HEADER] = app_session_id
         return resp
     except Exception:
         return RedirectResponse("/app#auth")

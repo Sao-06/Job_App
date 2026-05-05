@@ -2261,7 +2261,7 @@ function AuthPage({ onAuth }) {
     try {
       const res = await api.post(`/api/auth/${mode}`, { email, password });
       if (res.ok) {
-        onAuth(res.user);
+        await onAuth(res.user);
       } else {
         setError(res.error || 'Authentication failed');
       }
@@ -2412,7 +2412,7 @@ function App() {
       case 'dev':       return <DevPage state={state} refresh={refresh}/>;
       case 'feedback':  return <FeedbackPage refresh={refresh}/>;
       case 'settings':  return <SettingsPage state={state} refresh={refresh}/>;
-      case 'auth':      return <AuthPage onAuth={() => { refresh(); setPage('home'); }} />;
+      case 'auth':      return <AuthPage onAuth={async () => { await refresh(); setPage('home'); }} />;
       default:          return <Dashboard state={state} setPage={setPage}/>;
     }
   })();

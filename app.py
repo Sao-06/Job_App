@@ -811,10 +811,10 @@ async def dev_cli(request: Request):
         return {"output": str(e)[:2000]}
 
 @app.post("/api/dev/tweaks")
-async def dev_tweaks(req: Request, request: Request):
+async def dev_tweaks(request: Request):
     if not _is_dev_request(request):
         raise HTTPException(403, "Developer access denied")
-    body = await req.json()
+    body = await request.json()
     _S["dev_tweaks"] = {**(_S.get("dev_tweaks") or {}), **body}
     return {"tweaks": _S["dev_tweaks"]}
 

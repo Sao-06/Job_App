@@ -1,0 +1,503 @@
+{
+  "name": "Jonathan Liu",
+  "email": "jliu1401@uw.edu",
+  "linkedin": "linkedin.com/in/jonathan-liu-202081252",
+  "github": "github.com/JonathanLiu1401",
+  "phone": "+1 (206) 589-0963",
+  "location": "Seattle, WA",
+  "target_titles": [
+    "Autonomous Systems Engineering",
+    "FPGA / Digital Design",
+    "Embedded Systems / Firmware",
+    "Analog / Mixed-Signal Design",
+    "Hardware Engineering"
+  ],
+  "top_hard_skills": [
+    "SystemVerilog",
+    "STM32",
+    "FPGA (Altium/Quartus)",
+    "Arduino",
+    "MATLAB",
+    "C/C++",
+    "Python (NumPy/SciPy)",
+    "SPICE",
+    "Fusion360",
+    "OpenSCAD",
+    "STM32H743",
+    "PX4 firmware",
+    "MAVLink",
+    "UART/I2C/SPI/CAN",
+    "LiDAR processing",
+    "Computer Vision",
+    "Oscilloscopes",
+    "LDOs",
+    "DSHOT600",
+    "Redundant power sensing",
+    "BLDC motor control",
+    "HIL testing",
+    "RUST",
+    "MBE",
+    "BASH",
+    "Linux",
+    "PL",
+    "SOC",
+    "GO",
+    "RIE",
+    "Modelsim",
+    "GIT",
+    "Pcb Design",
+    "Kicad",
+    "JAVA"
+  ],
+  "top_soft_skills": [
+    "Leadership",
+    "Project Management",
+    "Cross-functional Communication",
+    "Collaborative Teamwork",
+    "Event Planning"
+  ],
+  "education": [
+    {
+      "degree": "Bachelor of Science in Electrical and Computer Engineering",
+      "institution": "University of Washington Seattle",
+      "year": "2024-2028",
+      "gpa": "3.93",
+      "location": "Seattle, WA",
+      "coursework": [
+        "Computer Architecture",
+        "Microelectronic Circuit Design",
+        "Digital Circuit Design",
+        "Signals and Systems",
+        "Object-Oriented Programming",
+        "Data Structures and Algorithms",
+        "Power Systems",
+        "Control System Analysis",
+        "Hardware/Software Interface (Low-level programming)"
+      ],
+      "honors": [
+        "IEEE HKN Honor Society (Top 8% ECE)",
+        "Tau Beta Pi Engineering Honor Society (Top 12.5% of Class)"
+      ]
+    },
+    {
+      "degree": "Nanoelectronics Fabrication & Robotics Immersion",
+      "institution": "Tohoku University STEM Summer Program",
+      "year": "June 2025 - July 2025",
+      "gpa": "4.0",
+      "location": "Sendai, Japan",
+      "coursework": [],
+      "honors": []
+    }
+  ],
+  "research_experience": [
+    {
+      "title": "Undergraduate Research Assistant (Embedded Systems)",
+      "company": "Sensors, Energy, and Automation Laboratory (SEAL)",
+      "dates": "Jan 2026 - Present",
+      "bullets": [
+        "Developed random forest classification models to analyze PPG biosignals for fatigue detection in safety-critical environments",
+        "Designed custom 3D-printed PCB mounts for wearable body sensor integration"
+      ]
+    }
+  ],
+  "work_experience": [
+    {
+      "title": "Lead, Drone Hardware Engineer",
+      "company": "Husky Robotics Drone Subteam",
+      "dates": "Oct 2024 - Present",
+      "bullets": [
+        "Led recruitment and technical onboarding for 20+ members; managed PCB design lifecycle (Flight Controller, ESC, PDB) and PDR processes",
+        "Designed Flight Controller PCB with STM32H743, DSHOT600, redundant power sensing, and telemetry broadcasting; achieved full PX4 firmware compatibility",
+        "Architected a redundant 5GHz bridge system with Jetson Orin Nano and Pixhawk 6C for computer vision and autonomous navigation",
+        "Implemented UART/I2C/SPI/CAN protocols for interfacing external peripherals and real-time state estimation",
+        "Developed Arduino-based HIL test fixtures to optimize motor efficiency by 25%"
+      ]
+    },
+    {
+      "title": "Autonomous Systems Engineering Intern",
+      "company": "ARIDGE Guangzhou, China",
+      "dates": "July - Sep 2025",
+      "bullets": [
+        "Developed Python scripts for autonomous landing zone classification and document categorization",
+        "Validated LiDAR point cloud and imagery data for sensor fusion integrity",
+        "Managed data logging workflows via Excel and Lark"
+      ]
+    }
+  ],
+  "projects": [
+    {
+      "name": "FPGARhythm",
+      "description": "",
+      "bullets": [
+        "Developed a hardware-based rhythm game using SystemVerilog for input processing and VGA output rendering"
+      ],
+      "skills_used": [
+        "SystemVerilog",
+        "FPGA (VGA output)"
+      ],
+      "dates": "March 2026",
+      "url": ""
+    },
+    {
+      "name": "Analog Audio Mixer",
+      "description": "",
+      "bullets": [
+        "Designed a three-band active audio equalizer with LM348 op-amp and verified LTSpice transfer functions"
+      ],
+      "skills_used": [
+        "LM348 operational amplifier",
+        "SPICE simulations"
+      ],
+      "dates": "March 2026",
+      "url": ""
+    },
+    {
+      "name": "Autonomous Line-Following Car",
+      "description": "",
+      "bullets": [
+        "Engineered Arduino-based line-following vehicle with PID algorithms; set all-time fastest record in UW competition"
+      ],
+      "skills_used": [
+        "Arduino",
+        "PID control",
+        "Line-following algorithms"
+      ],
+      "dates": "Feb 2026",
+      "url": ""
+    },
+    {
+      "name": "CXSOLVE TI84 Calculator Program",
+      "description": "",
+      "bullets": [
+        "Developed C program for solving complex number equations on TI84 graphing calculator"
+      ],
+      "skills_used": [
+        "C programming",
+        "TI84 calculator"
+      ],
+      "dates": "Jan 2026",
+      "url": ""
+    },
+    {
+      "name": "ORGANIZATIONS & AWARDS",
+      "description": "",
+      "bullets": [
+        "Tau Beta Pi Engineering Honor Society - Top 12.5% of Class 2025",
+        "Annual Dean's List - University of Washington 2024 - Present",
+        "IEEE UW - Events Officer Jan 2026 - Present",
+        "Hong Kong Student Association (HKSA) at UW - Events Officer Oct 2025 - Present",
+        "UW Line-Following Car Competition - All-Time Fastest Record Feb 2026"
+      ],
+      "skills_used": [],
+      "dates": "",
+      "url": ""
+    }
+  ],
+  "resume_gaps": [
+    ""
+  ],
+  "critical_analysis": "Jonathan's resume highlights a strong blend of hardware/software engineering proficiency with leadership in robotics and autonomous systems. His **research experience** in biosignal analysis and **embedded systems development** demonstrates deep technical capability in real-time processing and sensor integration, while his **hardware leadership** at Husky Robotics showcases hands-on PCB design expertise (STM32, FPGA, CAN protocols) and project scaling for interdisciplinary teams. The **project portfolio** (FPGA rhythm game, analog mixer, line-following car) underscores versatility in both analog/digital design and embedded firmware, with standout achievements like PID optimization and motor efficiency gains. However, the resume could refine **skill categorization**\u2014e.g., some 'Leadership' bullet points (e.g., team recruitment) might better align with 'Project Management' under soft skills, while 'Languages' could be merged with 'Soft Skills' for clarity. The **ATS optimization** could benefit from consistent formatting for dates, titles, and bullet points (e.g., bullet alignment). **Action items:** 1) Group related skills (e.g., 'Hardware/Software Interface' under embedded systems), 2) Add quantifiable metrics to projects (e.g., 'improved system speed by X%'), and 3) Include a 'Technical Publications' section if applicable. The resume's strength lies in its **skill density** and **applied engineering focus**, but minor structural tweaks could amplify its impact for target titles like 'Autonomous Systems Engineer' or 'FPGA/Digital Design Lead'.",
+  "top_hard_skills_detailed": [
+    {
+      "skill": "SystemVerilog",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "STM32",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "FPGA (Altium/Quartus)",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Arduino",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "MATLAB",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "C/C++",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Python (NumPy/SciPy)",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "MATLAB",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "SPICE",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Fusion360",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "OpenSCAD",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "STM32H743",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "PX4 firmware",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "MAVLink",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "UART/I2C/SPI/CAN",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "LiDAR processing",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Computer Vision",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Oscilloscopes",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "LDOs",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "DSHOT600",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Redundant power sensing",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "BLDC motor control",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "HIL testing",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "RUST",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "MBE",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "BASH",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Linux",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "PL",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "SOC",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "GO",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "RIE",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Modelsim",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "GIT",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Pcb Design",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "Kicad",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "JAVA",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    }
+  ],
+  "target_titles_detailed": [
+    {
+      "title": "Autonomous Systems Engineering",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "FPGA / Digital Design",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "Embedded Systems / Firmware",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "Analog / Mixed-Signal Design",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "Hardware Engineering",
+      "family": "",
+      "evidence": ""
+    }
+  ],
+  "_audit_log": [
+    "retention_audit recovered 13 missing skills: ['RUST', 'MBE', 'BASH', 'Linux', 'PL', 'SOC', 'GO', 'RIE', 'Modelsim', 'GIT', 'Pcb Design', 'Kicad', 'JAVA']",
+    "enrichment: filled 1 project fields/entries"
+  ],
+  "experience": [
+    {
+      "title": "Undergraduate Research Assistant (Embedded Systems)",
+      "company": "Sensors, Energy, and Automation Laboratory (SEAL)",
+      "dates": "Jan 2026 - Present",
+      "bullets": [
+        "Developed random forest classification models to analyze PPG biosignals for fatigue detection in safety-critical environments",
+        "Designed custom 3D-printed PCB mounts for wearable body sensor integration"
+      ]
+    },
+    {
+      "title": "Lead, Drone Hardware Engineer",
+      "company": "Husky Robotics Drone Subteam",
+      "dates": "Oct 2024 - Present",
+      "bullets": [
+        "Led recruitment and technical onboarding for 20+ members; managed PCB design lifecycle (Flight Controller, ESC, PDB) and PDR processes",
+        "Designed Flight Controller PCB with STM32H743, DSHOT600, redundant power sensing, and telemetry broadcasting; achieved full PX4 firmware compatibility",
+        "Architected a redundant 5GHz bridge system with Jetson Orin Nano and Pixhawk 6C for computer vision and autonomous navigation",
+        "Implemented UART/I2C/SPI/CAN protocols for interfacing external peripherals and real-time state estimation",
+        "Developed Arduino-based HIL test fixtures to optimize motor efficiency by 25%"
+      ]
+    },
+    {
+      "title": "Autonomous Systems Engineering Intern",
+      "company": "ARIDGE Guangzhou, China",
+      "dates": "July - Sep 2025",
+      "bullets": [
+        "Developed Python scripts for autonomous landing zone classification and document categorization",
+        "Validated LiDAR point cloud and imagery data for sensor fusion integrity",
+        "Managed data logging workflows via Excel and Lark"
+      ]
+    }
+  ],
+  "insights": {
+    "version": 1,
+    "overall_score": 85,
+    "metrics": {
+      "word_count": 550,
+      "bullet_count": 21,
+      "quantified_count": 9,
+      "quantified_pct": 43,
+      "action_verb_count": 9,
+      "action_verb_pct": 43,
+      "weak_phrase_count": 0,
+      "buzzword_count": 0,
+      "avg_bullet_len": 17,
+      "longest_bullet": 29,
+      "section_count": 5,
+      "sections": [
+        "education",
+        "organizations & awards",
+        "projects",
+        "relevant experience",
+        "skills"
+      ],
+      "skill_density": 6.4,
+      "skill_count": 35,
+      "reading_seconds": 138,
+      "repeated_verb": [
+        "developed",
+        3
+      ],
+      "has_email": true,
+      "has_linkedin": true,
+      "has_github": true,
+      "has_phone": true,
+      "has_location": true
+    },
+    "strengths": [
+      "Zero weak phrasings detected \u2014 no 'responsible for' or 'helped with' filler.",
+      "Clear 5-section structure: Education, Organizations & Awards, Projects, Relevant Experience, Skills \u2014 easy to skim and ATS-parser friendly.",
+      "Skill density of 6.4 keywords per 100 words is well above the ~5.0 average for technical resumes \u2014 strong ATS surface area.",
+      "5 project(s) listed \u2014 gives reviewers concrete artifacts beyond job titles, especially valuable for early-career applicants.",
+      "No clich\u00e9s or buzzwords ('team player', 'self-starter', 'synergy') \u2014 writing reads as substance over polish.",
+      "Both LinkedIn and GitHub linked \u2014 reviewers can verify identity and inspect work in two clicks."
+    ],
+    "red_flags": [
+      "Only 43% of bullets lead with strong action verbs; weak openers bury the achievement.",
+      "'Developed' opens 3 different bullets \u2014 vary your verbs so each achievement reads as distinct."
+    ],
+    "suggestions": [
+      "Quantify 4 more bullet(s): %, $, time saved, sample size, throughput, error rate, etc.",
+      "Lead every bullet with a unique action verb; never repeat the same one twice in a section.",
+      "Replace duplicate uses of 'Developed' with synonyms (Engineered/Architected/Built/Designed).",
+      "Phase-1 audit flagged: "
+    ],
+    "narrative": "Scanned 550 words across 21 bullets in 5 sections. The resume reads as a ~138-second skim \u2014 recruiters typically allocate 6\u201315 seconds, so the top third has to carry the strongest signals on its own.\n\nOn the rubric that matters most, quantification sits at 43% (industry benchmark is 60%+) and action-verb usage at 43% (target 70%+). Weak phrasings detected: 0, buzzwords: 0. Closing these gaps is the highest-leverage edit on this resume; they directly translate into interview conversion.\n\nFor Autonomous Systems Engineering alignment: 35 hard skills extracted with density 6.4 per 100 words. First red flag worth attention: only 43% of bullets lead with strong action verbs; weak openers bury the achievement.\n\nHighest-leverage edits next: Quantify 4 more bullet(s): %, $, time saved, sample size, throughput, error rate, etc. \u00b7 Lead every bullet with a unique action verb; never repeat the same one twice in a section. \u00b7 Replace duplicate uses of 'Developed' with synonyms (Engineered/Architected/Built/Designed).",
+    "verified_by": "heuristic",
+    "verification_notes": "Ollama unavailable or returned an unreadable response \u2014 showing heuristic findings."
+  }
+}

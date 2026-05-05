@@ -4,7 +4,7 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
 <title>Jobs AI — Autonomous Job Application Platform</title>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
 <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
@@ -30,6 +30,7 @@
   --red:      #f87171;
   --mono: 'JetBrains Mono', monospace;
   --sans: 'Inter', sans-serif;
+  --serif:'DM Serif Display', Georgia, serif;
 }
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 html{scroll-behavior:smooth}
@@ -44,8 +45,16 @@ body{font-family:var(--sans);background:var(--bg);color:var(--t1);-webkit-font-s
   display:flex;align-items:center;justify-content:space-between;padding:0 40px;
   background:rgba(10,10,15,.85);backdrop-filter:blur(20px);border-bottom:1px solid var(--border);
 }
-.hn-logo{font-size:15px;font-weight:700;color:var(--t1);letter-spacing:-.3px;cursor:pointer;text-decoration:none}
-.hn-logo span{color:var(--accent)}
+/* Brand mark — must match frontend/index.html .brand-mark */
+.brand-mark{display:inline-flex;align-items:center;gap:8px;cursor:pointer;user-select:none;text-decoration:none}
+.brand-glyph{
+  width:22px;height:22px;background:var(--accent);border-radius:6px;
+  display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;
+}
+.brand-name{font-family:var(--serif);font-size:15px;color:var(--t1);letter-spacing:-.2px;line-height:1}
+.brand-name em{color:var(--accent-h);font-style:normal;font-family:var(--serif)}
+.brand-mark:hover .brand-glyph{filter:brightness(1.08)}
+.brand-mark:hover{text-decoration:none}
 .hn-right{display:flex;align-items:center;gap:10px}
 .hn-link{font-size:13px;color:var(--t2);cursor:pointer;transition:color .15s;padding:5px 10px;border-radius:6px;text-decoration:none}
 .hn-link:hover{color:var(--t1);background:rgba(255,255,255,.04)}
@@ -96,7 +105,86 @@ body{font-family:var(--sans);background:var(--bg);color:var(--t1);-webkit-font-s
   background:transparent;color:var(--t1);font-family:var(--sans);font-size:14px;font-weight:500;
   transition:all .15s;text-decoration:none;display:inline-flex;align-items:center;
 }
-.btn-secondary:hover{background:rgba(255,255,255,.05)}
+.btn-secondary:hover{background:rgba(255,255,255,.05);border-color:var(--accent-h);color:var(--t1)}
+
+/* ── auth CTAs (Get started / Sign in / Create account) ── */
+.hn-signin{font-weight:500}
+.hn-cta-glow{
+  position:relative;overflow:hidden;isolation:isolate;
+  background:linear-gradient(135deg,#7b84e8 0%,#a855f7 100%);
+  box-shadow:0 4px 14px -4px rgba(123,132,232,.55), inset 0 1px 0 rgba(255,255,255,.18);
+}
+.hn-cta-glow::after{
+  content:'';position:absolute;top:0;left:-60%;width:40%;height:100%;
+  background:linear-gradient(110deg,transparent 0%,rgba(255,255,255,.45) 50%,transparent 100%);
+  transform:skewX(-18deg);transition:left .55s cubic-bezier(.16,1,.3,1);pointer-events:none;
+}
+.hn-cta-glow:hover{
+  background:linear-gradient(135deg,#8b94f0 0%,#b860fa 100%);
+  transform:translateY(-1px);
+  box-shadow:0 8px 22px -4px rgba(168,85,247,.55), inset 0 1px 0 rgba(255,255,255,.22);
+}
+.hn-cta-glow:hover::after{left:130%}
+.hn-cta-arrow{display:inline-block;margin-left:2px;transition:transform .25s cubic-bezier(.16,1,.3,1)}
+.hn-cta-glow:hover .hn-cta-arrow{transform:translateX(3px)}
+
+.btn-cta-glow{
+  position:relative;overflow:hidden;isolation:isolate;
+  background:linear-gradient(135deg,#7b84e8 0%,#a855f7 55%,#ec4899 110%);
+  box-shadow:
+    0 10px 28px -8px rgba(168,85,247,.55),
+    0 0 0 1px rgba(255,255,255,.04) inset,
+    0 1px 0 rgba(255,255,255,.22) inset;
+}
+.btn-cta-glow::before{
+  content:'';position:absolute;inset:0;border-radius:inherit;padding:1px;
+  background:linear-gradient(135deg,rgba(255,255,255,.35),rgba(255,255,255,0) 40%,rgba(255,255,255,0) 60%,rgba(255,255,255,.18));
+  -webkit-mask:linear-gradient(#fff 0 0) content-box,linear-gradient(#fff 0 0);
+  -webkit-mask-composite:xor;mask-composite:exclude;pointer-events:none;
+}
+.btn-cta-glow::after{
+  content:'';position:absolute;top:0;left:-65%;width:42%;height:100%;
+  background:linear-gradient(110deg,transparent 0%,rgba(255,255,255,.5) 50%,transparent 100%);
+  transform:skewX(-18deg);transition:left .65s cubic-bezier(.16,1,.3,1);pointer-events:none;
+}
+.btn-cta-glow:hover{
+  transform:translateY(-2px);
+  background:linear-gradient(135deg,#8b94f0 0%,#b860fa 55%,#f55da6 110%);
+  box-shadow:
+    0 18px 38px -10px rgba(236,72,153,.55),
+    0 0 0 1px rgba(255,255,255,.06) inset,
+    0 1px 0 rgba(255,255,255,.28) inset;
+}
+.btn-cta-glow:hover::after{left:135%}
+.btn-arrow{display:inline-flex;align-items:center;justify-content:center;width:18px;font-weight:600;transition:transform .25s cubic-bezier(.16,1,.3,1)}
+.btn-cta-glow:hover .btn-arrow{transform:translateX(4px)}
+.btn-cta-lg{font-size:15px;padding:14px 32px;display:inline-flex;align-items:center;gap:8px}
+
+/* hero reassurance row */
+.hero-reassure{
+  margin-top:18px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  font-size:12.5px;color:var(--t3);font-family:var(--mono);letter-spacing:.01em;
+}
+.hr-dot{
+  width:7px;height:7px;border-radius:50%;background:#34d399;
+  box-shadow:0 0 0 0 rgba(52,211,153,.7);animation:hr-pulse 1.8s ease-in-out infinite;flex-shrink:0;
+}
+@keyframes hr-pulse{
+  0%,100%{box-shadow:0 0 0 0 rgba(52,211,153,.55)}
+  50%    {box-shadow:0 0 0 6px rgba(52,211,153,0)}
+}
+.hr-skim{color:var(--t3);text-decoration:none;border-bottom:1px dashed transparent;padding-bottom:1px;transition:color .15s,border-color .15s;margin-left:4px}
+.hr-skim:hover{color:var(--accent-h);border-bottom-color:rgba(123,132,232,.5)}
+
+/* final CTA stacked block */
+.cta-actions{display:flex;flex-direction:column;align-items:center;gap:14px;position:relative}
+.cta-signin{
+  font-size:13px;color:var(--t3);text-decoration:none;font-family:var(--mono);
+  letter-spacing:.02em;transition:color .15s;
+}
+.cta-signin em{font-style:normal;color:var(--accent-h);border-bottom:1px solid rgba(123,132,232,.4);padding-bottom:1px;transition:border-color .15s}
+.cta-signin:hover{color:var(--t2)}
+.cta-signin:hover em{border-bottom-color:var(--accent-h)}
 
 /* hero dashboard preview */
 .hero-right{position:relative}
@@ -258,12 +346,23 @@ function Star() {
 function Nav() {
   return (
     <nav className="hn">
-      <a className="hn-logo" href="landing.html">Jobs<span>AI</span></a>
+      <a className="brand-mark" href="landing.html" aria-label="Jobs AI — home">
+        <span className="brand-glyph" aria-hidden="true">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
+            <path d="M4 6h16M4 12h11M4 18h7" stroke="#fff" strokeWidth="2.5" strokeLinecap="round"/>
+            <circle cx="20" cy="18" r="2.5" stroke="#fff" strokeWidth="2" fill="none"/>
+          </svg>
+        </span>
+        <span className="brand-name">jobs<em>ai</em></span>
+      </a>
       <div className="hn-right">
         <a className="hn-link" href="#features">Features</a>
         <a className="hn-link" href="#how-it-works">How it works</a>
         <a className="hn-link" href="#reviews">Reviews</a>
-        <a className="hn-cta" href={LAUNCH_URL}>Open Dashboard →</a>
+        <a className="hn-link hn-signin" href={LAUNCH_URL}>Sign in</a>
+        <a className="hn-cta hn-cta-glow" href={LAUNCH_URL}>
+          Get started <span className="hn-cta-arrow">→</span>
+        </a>
       </div>
     </nav>
   );
@@ -291,8 +390,16 @@ function Hero() {
             Upload your resume once. Jobs AI discovers opportunities, scores them, tailors your materials to each posting, and submits applications — automatically.
           </p>
           <div className="hero-btns hero-anim ha-4">
-            <a className="btn-primary" href={LAUNCH_URL}>Open Dashboard →</a>
-            <a className="btn-secondary" href="#features">See how it works ↓</a>
+            <a className="btn-primary btn-cta-glow" href={LAUNCH_URL}>
+              Get started — it's free
+              <span className="btn-arrow">→</span>
+            </a>
+            <a className="btn-secondary" href={LAUNCH_URL}>I have an account</a>
+          </div>
+          <div className="hero-reassure hero-anim ha-4">
+            <span className="hr-dot"/>
+            <span>No credit card · Demo mode requires zero setup</span>
+            <a className="hr-skim" href="#features">or skim the features ↓</a>
           </div>
         </div>
 
@@ -574,7 +681,15 @@ function CTABand() {
       <SR>
         <h2>Start automating<br/>your job search today.</h2>
         <p>Demo mode requires zero setup. Swap to Anthropic Claude or Ollama when you're ready.</p>
-        <a className="btn-primary" href={LAUNCH_URL} style={{fontSize:15,padding:'13px 32px',display:'inline-flex'}}>Open Dashboard →</a>
+        <div className="cta-actions">
+          <a className="btn-primary btn-cta-glow btn-cta-lg" href={LAUNCH_URL}>
+            Create your free account
+            <span className="btn-arrow">→</span>
+          </a>
+          <a className="cta-signin" href={LAUNCH_URL}>
+            Already have an account? <em>Sign in</em>
+          </a>
+        </div>
       </SR>
     </section>
   );

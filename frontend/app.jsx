@@ -1,4 +1,4 @@
-/* JobsAI — app.jsx
+﻿/* JobsAI — app.jsx
    Multi-page dark SPA. Purple/indigo brand colors.
    All API contracts preserved: /api/state, /api/phase/*, /api/resume/*, /api/config, /api/reset
 */
@@ -73,6 +73,83 @@ function runPhasePromise(n, { rerun = false, onStart, params = {} } = {}) {
   });
 }
 
+/* ── Company logo (Clearbit → Google favicon → letter fallback) ── */
+const COMPANY_DOMAIN_OVERRIDES = {
+  'meta':'meta.com', 'meta platforms':'meta.com', 'facebook':'meta.com',
+  'alphabet':'abc.xyz', 'google':'google.com', 'youtube':'youtube.com',
+  'x':'x.com', 'twitter':'x.com',
+  'amazon web services':'aws.amazon.com', 'aws':'aws.amazon.com',
+  'jpmorgan chase':'jpmorganchase.com', 'jp morgan':'jpmorganchase.com',
+  'goldman sachs':'goldmansachs.com',
+  'tsmc':'tsmc.com', 'samsung semiconductors':'samsung.com',
+  'micron technology':'micron.com', 'microchip technology':'microchip.com',
+  'curtiss-wright corporation':'curtisswright.com',
+  'pennsylvania state university':'psu.edu',
+  'two six technologies':'twosixtech.com',
+  'sider & byers associates':'sba-eng.com',
+  'coherent corp':'coherent.com', 'coherent corp.':'coherent.com',
+  'enovis':'enovis.com',
+  'cesium astro':'cesiumastro.com', 'cesiumastro':'cesiumastro.com',
+  'apptronik':'apptronik.com',
+  'two-six technologies':'twosixtech.com',
+  'simplifyjobs':'simplify.jobs',
+  // Cross-industry sampler used by TrendingMarquee fallback — slugs that don't auto-resolve
+  'mayo clinic':'mayoclinic.org',
+  'procter & gamble':'pg.com', 'p&g':'pg.com',
+  'johnson & johnson':'jnj.com',
+  'coca-cola':'coca-cola.com', 'coca cola':'coca-cola.com',
+};
+function companyDomain(raw) {
+  if (!raw) return null;
+  let s = String(raw).trim().toLowerCase();
+  if (!s || s === 'nan' || s === '?') return null;
+  if (COMPANY_DOMAIN_OVERRIDES[s]) return COMPANY_DOMAIN_OVERRIDES[s];
+  // strip noise: "(...)" suffixes and corp-suffix words
+  s = s.replace(/\s*\([^)]*\)\s*/g, ' ').trim();
+  s = s.replace(/[,\.—–].*$/, '').trim();
+  s = s.replace(/\b(inc|incorporated|llc|ltd|limited|corp|corporation|co|company|gmbh|sa|s\.a\.|plc|holdings|group|labs?|technologies|technology)\.?\s*$/i, '').trim();
+  if (COMPANY_DOMAIN_OVERRIDES[s]) return COMPANY_DOMAIN_OVERRIDES[s];
+  // collapse whitespace and non-letters into nothing
+  const slug = s.replace(/&/g, 'and').replace(/[^a-z0-9]+/g, '');
+  if (!slug) return null;
+  return slug + '.com';
+}
+
+const _logoFailed = new Set();    // domains that errored (avoid retry flicker)
+function CompanyLogo({ company, className = '', fallbackVariant = 'v1', size = 38 }) {
+  const domain = useMemo(() => companyDomain(company), [company]);
+  const initial = (String(company || '?').trim().charAt(0) || '?').toUpperCase();
+  const initiallyFailed = !domain || _logoFailed.has(domain);
+  const [step, setStep] = useState(initiallyFailed ? 2 : 0);
+  // step 0 = Clearbit, 1 = Google favicon, 2 = letter fallback
+  useEffect(() => { setStep(initiallyFailed ? 2 : 0); }, [domain, initiallyFailed]);
+
+  if (step === 2) {
+    return (
+      <div className={'co-logo ' + fallbackVariant + ' ' + className}
+           style={{ width: size, height: size, fontSize: Math.max(11, Math.round(size * 0.38)) }}>
+        {initial}
+      </div>
+    );
+  }
+  const src = step === 0
+    ? `https://logo.clearbit.com/${domain}?size=128`
+    : `https://www.google.com/s2/favicons?domain=${domain}&sz=64`;
+  return (
+    <div className={'co-logo logo-img ' + className}
+         style={{ width: size, height: size }}
+         title={company || ''}>
+      <img src={src} alt=""
+           loading="lazy"
+           referrerPolicy="no-referrer"
+           onError={() => {
+             if (step === 0) setStep(1);
+             else { _logoFailed.add(domain); setStep(2); }
+           }}/>
+    </div>
+  );
+}
+
 /* ── Icon helper ── */
 function Icon({ name, size=16, color='currentColor', style={} }) {
   const ref = useRef(null);
@@ -105,21 +182,33 @@ function BrandMark({ onClick }) {
 
 /* ── Promo strip ── */
 function PromoStrip({ onClose, text }) {
-  const [t, setT] = useState({ m:49, s:7 });
-  useEffect(() => {
-    const id = setInterval(() => setT(p => {
-      let s = p.s - 1, m = p.m;
-      if (s < 0) { s = 59; m = Math.max(0, m - 1); }
-      return { m, s };
-    }), 1000);
-    return () => clearInterval(id);
-  }, []);
   return (
     <div className="promo-cell">
-      <span>{text || <div>Unlock unlimited applies — offer ends in <strong>{String(t.m).padStart(2,'0')}m {String(t.s).padStart(2,'0')}s</strong></div>}</span>
+      <span>{text}</span>
       <button className="promo-close" onClick={onClose}><Icon name="x" size={13}/></button>
     </div>
   );
+}
+
+/* ── Hash-based routing ─────────────────────────────────────
+   Each page has its own URL hash so the browser back/forward
+   buttons work, refresh restores the same page, and links
+   like /app#jobs go directly to a page.
+
+   Home is the canonical empty hash so /app and /app#home both
+   work (we never write #home — only read it). */
+const VALID_PAGES = new Set([
+  'home', 'jobs', 'resume', 'profile', 'agent', 'dev',
+  'feedback', 'settings', 'plans', 'auth',
+]);
+function pageFromHash() {
+  if (typeof location === 'undefined') return 'home';
+  const h = (location.hash || '').replace(/^#/, '').split(/[?/]/)[0];
+  if (!h) return 'home';
+  return VALID_PAGES.has(h) ? h : 'home';
+}
+function hashFromPage(page) {
+  return page && page !== 'home' ? '#' + page : '';
 }
 
 /* ── Rail nav ── */
@@ -132,19 +221,28 @@ const NAV = [
   { id:'dev',       label:'Dev Ops',    icon:'square-terminal' },
 ];
 const NAV_UTIL = [
+  { id:'plans',    label:'Plans',    icon:'gem' },
   { id:'feedback', label:'Feedback', icon:'circle-help' },
   { id:'settings', label:'Settings', icon:'settings' },
   { id:'logout',   label:'Sign out', icon:'log-out' },
 ];
 
-function Rail({ page, setPage, counts, isDev, onLogout }) {
+function Rail({ page, setPage, counts, isDev, onLogout, navOpen, closeNav }) {
+  // Selecting any item closes the mobile drawer. Desktop ignores closeNav
+  // because the rail isn't transformed there.
+  const select = (id) => { setPage(id); closeNav?.(); };
+  const utilSelect = (it) => {
+    if (it.id === 'logout') onLogout();
+    else setPage(it.id);
+    closeNav?.();
+  };
   return (
-    <aside className="rail">
+    <aside className={'rail' + (navOpen ? ' is-open' : '')}>
       <nav className="rail-nav">
         {NAV.filter(it => it.id !== 'dev' || isDev).map(it => (
           <div key={it.id}
                className={'rail-item' + (page === it.id ? ' active' : '')}
-               onClick={() => setPage(it.id)}>
+               onClick={() => select(it.id)}>
             <span className="rail-icon">
               <Icon name={it.icon} size={15}/>
             </span>
@@ -158,7 +256,7 @@ function Rail({ page, setPage, counts, isDev, onLogout }) {
         {NAV_UTIL.map(it => (
           <div key={it.id}
                className={'rail-item' + (page === it.id ? ' active' : '')}
-               onClick={() => it.id === 'logout' ? onLogout() : setPage(it.id)}>
+               onClick={() => utilSelect(it)}>
             <span className="rail-icon"><Icon name={it.icon} size={15}/></span>
             <span className="lbl">{it.label}</span>
           </div>
@@ -188,40 +286,679 @@ function LPReveal({ children, style = {}, className = '' }) {
   return <div ref={ref} className={'lp-sr ' + className} style={style}>{children}</div>;
 }
 
-function Dashboard({ state, setPage }) {
-  const jobs = state?.scored_summary?.jobs || [];
-  const applied = state?.applications?.length || 0;
-  const matches = jobs.filter(j => j.score >= 85).length;
-  const done = new Set(state?.done || []);
-  const phasePct = Math.round((done.size / 7) * 100);
+function CountUp({ to, duration = 900, suffix = '' }) {
+  const [n, setN] = useState(0);
+  useEffect(() => {
+    const start = performance.now();
+    let raf;
+    const tick = (t) => {
+      const p = Math.min(1, (t - start) / duration);
+      const eased = 1 - Math.pow(1 - p, 3);
+      setN(to * eased);
+      if (p < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [to, duration]);
+  return <>{Math.round(n)}{suffix}</>;
+}
+
+function Sparkline({ values, color = 'var(--accent-h)', w = 88, h = 24 }) {
+  if (!values || values.length < 2) values = [0, 0];
+  const max = Math.max(...values, 1);
+  const min = Math.min(...values, 0);
+  const span = Math.max(1, max - min);
+  const step = w / (values.length - 1);
+  const pts = values.map((v, i) => [i * step, h - ((v - min) / span) * (h - 2) - 1]);
+  const d = pts.map((p, i) => (i === 0 ? 'M' : 'L') + p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ');
+  const area = d + ` L ${w},${h} L 0,${h} Z`;
+  return (
+    <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} style={{ display:'block' }}>
+      <path d={area} fill={color} opacity=".12"/>
+      <path d={d} fill="none" stroke={color} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
+      <circle cx={pts[pts.length-1][0]} cy={pts[pts.length-1][1]} r="2.5" fill={color}/>
+    </svg>
+  );
+}
+
+function ScoreHisto({ jobs }) {
+  const buckets = [
+    { label: '90+',   range: [90, 101], color: 'var(--good)',     n: 0 },
+    { label: '80–89', range: [80, 90],  color: '#34d399',         n: 0 },
+    { label: '70–79', range: [70, 80],  color: 'var(--accent-h)', n: 0 },
+    { label: '60–69', range: [60, 70],  color: '#7c83a8',         n: 0 },
+    { label: '<60',   range: [0,  60],  color: 'var(--t4)',       n: 0 },
+  ];
+  jobs.forEach(j => {
+    const s = Math.round(j.score || 0);
+    const b = buckets.find(b => s >= b.range[0] && s < b.range[1]);
+    if (b) b.n++;
+  });
+  const max = Math.max(1, ...buckets.map(b => b.n));
+  const total = jobs.length || 1;
+  return (
+    <div className="hc-bars">
+      {buckets.map((b, i) => (
+        <div key={i} className="hc-bar-row">
+          <div className="hc-bar-lbl">{b.label}</div>
+          <div className="hc-bar-track">
+            <div className="hc-bar-fill"
+              style={{
+                width: `${(b.n / max) * 100}%`,
+                background: `linear-gradient(90deg, ${b.color}, ${b.color}99)`,
+                boxShadow: `0 0 12px ${b.color}66`,
+                animationDelay: `${i * 80}ms`,
+              }}/>
+            <span className="hc-bar-n">{b.n}</span>
+          </div>
+          <div className="hc-bar-pct">{Math.round((b.n / total) * 100)}%</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function SkillDonut({ profileSkills, jobs }) {
+  const skills = (profileSkills || []).slice(0, 12).map(s => String(s).toLowerCase());
+  const corpus = jobs.map(j => String(j.skills || '').toLowerCase()).join(' | ');
+  const matched = skills.filter(s => s && corpus.includes(s)).length;
+  const pct = skills.length ? Math.round((matched / skills.length) * 100) : 0;
+  const C = 44, circ = 2 * Math.PI * C;
+  const off = circ - (circ * pct / 100);
+  return (
+    <div className="donut-wrap">
+      <div className="donut-svg">
+        <svg width="140" height="140" viewBox="0 0 120 120">
+          <defs>
+            <linearGradient id="donutGrad" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%"  stopColor="#7c5cff"/>
+              <stop offset="55%" stopColor="#ff3d9a"/>
+              <stop offset="100%" stopColor="#22e5ff"/>
+            </linearGradient>
+          </defs>
+          <circle cx="60" cy="60" r={C} fill="none" stroke="rgba(255,255,255,.06)" strokeWidth="10"/>
+          <circle cx="60" cy="60" r={C} fill="none" stroke="url(#donutGrad)" strokeWidth="10"
+            strokeLinecap="round" strokeDasharray={circ} strokeDashoffset={off}
+            transform="rotate(-90 60 60)"
+            style={{ transition: 'stroke-dashoffset 1.2s cubic-bezier(.16,1,.3,1)' }}/>
+        </svg>
+        <div className="donut-center">
+          <b><CountUp to={pct} suffix="%"/></b>
+          <span>coverage</span>
+        </div>
+      </div>
+      <div className="donut-meta">
+        <div><b>{matched}</b><span>matched</span></div>
+        <div><b>{Math.max(0, skills.length - matched)}</b><span>untouched</span></div>
+        <div><b>{skills.length}</b><span>tracked</span></div>
+      </div>
+    </div>
+  );
+}
+
+function ActivityFeed({ state }) {
+  const items = useMemo(() => {
+    const out = [];
+    const apps = state?.applications || [];
+    apps.slice(-4).reverse().forEach((a) => {
+      out.push({
+        type: a.status === 'Applied' ? 'apply' : 'tailor',
+        title: a.role || a.title || 'Application',
+        sub: a.co || a.company || '—',
+        time: a.date_applied || 'Today',
+        score: Math.round(a.score || 0),
+      });
+    });
+    const jobs = state?.scored_summary?.jobs || [];
+    jobs.slice(0, 3).forEach(j => {
+      out.push({
+        type: 'match',
+        title: j.role || 'New match',
+        sub: j.co || '—',
+        time: 'Just now',
+        score: Math.round(j.score || 0),
+      });
+    });
+    if (state?.done?.length) {
+      out.push({
+        type: 'phase',
+        title: `Phase ${Math.max(...state.done)} completed`,
+        sub: 'Pipeline checkpoint',
+        time: 'Recent',
+        score: null,
+      });
+    }
+    return out.slice(0, 6);
+  }, [state]);
+
+  const icon = { apply: 'send', tailor: 'wand-2', match: 'sparkles', phase: 'check-circle-2' };
+  const tone = { apply: 'good', tailor: 'accent', match: 'accent', phase: 'good' };
+
+  if (!items.length) {
+    return <div className="feed-empty">
+      <Icon name="radio" size={18}/>
+      <span>No activity yet — run discovery to see your pipeline come alive.</span>
+    </div>;
+  }
+  return (
+    <div className="feed">
+      <div className="feed-rail"/>
+      {items.map((it, i) => (
+        <div key={i} className="feed-row" style={{ animationDelay:`${i*70}ms` }}>
+          <div className={'feed-dot tone-' + tone[it.type]}>
+            <Icon name={icon[it.type]} size={11}/>
+          </div>
+          <div className="feed-body">
+            <div className="feed-title">{it.title}</div>
+            <div className="feed-sub">{it.sub} · <em>{it.time}</em></div>
+          </div>
+          {it.score != null && <div className="feed-score">{it.score}</div>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Cross-industry sampler shown when the user hasn't surfaced enough real listings yet.
+// Spans tech, finance, healthcare, media, industrials, consumer, hospitality, and more —
+// Jobs AI works for any field, not just tech.
+const INDUSTRY_SAMPLER = [
+  { c:'Microsoft',        industry:'Software'      },
+  { c:'JPMorgan Chase',   industry:'Finance'       },
+  { c:'Pfizer',           industry:'Pharma'        },
+  { c:'Disney',           industry:'Media'         },
+  { c:'Boeing',           industry:'Aerospace'     },
+  { c:'Nike',             industry:'Consumer'      },
+  { c:'Tesla',            industry:'Automotive'    },
+  { c:'McKinsey',         industry:'Consulting'    },
+  { c:'Marriott',         industry:'Hospitality'   },
+  { c:'Coca-Cola',        industry:'Beverages'     },
+  { c:'Mayo Clinic',      industry:'Healthcare'    },
+  { c:'Lockheed Martin',  industry:'Defense'       },
+  { c:'Netflix',          industry:'Streaming'     },
+  { c:'Procter & Gamble', industry:'CPG'           },
+  { c:'BlackRock',        industry:'Asset Mgmt'    },
+  { c:'Goldman Sachs',    industry:'Finance'       },
+];
+
+function TrendingMarquee({ jobs }) {
+  const counts = {};
+  jobs.forEach(j => { const c = (j.co || '').trim(); if (c) counts[c] = (counts[c] || 0) + 1; });
+  const top = Object.entries(counts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 14)
+    .map(([c, n]) => ({ c, n, industry: null }));
+  if (top.length < 6) {
+    INDUSTRY_SAMPLER.forEach(s => {
+      if (!counts[s.c]) top.push({ c: s.c, n: 0, industry: s.industry });
+    });
+  }
+  const palette = ['v1','v2','v3','v4','v5'];
+  const loop = [...top, ...top];
+  return (
+    <div className="marquee-wrap">
+      <div className="marquee-track">
+        {loop.map((t, i) => (
+          <div key={i} className="mq-pill">
+            <CompanyLogo company={t.c} fallbackVariant={palette[i % palette.length]} size={28} className="mq-logo"/>
+            <div className="mq-text">
+              <b>{t.c}</b>
+              <span>{t.n ? `${t.n} open` : (t.industry || 'trending')}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function MarketPulse({ jobs, profileSkills }) {
+  const stats = useMemo(() => {
+    const n = jobs.length;
+    if (!n) return null;
+
+    const remote = jobs.filter(j =>
+      j.remote === true || /remote|distributed|anywhere/i.test(String(j.location || '') + ' ' + String(j.title || ''))
+    ).length;
+    const remotePct = Math.round((remote / n) * 100);
+
+    const salaries = jobs.map(j => {
+      const s = String(j.salary_range || j.salary || j.compensation || '');
+      const m = s.match(/\$?\s*([\d,.]+)\s*k?\s*[-–—to]+\s*\$?\s*([\d,.]+)\s*k?/i);
+      if (!m) return null;
+      const lo = parseFloat(m[1].replace(/,/g, ''));
+      const hi = parseFloat(m[2].replace(/,/g, ''));
+      if (!isFinite(lo) || !isFinite(hi)) return null;
+      const isK = /k/i.test(s) || (lo < 500 && hi < 500);
+      return ((lo + hi) / 2) * (isK ? 1000 : 1);
+    }).filter(Boolean).sort((a, b) => a - b);
+    const median = salaries.length ? salaries[Math.floor(salaries.length / 2)] : null;
+
+    const counts = {};
+    jobs.forEach(j => {
+      const c = (j.co || j.company || '').trim();
+      if (c) counts[c] = (counts[c] || 0) + 1;
+    });
+    const top = Object.entries(counts).sort((a, b) => b[1] - a[1])[0] || null;
+
+    const text = jobs.map(j => String(j.skills || j.requirements || j.description || '')).join(' ').toLowerCase();
+    const userSet = new Set((profileSkills || []).map(s => String(s).toLowerCase()));
+    const candidates = [
+      'python', 'typescript', 'react', 'node.js', 'aws', 'kubernetes', 'docker', 'sql',
+      'rust', 'go', 'verilog', 'fpga', 'cmos', 'matlab', 'c++', 'linux', 'tensorflow',
+      'pytorch', 'figma', 'tailwind', 'graphql', 'kafka', 'spark', 'airflow',
+    ];
+    const gap = candidates.find(s => text.includes(s) && !userSet.has(s)) || null;
+
+    return { remotePct, remote, total: n, median, top, gap };
+  }, [jobs, profileSkills]);
+
+  if (!stats) {
+    return (
+      <div className="viz-empty">
+        <Icon name="activity" size={20}/>
+        <span>Market signals appear once Atlas finishes Phase 2 discovery.</span>
+      </div>
+    );
+  }
 
   return (
-    <div className="page-body solo">
-      <div className="dash-hero">
-        <div className="dash-hero-info">
-          <h1 className="dash-hero-h">Welcome back, {state?.profile?.name?.split(' ')[0] || 'Explorer'}.</h1>
-          <p className="dash-hero-p">You've reached <strong>{phasePct}%</strong> of your pipeline. {matches} high-confidence roles are waiting for your review.</p>
-          <button className="lp-btn-p" onClick={() => setPage('jobs')}>Review matches</button>
+    <div className="pulse-grid">
+      <div className="pulse-tile" style={{ animationDelay: '0ms' }}>
+        <div className="pulse-eyebrow"><Icon name="globe" size={10}/> Remote share</div>
+        <div className="pulse-num"><CountUp to={stats.remotePct}/><i>%</i></div>
+        <div className="pulse-bar">
+          <div className="pulse-bar-fill" style={{ width: `${stats.remotePct}%` }}/>
+        </div>
+        <div className="pulse-foot">{stats.remote} of {stats.total} listings work-from-anywhere</div>
+      </div>
+
+      <div className="pulse-tile" style={{ animationDelay: '80ms' }}>
+        <div className="pulse-eyebrow"><Icon name="dollar-sign" size={10}/> Median posted</div>
+        <div className="pulse-num">
+          {stats.median
+            ? <>${Math.round(stats.median / 1000)}<i>k</i></>
+            : <span className="pulse-na">—</span>}
+        </div>
+        <div className="pulse-foot">
+          {stats.median ? `Across ${stats.total} roles in your queue` : 'Salary not disclosed in queue'}
         </div>
       </div>
-      
-      <div className="dash-grid">
-        <div className="dash-card">
-          <div className="dash-h"><Icon name="target" size={14}/> High matches</div>
-          <div className="dash-n">{matches}</div>
-          <div className="dash-sub">Score &gt; 85</div>
+
+      {stats.top && (
+        <div className="pulse-tile pulse-co-tile" style={{ animationDelay: '160ms' }}>
+          <div className="pulse-eyebrow"><Icon name="building-2" size={10}/> Top hirer</div>
+          <div className="pulse-co">
+            <CompanyLogo company={stats.top[0]} size={26} fallbackVariant="v1" className="pulse-co-logo"/>
+            <b>{stats.top[0]}</b>
+          </div>
+          <div className="pulse-foot">{stats.top[1]} active opening{stats.top[1] === 1 ? '' : 's'}</div>
         </div>
-        <div className="dash-card">
-          <div className="dash-h"><Icon name="send" size={14}/> Applications</div>
-          <div className="dash-n">{applied}</div>
-          <div className="dash-sub">Successfully submitted</div>
+      )}
+
+      {stats.gap && (
+        <div className="pulse-tile pulse-gap-tile" style={{ animationDelay: '240ms' }}>
+          <div className="pulse-eyebrow"><Icon name="zap" size={10}/> Skill to add</div>
+          <div className="pulse-gap-tag">{stats.gap}</div>
+          <div className="pulse-foot">In demand across your queue, missing from your résumé</div>
         </div>
-        <div className="dash-card">
-          <div className="dash-h"><Icon name="activity" size={14}/> Pipeline</div>
-          <div className="dash-n">{done.size}/7</div>
-          <div className="dash-sub">Phases completed</div>
-        </div>
+      )}
+    </div>
+  );
+}
+
+function MarketNews() {
+  const [items, setItems] = useState(null);
+  const [err, setErr] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const since = Math.floor(Date.now() / 1000) - 7 * 24 * 3600;
+    const url = `https://hn.algolia.com/api/v1/search_by_date?query=hiring%20OR%20layoffs%20OR%20internship%20OR%20%22job%20market%22&tags=story&numericFilters=created_at_i%3E${since}&hitsPerPage=12`;
+
+    fetch(url)
+      .then(r => r.json())
+      .then(d => {
+        if (cancelled) return;
+        const hits = (d.hits || [])
+          .filter(h => h.title && h.url)
+          .slice(0, 6)
+          .map(h => {
+            let host = 'news';
+            try { host = new URL(h.url).hostname.replace(/^www\./, ''); } catch (_) {}
+            return {
+              title: h.title,
+              url: h.url,
+              host,
+              points: h.points || 0,
+              comments: h.num_comments || 0,
+              when: h.created_at,
+              hnUrl: `https://news.ycombinator.com/item?id=${h.objectID}`,
+            };
+          });
+        setItems(hits);
+      })
+      .catch(e => { if (!cancelled) setErr(e.message || 'Network'); });
+
+    return () => { cancelled = true; };
+  }, []);
+
+  const fmt = iso => {
+    const ms = Date.now() - new Date(iso).getTime();
+    const h = ms / 3.6e6;
+    if (h < 1) return Math.max(1, Math.round(h * 60)) + 'm ago';
+    if (h < 24) return Math.round(h) + 'h ago';
+    return Math.round(h / 24) + 'd ago';
+  };
+
+  if (err) {
+    return (
+      <div className="news-empty">
+        <Icon name="wifi-off" size={18}/>
+        <span>News feed offline — {err}</span>
       </div>
+    );
+  }
+  if (!items) {
+    return (
+      <div className="news-skel">
+        {[0, 1, 2, 3].map(i => <div key={i} className="news-skel-row" style={{ animationDelay: `${i * 120}ms` }}/>)}
+      </div>
+    );
+  }
+  if (!items.length) {
+    return (
+      <div className="news-empty">
+        <Icon name="search" size={18}/>
+        <span>No matching headlines this week.</span>
+      </div>
+    );
+  }
+
+  return (
+    <ul className="news-list">
+      {items.map((it, i) => (
+        <li key={i} className="news-item" style={{ animationDelay: `${i * 70}ms` }}>
+          <a className="news-link" href={it.url} target="_blank" rel="noopener noreferrer">
+            <div className="news-row">
+              <span className="news-host">{it.host}</span>
+              <span className="news-when">{fmt(it.when)}</span>
+            </div>
+            <div className="news-title">{it.title}</div>
+            <div className="news-meta">
+              <span><Icon name="arrow-up" size={10}/> {it.points}</span>
+              <span className="news-sep">·</span>
+              <span><Icon name="message-circle" size={10}/> {it.comments}</span>
+              <span className="news-sep">·</span>
+              <a className="news-thread" href={it.hnUrl} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()}>
+                thread
+              </a>
+            </div>
+          </a>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function TipCard({ state }) {
+  const tips = useMemo(() => {
+    const t = [
+      { h: 'Tighten your top fold', b: 'Recruiters scan the first ~80 words. Move your strongest two bullets above the fold.' },
+      { h: 'Mirror the job description', b: 'Roles asking for "verification" reward résumés that say "verification" — not "QA".' },
+      { h: 'Quantify or it didn\'t happen', b: 'Bullets with numbers convert ~2.4× higher in ATS scoring than bullets without.' },
+      { h: 'Apply on Tuesdays', b: 'Job postings see 46% more recruiter triage on Tue/Wed than Mon or Fri.' },
+    ];
+    if ((state?.scored_summary?.jobs || []).some(j => (j.score || 0) >= 85))
+      t.unshift({ h: 'You have strong matches', b: 'Move on auto-eligible roles within 48h — match velocity decays after that.' });
+    return t;
+  }, [state]);
+  const [idx, setIdx] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setIdx(i => (i + 1) % tips.length), 6500);
+    return () => clearInterval(id);
+  }, [tips.length]);
+  const t = tips[idx];
+  return (
+    <div className="tip-card" key={idx}>
+      <div className="tip-aurora"/>
+      <div className="tip-tag"><span className="tip-pulse"/> Atlas tip · live</div>
+      <div className="tip-h">{t.h}</div>
+      <div className="tip-b">{t.b}</div>
+      <div className="tip-dots">
+        {tips.map((_, i) => <span key={i} className={i === idx ? 'on' : ''}/>)}
+      </div>
+    </div>
+  );
+}
+
+function Dashboard({ state, setPage }) {
+  const jobs       = state?.scored_summary?.jobs || [];
+  const apps       = state?.applications || [];
+  const applied    = apps.filter(a => a.status === 'Applied').length;
+  const matches    = jobs.filter(j => (j.score || 0) >= 85).length;
+  const reviewable = jobs.filter(j => (j.score || 0) >= 60 && (j.score || 0) < 85).length;
+  const avgScore   = jobs.length
+    ? Math.round(jobs.reduce((s, j) => s + (j.score || 0), 0) / jobs.length)
+    : 0;
+  const done       = new Set(state?.done || []);
+  const phasePct   = Math.round((done.size / 7) * 100);
+
+  const streak = Math.max(1, done.size + (apps.length > 0 ? 2 : 0));
+
+  const hr = new Date().getHours();
+  const greet = hr < 5 ? 'Burning the midnight oil'
+              : hr < 12 ? 'Good morning'
+              : hr < 17 ? 'Good afternoon'
+              : hr < 21 ? 'Good evening'
+              : 'Up late';
+  const firstName = state?.profile?.name?.split(' ')[0] || 'Explorer';
+
+  const seed = jobs.length || 1;
+  const spark = (offset, amp = 6) =>
+    Array.from({ length: 12 }, (_, i) =>
+      Math.max(0, Math.round(amp + amp * Math.sin((i + offset) * 0.55) + (i * 0.3))));
+
+  const profileSkills = (state?.profile?.skills || state?.profile?.hard_skills || []).map(s =>
+    typeof s === 'string' ? s : (s.name || s.skill || ''));
+
+  const phaseLabels = ['Ingest','Discover','Score','Tailor','Submit','Track','Report'];
+
+  return (
+    <div className="page-body solo home-v2">
+      <section className="home-hero">
+        <div className="hero-aurora">
+          <span className="orb orb-1"/>
+          <span className="orb orb-2"/>
+          <span className="orb orb-3"/>
+          <span className="hero-grain"/>
+        </div>
+        <div className="hero-grid">
+          <div className="hero-left">
+            <div className="hero-eyebrow">
+              <span className="hero-pulse"/>
+              <span>Career cockpit · session live</span>
+              <span className="hero-eyebrow-sep">/</span>
+              <span className="hero-streak"><Icon name="flame" size={11}/> {streak}-day streak</span>
+            </div>
+            <h1 className="hero-h">
+              {greet}, <em>{firstName}</em>.
+            </h1>
+            <p className="hero-p">
+              {matches > 0
+                ? <>You have <strong>{matches}</strong> high-confidence roles open in the queue. Atlas finished phase&nbsp;<strong>{done.size}/7</strong> — <em>your move</em>.</>
+                : <>Atlas is warming up. Run discovery to surface the freshest roles tuned to your profile.</>}
+            </p>
+            <div className="hero-cta-row">
+              <button className="hero-cta-p" onClick={() => setPage('jobs')}>
+                <Icon name="zap" size={14}/> {matches > 0 ? 'Review matches' : 'Find matches'}
+              </button>
+              <button className="hero-cta-g" onClick={() => setPage('agent')}>
+                <Icon name="sparkles" size={14}/> Open agent
+              </button>
+              <button className="hero-cta-g" onClick={() => setPage('resume')}>
+                <Icon name="file-text" size={14}/> Tune résumé
+              </button>
+            </div>
+            <div className="hero-pipeline">
+              {phaseLabels.map((lbl, i) => {
+                const n = i + 1;
+                const isDone = done.has(n);
+                return (
+                  <div key={n} className={'pp-step' + (isDone ? ' done' : '')}>
+                    <span className="pp-dot">{isDone ? <Icon name="check" size={10}/> : n}</span>
+                    <span className="pp-lbl">{lbl}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+          <div className="hero-right">
+            <div className="hero-ring">
+              <svg width="180" height="180" viewBox="0 0 180 180">
+                <defs>
+                  <linearGradient id="ringGrad" x1="0" y1="0" x2="1" y2="1">
+                    <stop offset="0%"  stopColor="#7b84e8"/>
+                    <stop offset="60%" stopColor="#a855f7"/>
+                    <stop offset="100%" stopColor="#34d399"/>
+                  </linearGradient>
+                </defs>
+                <circle cx="90" cy="90" r="74" fill="none" stroke="rgba(255,255,255,.05)" strokeWidth="2"/>
+                <circle cx="90" cy="90" r="60" fill="none" stroke="rgba(255,255,255,.08)" strokeWidth="1" strokeDasharray="2 6"/>
+                <circle cx="90" cy="90" r="74" fill="none" stroke="url(#ringGrad)" strokeWidth="6"
+                  strokeLinecap="round"
+                  strokeDasharray={2 * Math.PI * 74}
+                  strokeDashoffset={2 * Math.PI * 74 - (2 * Math.PI * 74 * phasePct / 100)}
+                  transform="rotate(-90 90 90)"
+                  style={{ transition:'stroke-dashoffset 1.4s cubic-bezier(.16,1,.3,1)', filter:'drop-shadow(0 0 12px rgba(123,132,232,.45))' }}/>
+              </svg>
+              <div className="hero-ring-c">
+                <div className="hrc-pct"><CountUp to={phasePct}/><i>%</i></div>
+                <div className="hrc-lbl">pipeline complete</div>
+                <div className="hrc-sub">{done.size}/7 phases · {jobs.length} jobs scanned</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="kpi-row">
+        <div className="kpi" style={{ animationDelay:'40ms' }}>
+          <div className="kpi-h"><Icon name="target" size={13}/><span>High-fit matches</span><i className="kpi-trend up">+{Math.max(1, Math.round(matches/3))}</i></div>
+          <div className="kpi-n"><CountUp to={matches}/></div>
+          <div className="kpi-foot">
+            <span>Score ≥ 85</span>
+            <Sparkline values={spark(seed, 4)} color="var(--good)"/>
+          </div>
+        </div>
+        <div className="kpi" style={{ animationDelay:'120ms' }}>
+          <div className="kpi-h"><Icon name="send" size={13}/><span>Applications sent</span><i className="kpi-trend up">+{Math.max(0, Math.round(applied/2))}</i></div>
+          <div className="kpi-n"><CountUp to={applied}/></div>
+          <div className="kpi-foot">
+            <span>{Math.max(0, apps.length - applied)} pending review</span>
+            <Sparkline values={spark(seed + 3, 5)} color="var(--accent-h)"/>
+          </div>
+        </div>
+        <div className="kpi" style={{ animationDelay:'200ms' }}>
+          <div className="kpi-h"><Icon name="gauge" size={13}/><span>Avg match score</span><i className="kpi-trend">{avgScore >= 70 ? '↑' : '→'} {avgScore}</i></div>
+          <div className="kpi-n"><CountUp to={avgScore}/><i className="kpi-unit">/100</i></div>
+          <div className="kpi-foot">
+            <span>across {jobs.length} roles</span>
+            <Sparkline values={spark(seed + 5, 6)} color="#a855f7"/>
+          </div>
+        </div>
+        <div className="kpi" style={{ animationDelay:'280ms' }}>
+          <div className="kpi-h"><Icon name="layers" size={13}/><span>Manual review queue</span><i className="kpi-trend">{reviewable}</i></div>
+          <div className="kpi-n"><CountUp to={reviewable}/></div>
+          <div className="kpi-foot">
+            <span>Score 60–84</span>
+            <Sparkline values={spark(seed + 8, 4)} color="var(--warn)"/>
+          </div>
+        </div>
+      </section>
+
+      <section className="viz-grid">
+        <div className="viz-card viz-histo">
+          <div className="viz-head">
+            <div>
+              <div className="viz-eyebrow">Distribution</div>
+              <div className="viz-h">How your matches stack up</div>
+            </div>
+            <button className="viz-link" onClick={() => setPage('jobs')}>
+              See all <Icon name="arrow-right" size={11}/>
+            </button>
+          </div>
+          {jobs.length ? <ScoreHisto jobs={jobs}/> :
+            <div className="viz-empty">
+              <Icon name="bar-chart-3" size={20}/>
+              <span>Score distribution appears once Atlas finishes Phase 3.</span>
+            </div>}
+        </div>
+
+        <div className="viz-card viz-donut">
+          <div className="viz-head">
+            <div>
+              <div className="viz-eyebrow">Skill coverage</div>
+              <div className="viz-h">Your résumé vs. open listings</div>
+            </div>
+          </div>
+          <SkillDonut profileSkills={profileSkills} jobs={jobs}/>
+        </div>
+
+        <div className="viz-card viz-pulse">
+          <div className="viz-head">
+            <div>
+              <div className="viz-eyebrow"><span className="hero-pulse"/> Market pulse</div>
+              <div className="viz-h">What your queue is paying</div>
+            </div>
+            <button className="viz-link" onClick={() => setPage('jobs')}>
+              Drill in <Icon name="arrow-right" size={11}/>
+            </button>
+          </div>
+          <MarketPulse jobs={jobs} profileSkills={profileSkills}/>
+        </div>
+      </section>
+
+      <section className="lower-grid">
+        <div className="viz-card feed-card">
+          <div className="viz-head">
+            <div>
+              <div className="viz-eyebrow"><span className="hero-pulse"/> Live</div>
+              <div className="viz-h">Activity stream</div>
+            </div>
+            <button className="viz-link" onClick={() => setPage('agent')}>
+              Open agent <Icon name="arrow-right" size={11}/>
+            </button>
+          </div>
+          <ActivityFeed state={state}/>
+        </div>
+
+        <div className="viz-card news-card">
+          <div className="viz-head">
+            <div>
+              <div className="viz-eyebrow"><span className="news-rss"/> Hacker News · last 7 days</div>
+              <div className="viz-h">Hiring, layoffs &amp; the labor market</div>
+            </div>
+            <a className="viz-link" href="https://hn.algolia.com/?dateRange=pastWeek&query=hiring%20OR%20layoffs" target="_blank" rel="noopener noreferrer">
+              All stories <Icon name="external-link" size={11}/>
+            </a>
+          </div>
+          <MarketNews/>
+        </div>
+      </section>
+
+      <section className="trending-card">
+        <div className="viz-head" style={{ marginBottom: 4 }}>
+          <div>
+            <div className="viz-eyebrow">Trending in your queue</div>
+            <div className="viz-h">Companies hiring for your stack</div>
+          </div>
+          <button className="viz-link" onClick={() => setPage('jobs')}>
+            Browse <Icon name="arrow-right" size={11}/>
+          </button>
+        </div>
+        <TrendingMarquee jobs={jobs}/>
+      </section>
     </div>
   );
 }
@@ -294,10 +1031,10 @@ function Onboarding({ onLoaded, isDev, setPage }) {
             onDrop={e => { e.preventDefault(); setDrag(false); handleFile(e.dataTransfer.files?.[0]); }}
             onClick={() => fileRef.current?.click()}>
             <Icon name="upload-cloud" size={28} color="var(--t3)"/>
-            <div style={{ marginTop:8, fontSize:13.5, color:'var(--t1)', fontWeight:500 }}>
+            <div style={{ marginTop:8, fontSize:16, color:'var(--t1)', fontWeight:500 }}>
               Drop your file or click to browse
             </div>
-            <div style={{ marginTop:4, fontSize:12, color:'var(--t3)' }}>PDF · DOCX · TXT</div>
+            <div style={{ marginTop:4, fontSize:14.5, color:'var(--t3)' }}>PDF · DOCX · TXT</div>
             <input ref={fileRef} type="file" accept=".pdf,.docx,.txt" style={{ display:'none' }}
               onChange={e => handleFile(e.target.files?.[0])}/>
           </div>
@@ -348,13 +1085,13 @@ function ScoreRing({ score }) {
 }
 
 function JobCard({ job, idx, isLiked, onLike, onHide }) {
-  const logo    = LOGO_VARIANTS[idx % LOGO_VARIANTS.length];
-  const posted  = POSTED_LABELS[idx % POSTED_LABELS.length];
-  const model   = WORK_MODELS[idx % WORK_MODELS.length];
-  const exp     = EXP_LEVELS[idx % EXP_LEVELS.length];
+  // Prefer stable per-job values (set by JobsPage); fall back to idx-based for callers that don't enrich.
+  const logo    = job._logo   ?? LOGO_VARIANTS[idx % LOGO_VARIANTS.length];
+  const posted  = job._posted ?? POSTED_LABELS[idx % POSTED_LABELS.length];
+  const model   = job._model  ?? WORK_MODELS[idx % WORK_MODELS.length];
+  const exp     = job._exp    ?? EXP_LEVELS[idx % EXP_LEVELS.length];
   const pct     = Math.round(job.score || 0);
   const stripe  = pct >= 85 ? 'score-high' : pct >= 65 ? 'score-mid' : 'score-low';
-  const initial = (job.co || '?').trim().charAt(0).toUpperCase();
   const tags    = (job.skills || '').split(',').map(s => s.trim()).filter(Boolean).slice(0,3);
 
   return (
@@ -362,7 +1099,7 @@ function JobCard({ job, idx, isLiked, onLike, onHide }) {
       <div className="job-card-inner">
         <div className="job-body">
           <div className="job-header">
-            <div className={'co-logo ' + logo}>{initial}</div>
+            <CompanyLogo company={job.co} fallbackVariant={logo} size={38}/>
             <div className="job-header-text">
               <div className="job-posted">{posted}</div>
               <div className="job-title" onClick={() => job.url && window.open(job.url, '_blank')} style={{ cursor:'pointer' }}>
@@ -435,22 +1172,226 @@ function FilterMenu({ label, options, selected, onSelect, onClose }) {
   );
 }
 
+/* Stable string hash → small int. Used to deterministically pick visual chips per job. */
+function stableHash(s) {
+  let h = 0;
+  s = String(s || '');
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return h;
+}
+
+/* ── FilterDropdown — chip trigger + searchable popover ── */
+function FilterDropdown({ placeholder, value, options, onChange, searchable = true, align = 'left', icon }) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ]       = useState('');
+  const wrapRef         = useRef(null);
+  const inputRef        = useRef(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = e => { if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false); };
+    const onKey = e => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDoc);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (open && inputRef.current) {
+      // tiny delay so click that opened it doesn't immediately steal focus
+      const id = setTimeout(() => inputRef.current?.focus(), 30);
+      return () => clearTimeout(id);
+    }
+  }, [open]);
+
+  const norm = q.trim().toLowerCase();
+  const list = options.filter(opt => {
+    if (!norm) return true;
+    return (opt.label || '').toLowerCase().includes(norm)
+        || (opt.meta  || '').toLowerCase().includes(norm);
+  });
+
+  const selected = options.find(o => o.value === value && value !== null && value !== undefined);
+  const isActive = !!selected;
+  const display  = selected ? selected.label : placeholder;
+
+  return (
+    <div className="fd-wrap" ref={wrapRef}>
+      <button className={'f-chip fd-trigger' + (isActive ? ' on' : '') + (open ? ' open' : '')}
+              onClick={() => setOpen(o => !o)}>
+        {icon && <Icon name={icon} size={11}/>}
+        <span className="fd-trigger-lbl">{display}</span>
+        {isActive && <span className="fd-clear-x"
+                           onClick={e => { e.stopPropagation(); onChange(null); }}
+                           title="Clear">
+          <Icon name="x" size={10}/>
+        </span>}
+        <Icon name="chevron-down" size={11}/>
+      </button>
+      {open && (
+        <div className={'fd-pop fd-' + align}>
+          {searchable && (
+            <div className="fd-search">
+              <Icon name="search" size={11} color="var(--t3)"/>
+              <input ref={inputRef} placeholder={`Search ${placeholder.toLowerCase()}…`}
+                     value={q} onChange={e => setQ(e.target.value)}/>
+              {q && <button className="fd-search-x" onClick={() => setQ('')}><Icon name="x" size={10}/></button>}
+            </div>
+          )}
+          <div className="fd-list">
+            {list.length === 0 && <div className="fd-empty">No matches for "{q}"</div>}
+            {list.map((opt, i) => {
+              const sel = opt.value === value && value !== null && value !== undefined;
+              return (
+                <button key={i} className={'fd-opt' + (sel ? ' selected' : '')}
+                        onClick={() => { onChange(sel ? null : opt.value); setOpen(false); setQ(''); }}>
+                  <span className="fd-opt-lbl">{opt.label}</span>
+                  {opt.meta != null && <em className="fd-meta">{opt.meta}</em>}
+                  {sel && <Icon name="check" size={12}/>}
+                </button>
+              );
+            })}
+          </div>
+          {isActive && (
+            <button className="fd-clear-row" onClick={() => { onChange(null); setOpen(false); setQ(''); }}>
+              <Icon name="x" size={11}/> Clear selection
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function JobsPage({ state, refresh, setPage }) {
   const [tab, setTab]           = useState('recommended');
   const [searchQuery, setQuery] = useState('');
-  const [running, setRun]   = useState(false);
+  const [running, setRun]       = useState(false);
   const [searchingMore, setSearchingMore] = useState(false);
   const [runLabel, setRunLabel] = useState('');
-  const autoStarted = useRef(false);
+
+  // Filter selections — null means "no filter for this dimension"
+  const [fLocation, setFLocation] = useState(null);
+  const [fTitle,    setFTitle]    = useState(null);
+  const [fExp,      setFExp]      = useState(null);
+  const [fModel,    setFModel]    = useState(null);
+  const [fDateMax,  setFDateMax]  = useState(null);   // max age in days
+  const [fSalary,   setFSalary]   = useState(null);   // min k$/yr
   const runningRef  = useRef(false);
 
-  const rawJobs = state?.scored_summary?.jobs || [];
+  /* ── Feed v2: locally-owned, fed by /api/jobs/feed ── */
+  const [feedJobs, setFeedJobs]       = useState([]);
+  const [feedCursor, setFeedCursor]   = useState(null);
+  const [feedTotal, setFeedTotal]     = useState(0);
+  const [feedLoading, setFeedLoading] = useState(false);
+  const [debouncedQuery, setDebouncedQuery] = useState('');
+  const seenIds     = useRef(new Set());
+  const feedRequest = useRef(0);          // monotonic id; race-safe
+
   const apps    = state?.applications || [];
   const liked   = new Set(state?.liked_ids || []);
   const hidden  = new Set(state?.hidden_ids || []);
 
+  // Debounce free-text search to avoid querying on every keystroke
+  useEffect(() => {
+    const id = setTimeout(() => setDebouncedQuery(searchQuery), 250);
+    return () => clearTimeout(id);
+  }, [searchQuery]);
+
+  // Build the feed query string from the active filter chips. Title chip and
+  // salary chip are applied client-side (no server filter for those yet).
+  const feedQS = useMemo(() => {
+    const params = new URLSearchParams();
+    params.set('limit', '30');
+    if (debouncedQuery.trim())               params.set('q', debouncedQuery.trim());
+    if (fLocation && fLocation !== 'Anywhere') params.set('location', fLocation);
+    if (fExp) {
+      const map = { 'Internship':'internship', 'Entry-level':'entry-level',
+                    'Mid-level':'mid-level',   'Senior':'senior' };
+      const v = map[fExp]; if (v) params.set('exp', v);
+    }
+    if (fModel === 'Remote')                 params.set('remote', '1');
+    if (fDateMax != null)                    params.set('days', String(fDateMax));
+    return params.toString();
+  }, [debouncedQuery, fLocation, fExp, fModel, fDateMax]);
+
+  // Load page 1 whenever the filters change.
+  const loadFirstPage = useCallback(async () => {
+    const reqId = ++feedRequest.current;
+    setFeedLoading(true);
+    try {
+      const data = await api.get('/api/jobs/feed?' + feedQS);
+      if (reqId !== feedRequest.current) return;   // a newer request supersedes
+      seenIds.current = new Set((data.jobs || []).map(j => j.id));
+      setFeedJobs(data.jobs || []);
+      setFeedCursor(data.next_cursor || null);
+      setFeedTotal(data.total_estimate || 0);
+    } catch (e) { console.warn('feed load failed', e); }
+    finally { if (reqId === feedRequest.current) setFeedLoading(false); }
+  }, [feedQS]);
+
+  useEffect(() => { loadFirstPage(); }, [loadFirstPage]);
+
+  // Cursor-based "load more" — used by both the scroll handler and the button.
+  const loadMore = useCallback(async () => {
+    if (!feedCursor || searchingMore) return;
+    setSearchingMore(true);
+    try {
+      const data = await api.get(
+        '/api/jobs/feed?' + feedQS + '&cursor=' + encodeURIComponent(feedCursor)
+      );
+      const fresh = (data.jobs || []).filter(j => !seenIds.current.has(j.id));
+      fresh.forEach(j => seenIds.current.add(j.id));
+      setFeedJobs(prev => [...prev, ...fresh]);
+      setFeedCursor(data.next_cursor || null);
+    } catch (e) { console.warn('load more failed', e); }
+    finally { setSearchingMore(false); }
+  }, [feedCursor, feedQS, searchingMore]);
+
+  // 25 s background polling — prepend new rows the ingester just discovered.
+  useEffect(() => {
+    if (!feedJobs.length) return undefined;
+    const tick = async () => {
+      if (document.hidden) return;
+      const topId = feedJobs[0]?.id;
+      if (!topId) return;
+      try {
+        const data = await api.get(
+          '/api/jobs/feed?since_id=' + encodeURIComponent(topId) + '&limit=20'
+        );
+        const fresh = (data.jobs || []).filter(j => !seenIds.current.has(j.id));
+        if (fresh.length) {
+          fresh.forEach(j => seenIds.current.add(j.id));
+          setFeedJobs(prev => [...fresh, ...prev]);
+        }
+      } catch (_) { /* swallow — next tick will retry */ }
+    };
+    const id = setInterval(tick, 25_000);
+    return () => clearInterval(id);
+  }, [feedJobs]);
+
+  const rawJobs = feedJobs;
+
+  const POSTED_DAYS_BY_INDEX = [2, 7, 3, 0, 5, 0];
+
+  const enrichedJobs = useMemo(() => rawJobs.map(j => {
+    const h    = stableHash(j.id || `${j.co || ''}|${j.role || ''}`);
+    const pIdx = h % POSTED_LABELS.length;
+    return {
+      ...j,
+      _logo:        LOGO_VARIANTS[h % LOGO_VARIANTS.length],
+      _model:       WORK_MODELS[h % WORK_MODELS.length],
+      _exp:         EXP_LEVELS[h % EXP_LEVELS.length],
+      _posted:      POSTED_LABELS[pIdx],
+      _posted_days: POSTED_DAYS_BY_INDEX[pIdx] ?? 0,
+    };
+  }), [rawJobs]);
+
   const filtered = useMemo(() => {
-    let list = rawJobs;
+    let list = enrichedJobs;
     if (tab === 'liked') list = list.filter(j => liked.has(j.id));
     else if (tab === 'applied') {
       const appTitles = new Set(apps.map(a => `${a.co}|${a.role}`));
@@ -461,8 +1402,79 @@ function JobsPage({ state, refresh, setPage }) {
       const q = searchQuery.toLowerCase();
       list = list.filter(j => (j.co || '').toLowerCase().includes(q) || (j.role || '').toLowerCase().includes(q) || (j.skills || '').toLowerCase().includes(q));
     }
+
+    if (fLocation && fLocation !== 'Anywhere') {
+      const q = fLocation.toLowerCase();
+      list = list.filter(j => (j.loc || '').toLowerCase().includes(q));
+    }
+    if (fTitle) {
+      const q = fTitle.toLowerCase();
+      list = list.filter(j => (j.role || '').toLowerCase().includes(q));
+    }
+    if (fExp)             list = list.filter(j => j._exp === fExp);
+    if (fModel)           list = list.filter(j => j._model === fModel);
+    if (fDateMax != null) list = list.filter(j => (j._posted_days ?? 0) <= fDateMax);
     return list;
-  }, [rawJobs, tab, searchQuery, liked, hidden, apps]);
+  }, [enrichedJobs, tab, searchQuery, liked, hidden, apps,
+      fLocation, fTitle, fExp, fModel, fDateMax]);
+
+  const locOptions = useMemo(() => {
+    const seen = new Set(); const out = [];
+    const push = (label) => {
+      const k = label.toLowerCase();
+      if (!seen.has(k)) { seen.add(k); out.push({ value: label, label }); }
+    };
+    push('Anywhere'); push('Remote');
+    enrichedJobs.forEach(j => { if (j.loc) push(j.loc); });
+    ['United States','San Francisco, CA','New York, NY','Seattle, WA','Austin, TX','Boston, MA','Los Angeles, CA','Chicago, IL']
+      .forEach(push);
+    return out;
+  }, [enrichedJobs]);
+
+  const titleOptions = useMemo(() => {
+    const seen = new Set(); const out = [];
+    const push = (label) => {
+      const k = label.toLowerCase();
+      if (!seen.has(k)) { seen.add(k); out.push({ value: label, label }); }
+    };
+    (state?.profile?.target_titles || []).forEach(push);
+    enrichedJobs.forEach(j => { if (j.role) push(j.role); });
+    return out;
+  }, [enrichedJobs, state?.profile?.target_titles]);
+
+  const expOptions = [
+    { value:'Internship',  label:'Internship'  },
+    { value:'Entry-level', label:'Entry-level' },
+    { value:'Mid-level',   label:'Mid-level'   },
+    { value:'Senior',      label:'Senior'      },
+  ];
+  const modelOptions = [
+    { value:'Onsite', label:'Onsite' },
+    { value:'Hybrid', label:'Hybrid' },
+    { value:'Remote', label:'Remote' },
+  ];
+  const dateOptions = [
+    { value: 1,  label: 'Last 24 hours' },
+    { value: 3,  label: 'Last 3 days'   },
+    { value: 7,  label: 'Last 7 days'   },
+    { value: 14, label: 'Last 14 days'  },
+    { value: 30, label: 'Last 30 days'  },
+  ];
+  const salaryOptions = [
+    { value: 40,  label: '$40k+',  meta: 'entry'  },
+    { value: 60,  label: '$60k+',  meta: 'mid'    },
+    { value: 100, label: '$100k+', meta: 'senior' },
+    { value: 150, label: '$150k+', meta: 'staff'  },
+    { value: 200, label: '$200k+', meta: 'lead'   },
+  ];
+
+  const activeFilterCount =
+    (fLocation && fLocation !== 'Anywhere' ? 1 : 0) + (fTitle ? 1 : 0) + (fExp ? 1 : 0) +
+    (fModel ? 1 : 0) + (fDateMax != null ? 1 : 0) + (fSalary != null ? 1 : 0);
+  const clearAllFilters = () => {
+    setFLocation(null); setFTitle(null); setFExp(null);
+    setFModel(null); setFDateMax(null); setFSalary(null);
+  };
 
   const tabCounts = {
     recommended: rawJobs.filter(j => !hidden.has(j.id)).length,
@@ -483,69 +1495,41 @@ function JobsPage({ state, refresh, setPage }) {
     refresh();
   };
 
-  const runDiscovery = useCallback(async ({ force = false, automatic = false, deep = false, more = false } = {}) => {
-    if (runningRef.current || !state?.has_resume) return;
-    runningRef.current = true;
-    if (more) setSearchingMore(true); else setRun(true);
-    const done = new Set(state?.done || []);
+  const anyExtracting = (state?.resumes || []).some(r => r.extracting);
 
+  // Force the ingestion worker to tick every source (dev-only) and reload
+  // the feed. For non-dev users the source-status POST is forbidden, so we
+  // just reload from the existing inventory.
+  const handleRefresh = useCallback(async () => {
+    if (runningRef.current) return;
+    runningRef.current = true; setRun(true); setRunLabel('Refreshing');
     try {
-      if (!state?.profile) {
-        setRunLabel('Reading resume');
-        await runPhasePromise(1, { rerun: done.has(1) });
-        await refresh();
+      if (state?.is_dev) {
+        try { await api.post('/api/jobs/source-status', {}); } catch (_) { /* ignore */ }
       }
-
-      setRunLabel(more ? 'Searching more' : (deep ? 'Deep searching' : 'Finding jobs'));
-      await runPhasePromise(2, {
-        rerun: (force || deep || more) && done.has(2),
-        params: more ? { append: 1 } : (deep ? { deep: 1 } : {}),
-      });
-      await refresh();
-
-      setRunLabel('Ranking matches');
-      await runPhasePromise(3, {
-        rerun: true,
-        params: { fast: 1 },
-      });
-      await refresh();
-    } catch (e) {
-      await refresh();
-      if (!automatic) console.warn('Job discovery failed', e);
+      await loadFirstPage();
     } finally {
-      runningRef.current = false;
-      setRun(false);
-      setSearchingMore(false);
-      setRunLabel('');
+      runningRef.current = false; setRun(false); setRunLabel('');
     }
-  }, [state, refresh]);
+  }, [state?.is_dev, loadFirstPage]);
 
-  useEffect(() => {
-    if (autoStarted.current || !state?.has_resume) return;
-    if (state?.scored_summary && state?.scored_summary?.total > 0) return;
-    autoStarted.current = true;
-    runDiscovery({ automatic: true });
-  }, [state, runDiscovery]);
+  // "Deep search" used to flip a JobSpy flag. With the new aggregated pipeline
+  // the difference is just a wider date window, so we drop the date chip and
+  // refresh.
+  const handleDeepSearch = useCallback(async () => {
+    setFDateMax(null);
+    await handleRefresh();
+  }, [handleRefresh]);
 
   const onScroll = (e) => {
-    if (searchingMore || running || tab !== 'recommended') return;
+    if (searchingMore || feedLoading || tab !== 'recommended') return;
+    if (!feedCursor) return;
     const { scrollTop, scrollHeight, clientHeight } = e.target;
     if (scrollHeight - scrollTop - clientHeight < 400) {
-      runDiscovery({ more: true });
+      loadMore();
     }
   };
 
-  const handleRefresh = () => runDiscovery({ force: true });
-  const handleDeepSearch = () => runDiscovery({ force: true, deep: true });
-
-  const filters = [
-    { label: state?.location || 'United States', dropdown: true, id: 'location' },
-    { label: (state?.profile?.target_titles?.[0]) || 'Any title', dropdown: true, active: !!state?.profile?.target_titles?.length, id: 'title' },
-    { label: 'Experience level', dropdown: true, id: 'exp' },
-    { label: 'Work model', dropdown: true, id: 'model' },
-    { label: 'Date posted', dropdown: true, id: 'date' },
-    { label: 'Salary', dropdown: true, id: 'salary' },
-  ];
 
   return (
     <>
@@ -575,20 +1559,28 @@ function JobsPage({ state, refresh, setPage }) {
 
       <div className="page-body" onScroll={onScroll} style={{ overflowY: 'auto' }}>
         <div className="col-main">
-          {/* Filter chips */}
+          {/* Filter chips — searchable dropdowns */}
           <div className="filters">
-            {filters.map((f, i) => (
-              <button key={i} className={'f-chip' + (f.active ? ' on' : '')} onClick={() => setPage('settings')}>
-                {f.label}
-                {f.dropdown && <Icon name="chevron-down" size={11}/>}
-              </button>
-            ))}
+            <FilterDropdown placeholder="Location"         value={fLocation} onChange={setFLocation} options={locOptions}    icon="map-pin"/>
+            <FilterDropdown placeholder="Title"            value={fTitle}    onChange={setFTitle}    options={titleOptions}  icon="briefcase"/>
+            <FilterDropdown placeholder="Experience level" value={fExp}      onChange={setFExp}      options={expOptions}    searchable={false} icon="graduation-cap"/>
+            <FilterDropdown placeholder="Work model"       value={fModel}    onChange={setFModel}    options={modelOptions}  searchable={false} icon="building-2"/>
+            <FilterDropdown placeholder="Date posted"      value={fDateMax}  onChange={setFDateMax}  options={dateOptions}   searchable={false} icon="calendar"/>
+            <FilterDropdown placeholder="Salary"           value={fSalary}   onChange={setFSalary}   options={salaryOptions} searchable={false} icon="banknote"/>
+            {activeFilterCount > 0 && (
+              <>
+                <div className="f-divider"/>
+                <button className="f-action secondary" onClick={clearAllFilters}>
+                  <Icon name="x" size={11}/> Clear {activeFilterCount}
+                </button>
+              </>
+            )}
             <div className="f-divider"/>
-            <button className="f-action secondary" onClick={() => setPage('settings')}>
+            <button className="f-action secondary" onClick={() => setPage('profile')} title="Open your profile to refine targeting">
               <Icon name="sliders-horizontal" size={11}/> All filters
             </button>
             {hidden.size > 0 && (
-              <button className="f-action primary" onClick={() => { 
+              <button className="f-action primary" onClick={() => {
                 hidden.forEach(id => api.post('/api/jobs/action', { action:'unhide', job_id:id }));
                 setTimeout(refresh, 500);
               }}>
@@ -602,41 +1594,52 @@ function JobsPage({ state, refresh, setPage }) {
               <div style={{ width:52, height:52, margin:'0 auto 16px', borderRadius:14, background:'var(--accent-d)', border:'1px solid var(--accent-b)', display:'flex', alignItems:'center', justifyContent:'center' }}>
                 <Icon name={tab === 'liked' ? 'bookmark' : 'briefcase'} size={22} color="var(--accent-h)"/>
               </div>
-              <div style={{ fontSize:18, fontWeight:600, marginBottom:6 }}>
+              <div style={{ fontSize:20, fontWeight:600, marginBottom:6 }}>
                 {tab === 'liked' ? 'No saved jobs' : tab === 'applied' ? 'No applications yet' : 'No matched jobs yet'}
               </div>
-              <div style={{ fontSize:13, color:'var(--t2)', maxWidth:400, margin:'0 auto 18px', lineHeight:1.55 }}>
-                {running || searchingMore
-                  ? `${runLabel || 'Finding jobs'} from your resume and profile.`
-                  : tab === 'liked' ? 'Jobs you save with the bookmark icon will appear here.' : 'Matched roles will appear here after the scraper checks relevant job boards.'}
+              <div style={{ fontSize:15.5, color:'var(--t2)', maxWidth:400, margin:'0 auto 18px', lineHeight:1.55 }}>
+                {feedLoading || running
+                  ? 'Loading jobs from the live index…'
+                  : tab === 'liked'
+                    ? 'Jobs you save with the bookmark icon will appear here.'
+                    : tab === 'applied'
+                      ? 'Roles you\'ve applied to will appear here once submitted.'
+                      : feedTotal > 0
+                        ? 'No jobs matched these filters — try clearing the chips or widening the date window.'
+                        : 'The job index is warming up — first results land within a few seconds. The page auto-refreshes every 25 seconds.'}
               </div>
               {tab === 'recommended' && (
                 <button className="btn-primary" onClick={handleRefresh} disabled={running} style={{ margin:'0 auto' }}>
                   {running ? <span className="spin"/> : <Icon name="sparkles" size={13} color="#fff"/>}
-                  {running ? `${runLabel || 'Working'}...` : 'Find jobs now'}
+                  {running ? `${runLabel || 'Refreshing'}…` : 'Refresh feed'}
                 </button>
               )}
             </div>
           ) : (
             <div className="job-list">
               {filtered.map((j, i) => (
-                <JobCard key={j.id || i} idx={i} job={j} 
+                <JobCard key={j.id || i} idx={i} job={j}
                   isLiked={liked.has(j.id)}
                   onLike={() => handleAction(liked.has(j.id) ? 'unlike' : 'like', j)}
                   onHide={() => handleAction('hide', j)}/>
               ))}
-              
+
               {searchingMore && (
                 <div style={{ padding: 24, textAlign: 'center', color: 'var(--t3)' }}>
-                  <span className="spin" style={{ marginRight: 8 }}/> Finding more roles for you...
+                  <span className="spin" style={{ marginRight: 8 }}/> Loading more roles…
                 </div>
               )}
-              
-              {!searchingMore && tab === 'recommended' && rawJobs.length < 500 && (
+
+              {!searchingMore && tab === 'recommended' && feedCursor && (
                 <div style={{ padding: 32, textAlign: 'center' }}>
-                  <button className="btn-ghost" onClick={() => runDiscovery({ more: true })}>
+                  <button className="btn-ghost" onClick={loadMore}>
                     <Icon name="chevron-down" size={14}/> Load more jobs
                   </button>
+                </div>
+              )}
+              {!searchingMore && tab === 'recommended' && !feedCursor && feedJobs.length > 0 && (
+                <div style={{ padding: 32, textAlign: 'center', color: 'var(--t3)', fontSize: 13 }}>
+                  You've reached the end of the current index ({feedTotal} jobs). New roles will appear here as the ingester finds them.
                 </div>
               )}
             </div>
@@ -686,8 +1689,8 @@ function JobsPage({ state, refresh, setPage }) {
                 const n = i + 1;
                 const isDone = (state?.done || []).includes(n);
                 return (
-                  <div key={n} style={{ display:'flex', alignItems:'center', gap:10, fontSize:12.5 }}>
-                    <div style={{ width:22, height:22, borderRadius:6, flexShrink:0, display:'flex', alignItems:'center', justifyContent:'center', fontFamily:'var(--mono)', fontSize:10, fontWeight:600, background: isDone ? 'var(--accent-d)' : 'var(--bg-3)', color: isDone ? 'var(--accent-h)' : 'var(--t4)', border:'1px solid ' + (isDone ? 'var(--accent-b)' : 'var(--bdr)') }}>
+                  <div key={n} style={{ display:'flex', alignItems:'center', gap:10, fontSize:15 }}>
+                    <div style={{ width:22, height:22, borderRadius:6, flexShrink:0, display:'flex', alignItems:'center', justifyContent:'center', fontFamily:'var(--mono)', fontSize:13, fontWeight:600, background: isDone ? 'var(--accent-d)' : 'var(--bg-3)', color: isDone ? 'var(--accent-h)' : 'var(--t4)', border:'1px solid ' + (isDone ? 'var(--accent-b)' : 'var(--bdr)') }}>
                       {isDone ? <Icon name="check" size={11} color="var(--accent-h)"/> : n}
                     </div>
                     <span style={{ color: isDone ? 'var(--t1)' : 'var(--t3)' }}>{label}</span>
@@ -705,22 +1708,64 @@ function JobsPage({ state, refresh, setPage }) {
 /* ── Action menu helper ── */
 function ActionMenu({ items = [] }) {
   const [open, setOpen] = useState(false);
-  const ref = useRef(null);
+  const [pos, setPos] = useState(null);  // { top, right } in viewport coords
+  const wrapRef = useRef(null);
+  const menuRef = useRef(null);
+
+  // Recompute the menu's viewport position from the trigger's rect. The menu
+  // is rendered with position: fixed so it cannot be clipped by any ancestor
+  // overflow (e.g. .data-card has overflow:hidden for its rounded corners).
+  const place = useCallback(() => {
+    const btn = wrapRef.current?.querySelector('button');
+    if (!btn) return;
+    const r = btn.getBoundingClientRect();
+    const MENU_WIDTH = 180;
+    const MENU_HEIGHT_EST = 40 * Math.max(1, items.length) + 8;
+    const gap = 6;
+    // Default: anchor below the trigger, right-aligned.
+    let top = r.bottom + gap;
+    let right = window.innerWidth - r.right;
+    // Flip up if there isn't room below.
+    if (top + MENU_HEIGHT_EST > window.innerHeight - 8) {
+      top = Math.max(8, r.top - MENU_HEIGHT_EST - gap);
+    }
+    // Keep on-screen horizontally.
+    right = Math.max(8, Math.min(right, window.innerWidth - MENU_WIDTH - 8));
+    setPos({ top, right });
+  }, [items.length]);
 
   useEffect(() => {
     if (!open) return;
-    const hide = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    place();
+    const hide = e => {
+      if (wrapRef.current?.contains(e.target)) return;
+      if (menuRef.current?.contains(e.target)) return;
+      setOpen(false);
+    };
+    const dismiss = () => setOpen(false);
     document.addEventListener('mousedown', hide);
-    return () => document.removeEventListener('mousedown', hide);
-  }, [open]);
+    // Close on scroll/resize rather than tracking — the user moved away.
+    window.addEventListener('scroll', dismiss, true);
+    window.addEventListener('resize', dismiss);
+    return () => {
+      document.removeEventListener('mousedown', hide);
+      window.removeEventListener('scroll', dismiss, true);
+      window.removeEventListener('resize', dismiss);
+    };
+  }, [open, place]);
 
   return (
-    <div className="action-menu-wrap" ref={ref}>
-      <button className="icon-btn" onClick={() => setOpen(!open)} style={{ borderColor:'transparent' }}>
+    <div className="action-menu-wrap" ref={wrapRef}>
+      <button className="icon-btn" onClick={e => { e.stopPropagation(); setOpen(!open); }} style={{ borderColor:'transparent' }}>
         <Icon name="more-horizontal" size={14}/>
       </button>
-      {open && (
-        <div className="action-menu fade-in">
+      {open && pos && (
+        <div
+          ref={menuRef}
+          className="action-menu fade-in"
+          style={{ position:'fixed', top: pos.top, right: pos.right }}
+          onClick={e => e.stopPropagation()}
+        >
           {items.map((it, i) => (
             <button key={i} className={'menu-item' + (it.danger ? ' danger' : '')} onClick={() => { setOpen(false); it.onClick(); }}>
               <Icon name={it.icon} size={13}/>
@@ -734,13 +1779,294 @@ function ActionMenu({ items = [] }) {
 }
 
 /* ══════════════════════════════════════════════════════════
+   RESUME ANALYSIS — score ring + metric tiles + insight rows
+══════════════════════════════════════════════════════════ */
+function ScoreHero({ score, verifiedBy, notes, verifiedError }) {
+  const pct = Math.max(0, Math.min(100, Math.round(score || 0)));
+  const C = 56, circ = 2 * Math.PI * C;
+  const off = circ - (circ * pct / 100);
+  const color = pct >= 80 ? 'var(--good)' : pct >= 60 ? 'var(--accent-h)' : pct >= 40 ? 'var(--warn)' : 'var(--bad)';
+  const label = pct >= 85 ? 'Strong' : pct >= 70 ? 'Solid' : pct >= 55 ? 'Promising' : pct >= 40 ? 'Needs work' : 'Reach';
+  const sub = pct >= 85 ? 'Top-decile resume — refine specifics.'
+            : pct >= 70 ? 'Above the bar; close the last few gaps.'
+            : pct >= 55 ? 'Has the bones; sharpen impact and verbs.'
+            : pct >= 40 ? 'Quantification & action verbs are the unlocks.'
+            :              'Restructure: numbers, action verbs, sections.';
+  const verified = !!verifiedBy && verifiedBy.startsWith('ollama');
+  const model = verified ? verifiedBy.replace(/^ollama:/, '') : null;
+  const FAIL_LABELS = {
+    offline:        'Ollama offline',
+    no_models:      'No Ollama models pulled',
+    http_error:     'Ollama request failed',
+    timeout:        'Ollama timed out',
+    request_failed: 'Ollama request failed',
+    parse_envelope: 'Ollama returned malformed output',
+    parse_content:  'Ollama returned non-JSON output',
+    empty_response: 'Ollama returned an empty response',
+    exception:      'Ollama call errored',
+  };
+  const failLabel = !verified ? (FAIL_LABELS[verifiedError] || 'Ollama unavailable') : null;
+  return (
+    <div className="rs-hero">
+      <div className="rs-hero-ring">
+        <svg width="140" height="140" viewBox="0 0 140 140">
+          <circle cx="70" cy="70" r={C} fill="none" strokeWidth="8" stroke="rgba(255,255,255,.06)"/>
+          <circle cx="70" cy="70" r={C} fill="none" strokeWidth="8" stroke={color}
+            strokeLinecap="round" strokeDasharray={circ} strokeDashoffset={off}
+            transform="rotate(-90 70 70)"
+            style={{ transition:'stroke-dashoffset 1.1s cubic-bezier(.16,1,.3,1)' }}/>
+        </svg>
+        <div className="rs-hero-num">
+          <div style={{ fontSize:40, fontWeight:700, lineHeight:1, color }}>{pct}</div>
+          <div style={{ fontSize:14, color:'var(--t3)', marginTop:2, letterSpacing:'.5px' }}>/ 100</div>
+        </div>
+      </div>
+      <div className="rs-hero-text">
+        <div className="rs-hero-rating" style={{ color }}>{label}</div>
+        <div className="rs-hero-tag">{sub}</div>
+        <div className={'rs-verify ' + (verified ? 'ok' : 'warn')}>
+          <Icon name={verified ? 'shield-check' : 'shield-alert'} size={11}/>
+          {verified
+            ? <>Verified by Ollama <code>{model}</code></>
+            : <>Heuristic-only · {failLabel}</>}
+        </div>
+        {notes ? <div className="rs-verify-notes">{notes}</div> : null}
+      </div>
+    </div>
+  );
+}
+
+function MetricTile({ label, value, hint, tone }) {
+  const color = tone === 'good' ? 'var(--good)' : tone === 'bad' ? 'var(--bad)' : tone === 'warn' ? 'var(--warn)' : 'var(--accent-h)';
+  return (
+    <div className="rs-tile">
+      <div className="rs-tile-val" style={{ color }}>{value}</div>
+      <div className="rs-tile-lbl">{label}</div>
+      {hint ? <div className="rs-tile-hint">{hint}</div> : null}
+    </div>
+  );
+}
+
+function InsightRow({ kind, children }) {
+  // kind: 'good' | 'bad' | 'hint'
+  const map = {
+    good: { icon: 'check', color: 'var(--good)', bg: 'var(--good-d)', bd: 'var(--good-b)' },
+    bad:  { icon: 'alert-triangle', color: 'var(--bad)', bg: 'var(--bad-d)', bd: 'var(--bad-b)' },
+    hint: { icon: 'lightbulb', color: 'var(--accent-h)', bg: 'var(--accent-d)', bd: 'var(--accent-b)' },
+  }[kind] || {};
+  return (
+    <div className="rs-insight" style={{ background: map.bg, borderColor: map.bd }}>
+      <span className="rs-insight-icon" style={{ color: map.color }}>
+        <Icon name={map.icon} size={12}/>
+      </span>
+      <span className="rs-insight-text">{children}</span>
+    </div>
+  );
+}
+
+/* ── Resume analysis: shared metric tile generator ── */
+function getMetricTiles(metrics = {}) {
+  const m = metrics || {};
+  return {
+    volume: [
+      { label: 'Words',     value: m.word_count ?? '—',
+        hint: (m.word_count >= 350 && m.word_count <= 700) ? 'in the sweet spot'
+              : (m.word_count > 700 ? 'trim toward 600' : 'on the thin side'),
+        tone: (m.word_count >= 350 && m.word_count <= 700) ? 'good' : 'warn' },
+      { label: 'Bullets',   value: m.bullet_count ?? '—',
+        hint: m.bullet_count >= 8 ? 'enough surface' : 'add more',
+        tone: m.bullet_count >= 8 ? 'good' : 'warn' },
+      { label: 'Sections',  value: m.section_count ?? '—',
+        hint: (m.sections || []).slice(0,3).map(s => s.replace(/\b\w/g, c => c.toUpperCase())).join(' · ') || 'baseline',
+        tone: m.section_count >= 4 ? 'good' : 'warn' },
+      { label: 'Read time', value: (m.reading_seconds != null ? `${m.reading_seconds}s` : '—'),
+        hint: 'recruiters give 6–15s', tone: 'warn' },
+    ],
+    impact: [
+      { label: 'Quantified',    value: (m.quantified_pct != null ? `${m.quantified_pct}%` : '—'),
+        hint: `${m.quantified_count || 0} / ${m.bullet_count || 0} bullets · target ≥60%`,
+        tone: m.quantified_pct >= 60 ? 'good' : m.quantified_pct >= 40 ? 'warn' : 'bad' },
+      { label: 'Action verbs',  value: (m.action_verb_pct != null ? `${m.action_verb_pct}%` : '—'),
+        hint: 'target ≥70%',
+        tone: m.action_verb_pct >= 70 ? 'good' : m.action_verb_pct >= 50 ? 'warn' : 'bad' },
+      { label: 'Avg bullet',    value: (m.avg_bullet_len != null ? `${m.avg_bullet_len}w` : '—'),
+        hint: 'sweet spot 12–20w',
+        tone: (m.avg_bullet_len >= 12 && m.avg_bullet_len <= 22) ? 'good' : 'warn' },
+      { label: 'Skill density', value: (m.skill_density != null ? `${m.skill_density}` : '—'),
+        hint: 'per 100 words · target ≥6',
+        tone: m.skill_density >= 6 ? 'good' : m.skill_density >= 4 ? 'warn' : 'bad' },
+    ],
+    hygiene: [
+      { label: 'Weak phrases',  value: m.weak_phrase_count ?? '—',
+        hint: m.weak_phrase_count === 0 ? 'clean' : 'replace each',
+        tone: m.weak_phrase_count === 0 ? 'good' : 'bad' },
+      { label: 'Buzzwords',     value: m.buzzword_count ?? '—',
+        hint: m.buzzword_count === 0 ? 'no clichés' : 'cut the fluff',
+        tone: m.buzzword_count === 0 ? 'good' : 'warn' },
+    ],
+  };
+}
+
+function deriveTopActions(insights = {}) {
+  const flags = (insights.red_flags || []).slice(0, 1);
+  const tips  = (insights.suggestions || []).slice(0, 3 - flags.length);
+  return [
+    ...flags.map(t => ({ kind: 'flag', text: t })),
+    ...tips.map(t  => ({ kind: 'tip',  text: t })),
+  ];
+}
+
+/* ── Sub-view 1/4: Overview (score + top priorities + key signals) ── */
+function RsOverview({ insights }) {
+  const groups   = getMetricTiles(insights?.metrics);
+  const keyTiles = [groups.impact[0], groups.impact[1], groups.volume[0], groups.volume[2]];
+  const actions  = deriveTopActions(insights);
+  return (
+    <div className="rs-overview fade-in">
+      <div className="rs-overview-top">
+        <ScoreHero
+          score={insights?.overall_score}
+          verifiedBy={insights?.verified_by}
+          verifiedError={insights?.verification_error}
+          notes={insights?.verification_notes}
+        />
+        <div className="rs-tldr">
+          <div className="rs-tldr-h">Top priorities</div>
+          {actions.length === 0 ? (
+            <div className="rs-tldr-empty">
+              <Icon name="check-circle-2" size={14}/>
+              No critical fixes — your resume hits the major rubric points. Refine specifics on Deep dive.
+            </div>
+          ) : (
+            <div className="rs-tldr-list">
+              {actions.map((a, i) => (
+                <div key={i} className="rs-tldr-item">
+                  <span className={'rs-tldr-num ' + a.kind}>{i + 1}</span>
+                  <span className="rs-tldr-text">{a.text}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+      <div className="rs-keysec">
+        <div className="rs-metric-group-h">Key signals</div>
+        <div className="rs-keystrip">
+          {keyTiles.map((t, i) => <MetricTile key={i} {...t}/>)}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── Sub-view 2/4: Metrics (full grid, grouped) ── */
+function RsMetrics({ insights }) {
+  const g = getMetricTiles(insights?.metrics);
+  const groups = [
+    { key:'volume',  title:'Volume & Structure', tiles: g.volume,  hint:'How long your resume is and how it reads' },
+    { key:'impact',  title:'Impact & Substance', tiles: g.impact,  hint:'How tangibly your bullets argue your case' },
+    { key:'hygiene', title:'Hygiene',            tiles: g.hygiene, hint:'Phrases and clichés to revise' },
+  ];
+  return (
+    <div className="fade-in">
+      {groups.map(group => (
+        <div key={group.key} className="rs-metric-group">
+          <div className="rs-metric-group-h">
+            <span>{group.title}</span>
+            <span className="rs-metric-group-hint">{group.hint}</span>
+          </div>
+          <div className="rs-tile-grid">
+            {group.tiles.map((t, i) => <MetricTile key={i} {...t}/>)}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ── Sub-view 3/4: Insights (strengths · red flags · improvements) ── */
+function RsInsights({ insights }) {
+  const strengths   = insights?.strengths   || [];
+  const redFlags    = insights?.red_flags   || [];
+  const suggestions = insights?.suggestions || [];
+  const sections = [
+    { tone:'good',   title:"What's working",        icon:'trending-up',   items:strengths,
+      empty:'No standout strengths surfaced yet — see Targeted improvements below.' },
+    { tone:'bad',    title:'Red flags',             icon:'alert-octagon', items:redFlags,
+      empty:'No structural red flags found.', emptyOk:true },
+    { tone:'accent', title:'Targeted improvements', icon:'target',        items:suggestions,
+      empty:'Resume hits the major rubric points.' },
+  ];
+  return (
+    <div className="rs-insights-page fade-in">
+      {sections.map((sec, idx) => {
+        const color = sec.tone === 'good' ? 'var(--good)'
+                    : sec.tone === 'bad'  ? 'var(--bad)'
+                    : 'var(--accent-h)';
+        return (
+          <div key={idx} className="rs-insights-sec">
+            <div className="rs-insights-sec-h" style={{ color }}>
+              <Icon name={sec.icon} size={13}/>
+              <span>{sec.title}</span>
+              <span className="rs-insights-sec-count">{sec.items.length}</span>
+            </div>
+            {sec.items.length > 0
+              ? <div className="rs-insights-list">
+                  {sec.items.map((s, i) => (
+                    <InsightRow key={i} kind={sec.tone === 'accent' ? 'hint' : sec.tone}>{s}</InsightRow>
+                  ))}
+                </div>
+              : <div className="set-helper" style={sec.emptyOk ? { color:'var(--good)' } : {}}>{sec.empty}</div>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ── Sub-view 4/4: Deep dive (narrative + target roles + rescan) ── */
+function RsDeepDive({ insights, profile, onRescan, rescanning }) {
+  const text   = insights?.narrative || profile?.critical_analysis || '';
+  const titles = profile?.target_titles || [];
+  return (
+    <div className="rs-deep fade-in">
+      <article className="rs-narrative">
+        <div className="rs-narrative-sub">Critical analysis</div>
+        <h3 className="rs-narrative-h">A reading of <em>your resume</em></h3>
+        {text
+          ? <div className="rs-narrative-text">{text}</div>
+          : <div className="set-helper">No narrative was generated. Re-scan to produce a detailed write-up.</div>}
+      </article>
+
+      {titles.length > 0 && (
+        <div className="rs-deep-pillsec">
+          <div className="rs-metric-group-h"><span style={{ display:'inline-flex', alignItems:'center', gap:8 }}><Icon name="briefcase" size={12}/>Target roles inferred</span></div>
+          <div className="rs-deep-pills">
+            {titles.map((t, i) => <span key={i} className="skill-pill hard">{t}</span>)}
+          </div>
+        </div>
+      )}
+
+      <div className="rs-rerun">
+        <button className="btn-ghost" onClick={onRescan} disabled={rescanning}>
+          {rescanning ? <span className="spin" style={{ width:11, height:11, borderWidth:1.5 }}/> : <Icon name="refresh-cw" size={11}/>}
+          Re-scan & re-verify
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════
    RESUME PAGE
 ══════════════════════════════════════════════════════════ */
 function ResumePage({ state, refresh, setPage }) {
   const [resumeText, setResumeText] = useState('');
   const [tab, setTab] = useState('analysis');
+  const [analysisView, setAnalysisView] = useState('overview'); // overview | metrics | insights | detail
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [rescanning, setRescanning] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [editText, setEditText] = useState('');
   const [selectedId, setSelectedId] = useState(null);  // which row is selected
@@ -760,6 +2086,7 @@ function ResumePage({ state, refresh, setPage }) {
   useEffect(() => {
     if (!selected) { setResumeText(''); setEditText(''); return; }
     setIsEditing(false);
+    setAnalysisView('overview');
     setResumeText('');
     setEditText('');
     setLoading(true);
@@ -816,9 +2143,23 @@ function ResumePage({ state, refresh, setPage }) {
 
   const handleSetPrimary = async (id) => {
     try {
-      await api.post(`/api/resume/primary/${id}`, {});
+      // Backend copies the resume's stored profile into _S["profile"] so the
+      // Profile page populates immediately. If the resume hasn't been scanned
+      // yet, the backend kicks off extraction in the background and returns
+      // { extracting: true } — poll until it lands so the Profile page
+      // transitions out of "analyzing" without the user refreshing.
+      const res = await api.post(`/api/resume/primary/${id}`, {});
       setResumeText(''); // Clear to trigger re-fetch
-      refresh();
+      await refresh();
+      if (res?.extracting) {
+        const poll = setInterval(async () => {
+          await refresh();
+          const s = await api.get('/api/state').catch(() => null);
+          const r = (s?.resumes || []).find(x => x.id === id);
+          if (!r || !r.extracting) clearInterval(poll);
+        }, 2000);
+        setTimeout(() => clearInterval(poll), 120000);
+      }
     } catch (e) {
       alert(e.message);
     }
@@ -891,11 +2232,11 @@ function ResumePage({ state, refresh, setPage }) {
                   {r.analyzed && !r.extracting && <span className="badge b-good">Analyzed</span>}
                   {r.extract_error && <span className="badge b-warn" title={r.extract_error}>Failed</span>}
                 </div>
-                <div style={{ color:'var(--t2)', fontSize:12 }}>
+                <div style={{ color:'var(--t2)', fontSize:14.5 }}>
                   {r.profile?.target_titles?.[0] || <span style={{ color:'var(--t3)' }}>—</span>}
                 </div>
-                <div style={{ color:'var(--t3)', fontFamily:'var(--mono)', fontSize:11.5 }}>{r.updated_at ? new Date(r.updated_at).toLocaleDateString() : 'just now'}</div>
-                <div style={{ color:'var(--t3)', fontFamily:'var(--mono)', fontSize:11.5 }}>{r.created_at ? new Date(r.created_at).toLocaleDateString() : 'just now'}</div>
+                <div style={{ color:'var(--t3)', fontFamily:'var(--mono)', fontSize:14 }}>{r.updated_at ? new Date(r.updated_at).toLocaleDateString() : 'just now'}</div>
+                <div style={{ color:'var(--t3)', fontFamily:'var(--mono)', fontSize:14 }}>{r.created_at ? new Date(r.created_at).toLocaleDateString() : 'just now'}</div>
                 <div onClick={e => e.stopPropagation()}>
                   <ActionMenu items={[
                     { icon:'star', label:'Set as primary', onClick: () => handleSetPrimary(r.id) },
@@ -911,15 +2252,26 @@ function ResumePage({ state, refresh, setPage }) {
           </div>
 
           {selected && (
-            <div style={{ marginTop:24 }}>
-              {/* Mini header showing which resume is being viewed */}
-              <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:12 }}>
-                <Icon name="file-text" size={14} color="var(--t3)"/>
-                <span style={{ fontSize:12, color:'var(--t2)' }}>
-                  Viewing: <strong style={{ color:'var(--t1)' }}>{selected.filename}</strong>
-                </span>
+            <div className="rs-detail-area">
+              {/* "Now viewing" banner */}
+              <div className="rs-viewing">
+                <div className="rs-viewing-icon">{selected.filename.charAt(0).toUpperCase()}</div>
+                <div className="rs-viewing-meta-col">
+                  <div className="rs-viewing-name">{selected.filename.replace(/\.[^.]+$/, '')}</div>
+                  <div className="rs-viewing-meta">
+                    {selected.primary ? 'Primary' : 'Saved'}
+                    <span className="rs-viewing-dot">·</span>
+                    Updated {selected.updated_at ? new Date(selected.updated_at).toLocaleDateString() : 'just now'}
+                    {isAnalyzed && sp?.insights?.overall_score != null && (
+                      <>
+                        <span className="rs-viewing-dot">·</span>
+                        Score {Math.round(sp.insights.overall_score)}/100
+                      </>
+                    )}
+                  </div>
+                </div>
                 {!selected.primary && (
-                  <button className="btn-ghost" style={{ fontSize:11, padding:'3px 8px', marginLeft:4 }}
+                  <button className="btn-ghost rs-viewing-action"
                     onClick={() => handleSetPrimary(selected.id)}>
                     <Icon name="star" size={11}/> Set as primary
                   </button>
@@ -938,7 +2290,7 @@ function ResumePage({ state, refresh, setPage }) {
               {tab === 'preview' && (
                 <div className="data-card fade-in" style={{ padding:0, overflow:'hidden' }}>
                   <div style={{ padding:'10px 16px', background:'var(--bg-2)', borderBottom:'1px solid var(--bdr)', display:'flex', alignItems:'center', justifyContent:'space-between' }}>
-                    <div style={{ fontSize:12, color:'var(--t3)', fontFamily:'var(--mono)' }}>{selected.filename}</div>
+                    <div style={{ fontSize:14.5, color:'var(--t3)', fontFamily:'var(--mono)' }}>{selected.filename}</div>
                     <div style={{ display:'flex', gap:8 }}>
                       {isEditing ? (
                         <>
@@ -968,7 +2320,7 @@ function ResumePage({ state, refresh, setPage }) {
                         placeholder="Resume text..."
                       />
                     ) : (
-                      <pre style={{ margin:0, whiteSpace:'pre-wrap', fontSize:13, lineHeight:1.6, color:'#d1d1d6', fontFamily:'"JetBrains Mono", Menlo, monospace' }}>
+                      <pre style={{ margin:0, whiteSpace:'pre-wrap', fontSize:15.5, lineHeight:1.6, color:'#d1d1d6', fontFamily:'"JetBrains Mono", Menlo, monospace' }}>
                         {resumeText || 'No text content available.'}
                       </pre>
                     )}
@@ -979,25 +2331,27 @@ function ResumePage({ state, refresh, setPage }) {
               {tab === 'analysis' && (
                 <div className="fade-in">
                   {!isAnalyzed ? (
-                    <div className="data-card" style={{ padding:40, textAlign:'center' }}>
+                    <div className="rs-empty">
                       {selected.extracting ? (
                         <>
                           <span className="spin" style={{ width:28, height:28, borderWidth:3, margin:'0 auto 16px', display:'block' }}/>
-                          <h3 style={{ marginBottom:8 }}>Analyzing resume…</h3>
-                          <p style={{ color:'var(--t3)', fontSize:13, maxWidth:300, margin:'0 auto' }}>
-                            Extracting skills, experience, and target roles. This usually takes 5–30 seconds.
+                          <h3 className="rs-empty-h">Scanning resume & verifying with Ollama…</h3>
+                          <p className="rs-empty-sub">
+                            Reading every bullet for action verbs, quantification, weak phrasing,
+                            and section structure — then asking the local LLM to double-check.
+                            Usually 5–30 seconds.
                           </p>
                         </>
                       ) : (
                         <>
-                          <div style={{ width:48, height:48, borderRadius:12, background:'var(--bg-3)', display:'flex', alignItems:'center', justifyContent:'center', margin:'0 auto 16px' }}>
-                            <Icon name="sparkles" size={24} color="var(--t4)"/>
+                          <div className="rs-empty-icon">
+                            <Icon name="sparkles" size={22} color="var(--accent-h)"/>
                           </div>
-                          <h3 style={{ marginBottom:8 }}>Not yet analyzed</h3>
-                          <p style={{ color:'var(--t3)', fontSize:13, maxWidth:300, margin:'0 auto 20px' }}>
+                          <h3 className="rs-empty-h">Not yet analyzed</h3>
+                          <p className="rs-empty-sub">
                             {selected.extract_error
                               ? `Extraction failed: ${selected.extract_error}`
-                              : 'Click Extract to analyze this resume for skills, gaps, and target roles.'}
+                              : 'Run a scan to surface metrics, strengths, red flags, and a critical reading of this resume.'}
                           </p>
                           <button className="head-cta" onClick={async () => {
                             try {
@@ -1005,70 +2359,80 @@ function ResumePage({ state, refresh, setPage }) {
                               refresh();
                             } catch (e) { alert(e.message); }
                           }}>
-                            <Icon name="scan-text" size={13} color="#fff"/> Extract this resume
+                            <Icon name="scan-text" size={13} color="#fff"/> Scan this resume
                           </button>
                         </>
                       )}
                     </div>
                   ) : (
-                    <div className="settings-grid">
-                      <div className="set-sec">
-                        <div className="set-sec-h"><Icon name="info" size={14}/> Resume Quality</div>
-                        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12, marginBottom:20 }}>
-                          <div className="rcard" style={{ textAlign:'center' }}>
-                            <div style={{ fontSize:20, fontWeight:700, color:'var(--accent-h)' }}>{stats.skills}</div>
-                            <div style={{ fontSize:11, color:'var(--t3)', marginTop:2 }}>Skills found</div>
-                          </div>
-                          <div className="rcard" style={{ textAlign:'center' }}>
-                            <div style={{ fontSize:20, fontWeight:700, color:'var(--accent-h)' }}>{stats.exp}</div>
-                            <div style={{ fontSize:11, color:'var(--t3)', marginTop:2 }}>Experiences</div>
-                          </div>
-                          <div className="rcard" style={{ textAlign:'center' }}>
-                            <div style={{ fontSize:20, fontWeight:700, color: stats.gaps > 0 ? 'var(--warn)' : 'var(--good)' }}>{stats.gaps}</div>
-                            <div style={{ fontSize:11, color:'var(--t3)', marginTop:2 }}>Issues</div>
-                          </div>
+                    <div className="rs-analysis">
+                      {/* Sub-nav — paginated analysis */}
+                      <div className="rs-subnav-row">
+                        <div className="rs-subnav" role="tablist">
+                          {[
+                            { id:'overview', label:'Overview',   icon:'gauge'        },
+                            { id:'metrics',  label:'Metrics',    icon:'bar-chart-3'  },
+                            { id:'insights', label:'Insights',   icon:'lightbulb'    },
+                            { id:'detail',   label:'Deep dive',  icon:'file-text'    },
+                          ].map(v => (
+                            <button key={v.id} role="tab"
+                              aria-selected={analysisView === v.id}
+                              className={'rs-subnav-pill' + (analysisView === v.id ? ' active' : '')}
+                              onClick={() => setAnalysisView(v.id)}>
+                              <Icon name={v.icon} size={13}/>
+                              <span>{v.label}</span>
+                            </button>
+                          ))}
                         </div>
-
-                        <div className="set-field">
-                          <div className="set-label">Critical Analysis</div>
-                          <div className="analysis-text" style={{ fontSize:13, color:'var(--t2)', lineHeight:1.7, marginTop:8, whiteSpace:'pre-wrap' }}>
-                            {sp.critical_analysis || 'No detailed analysis available. Run the extraction agent to generate a deep critique.'}
-                          </div>
-                        </div>
-
-                        {(sp.target_titles || []).length > 0 && (
-                          <div className="set-field" style={{ marginTop:16 }}>
-                            <div className="set-label">Target Roles</div>
-                            <div style={{ display:'flex', flexWrap:'wrap', gap:6, marginTop:8 }}>
-                              {sp.target_titles.map((t, i) => (
-                                <span key={i} className="skill-pill hard">{t}</span>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-
-                      <div className="set-sec">
-                        <div className="set-sec-h" style={{ color:'var(--warn)' }}><Icon name="alert-circle" size={14}/> Things to Improve</div>
-                        {stats.gaps > 0 ? (
-                          <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
-                            {sp.resume_gaps.map((gap, i) => (
-                              <div key={i} className="notice-strip" style={{ background:'rgba(251, 191, 36, 0.05)', borderColor:'rgba(251, 191, 36, 0.2)', color:'var(--warn)', margin:0 }}>
-                                <Icon name="chevron-right" size={12}/>
-                                {gap}
-                              </div>
-                            ))}
-                          </div>
-                        ) : (
-                          <div className="notice-strip" style={{ color:'var(--good)', background:'rgba(34, 197, 94, 0.05)', borderColor:'rgba(34, 197, 94, 0.2)', margin:0 }}>
-                            <Icon name="check-circle-2" size={13}/>
-                            No major issues detected. Great job!
-                          </div>
-                        )}
-                        <div className="set-helper" style={{ marginTop:12 }}>
-                          These improvements are identified based on typical ATS requirements for {sp.target_titles?.[0] || 'technical'} roles.
+                        <div className="rs-subnav-step">
+                          {{ overview:'1', metrics:'2', insights:'3', detail:'4' }[analysisView]} / 4
                         </div>
                       </div>
+
+                      {!sp.insights ? (
+                        <div className="rs-empty">
+                          <div className="rs-empty-icon"><Icon name="info" size={22} color="var(--accent-h)"/></div>
+                          <h3 className="rs-empty-h">Legacy analysis</h3>
+                          <p className="rs-empty-sub">
+                            This resume was scanned before the structured-insights pipeline. Re-scan to generate metrics, strengths, and red flags.
+                          </p>
+                          {sp.critical_analysis && (
+                            <pre style={{ textAlign:'left', whiteSpace:'pre-wrap', fontFamily:'var(--sans)', fontSize:15.5, color:'var(--t2)', lineHeight:1.7, marginTop:18, maxWidth:640 }}>{sp.critical_analysis}</pre>
+                          )}
+                          <button className="head-cta" style={{ marginTop:18 }}
+                            onClick={async () => {
+                              setRescanning(true);
+                              try {
+                                await api.post('/api/profile/extract', { resume_id: selected.id, force: true });
+                                refresh();
+                              } catch (e) { alert(e.message); }
+                              finally { setRescanning(false); }
+                            }}>
+                            <Icon name="refresh-cw" size={13} color="#fff"/> Re-scan now
+                          </button>
+                        </div>
+                      ) : (
+                        <>
+                          {analysisView === 'overview' && <RsOverview insights={sp.insights}/>}
+                          {analysisView === 'metrics'  && <RsMetrics  insights={sp.insights}/>}
+                          {analysisView === 'insights' && <RsInsights insights={sp.insights}/>}
+                          {analysisView === 'detail'   && (
+                            <RsDeepDive
+                              insights={sp.insights}
+                              profile={sp}
+                              rescanning={rescanning}
+                              onRescan={async () => {
+                                setRescanning(true);
+                                try {
+                                  await api.post('/api/profile/extract', { resume_id: selected.id, force: true });
+                                  refresh();
+                                } catch (e) { alert(e.message); }
+                                finally { setRescanning(false); }
+                              }}
+                            />
+                          )}
+                        </>
+                      )}
                     </div>
                   )}
                 </div>
@@ -1086,32 +2450,23 @@ function ResumePage({ state, refresh, setPage }) {
 ══════════════════════════════════════════════════════════ */
 function ProfilePage({ state, refresh, setPage }) {
   const p = state?.profile;
-  const [saving, setSaving] = useState(false);
-  const [extracting, setExtracting] = useState(false);
-  const [form, setForm] = useState(() => profileToForm(p));
-  const [dirty, setDirty] = useState(false);
+  const resumes = state?.resumes || [];
+  const primaryResume = resumes.find(r => r.primary) || resumes[0];
+  const isExtractingPrimary = !!(primaryResume && primaryResume.extracting);
+  const hasPrimary = !!primaryResume;
 
-  useEffect(() => { 
+  const [saving, setSaving]         = useState(false);
+  const [extracting, setExtracting] = useState(false);
+  const [form, setForm]             = useState(() => profileToForm(p));
+  const [dirty, setDirty]           = useState(false);
+  const [activeTab, setActiveTab]   = useState('personal');
+  const [extractError, setExtractError] = useState('');
+
+  useEffect(() => {
     if (!dirty) {
       setForm(profileToForm(p));
     }
   }, [p, dirty]);
-
-  if (!p) return (
-    <div className="placeholder-page">
-      <div className="placeholder-icon"><Icon name="user" size={22}/></div>
-      <div style={{ fontSize:18, fontWeight:600 }}>No profile found</div>
-      <div style={{ fontSize:13, color:'var(--t2)' }}>Extract your resume or create the profile manually.</div>
-      <div style={{ display:'flex', gap:10, marginTop:16 }}>
-        <button className="btn-primary" onClick={async () => { await api.post('/api/profile/extract', {}); refresh?.(); }}>
-          <Icon name="scan-text" size={14}/> Extract from resume
-        </button>
-        <button className="btn-ghost" onClick={async () => { await api.post('/api/profile', { name:'', target_titles:[], top_hard_skills:[], top_soft_skills:[], education:[], experience:[], research:[], projects:[] }); refresh?.(); }}>
-          <Icon name="pencil" size={14}/> Create manually
-        </button>
-      </div>
-    </div>
-  );
 
   const updateField = (key, value) => { setForm(prev => ({ ...prev, [key]: value })); setDirty(true); };
   const updateRow = (key, index, field, value) => {
@@ -1127,19 +2482,42 @@ function ProfilePage({ state, refresh, setPage }) {
   const saveProfile = async () => {
     setSaving(true);
     try {
+      const titles = splitList(form.target_titles).filter(Boolean);
       await api.post('/api/profile', formToProfile(form));
+      // Keep the search config in sync so Phase 2 picks up the new titles + filters.
+      const cfg = { job_titles: titles.join(', ') };
+      if (form.search_location !== undefined && form.search_location !== '') cfg.location = form.search_location;
+      if (Number.isFinite(form.search_max_scrape_jobs)) cfg.max_scrape_jobs = form.search_max_scrape_jobs;
+      if (Number.isFinite(form.search_days_old)) cfg.days_old = form.search_days_old;
+      if (Number.isFinite(form.search_threshold)) cfg.threshold = form.search_threshold;
+      await api.post('/api/config', cfg);
       setDirty(false);
       await refresh?.();
+    } catch (e) {
+      alert(e.message || 'Failed to save profile');
     } finally {
       setSaving(false);
     }
   };
 
   const rerunExtraction = async () => {
+    if (!hasPrimary) {
+      alert('Upload a resume first.');
+      return;
+    }
     setExtracting(true);
+    setExtractError('');
     try {
-      await api.post('/api/profile/extract', { preferred_titles: splitList(form.target_titles) });
-      refresh?.();
+      await api.post('/api/profile/extract', {
+        resume_id: primaryResume.id,
+        preferred_titles: splitList(form.target_titles).filter(Boolean),
+        force: true,
+      });
+      // Reset dirty so the useEffect refreshes the form once new data arrives.
+      setDirty(false);
+      await refresh?.();
+    } catch (e) {
+      setExtractError(e.message || 'Extraction failed');
     } finally {
       setExtracting(false);
     }
@@ -1147,29 +2525,88 @@ function ProfilePage({ state, refresh, setPage }) {
 
   const syncSearch = async () => {
     await saveProfile();
-    await api.post('/api/config', { job_titles: form.target_titles });
     setPage?.('jobs');
   };
 
-  const completion = p.completion || { percent:0, missing:[] };
-  const settings = p.settings || {};
-  const [activeTab, setActiveTab] = useState('personal');
+  if (!p) {
+    if (isExtractingPrimary || extracting) {
+      return (
+        <div className="placeholder-page">
+          <span className="spin" style={{ width:28, height:28, borderWidth:3, marginBottom:16 }}/>
+          <div style={{ fontSize:20, fontWeight:600 }}>Analyzing resume…</div>
+          <div style={{ fontSize:15.5, color:'var(--t2)', maxWidth:340, textAlign:'center', lineHeight:1.55, marginTop:6 }}>
+            Extracting skills, experience, and target roles from <strong>{primaryResume?.filename}</strong>. This usually takes 5–30 seconds.
+          </div>
+        </div>
+      );
+    }
+    return (
+      <div className="placeholder-page">
+        <div className="placeholder-icon"><Icon name="user" size={22}/></div>
+        <div style={{ fontSize:20, fontWeight:600 }}>No profile found</div>
+        <div style={{ fontSize:15.5, color:'var(--t2)', maxWidth:360, textAlign:'center', lineHeight:1.55, marginTop:6 }}>
+          {hasPrimary
+            ? 'Re-run the extractor to populate your profile from this resume.'
+            : 'Upload a resume on the Resume page, or create the profile manually.'}
+        </div>
+        {extractError && (
+          <div style={{ fontSize:14.5, color:'var(--bad)', marginTop:10 }}>Last error: {extractError}</div>
+        )}
+        <div style={{ display:'flex', gap:10, marginTop:16 }}>
+          {hasPrimary ? (
+            <button className="btn-primary" onClick={rerunExtraction} disabled={extracting}>
+              <Icon name="scan-text" size={14}/> {extracting ? 'Extracting…' : 'Extract from resume'}
+            </button>
+          ) : (
+            <button className="btn-primary" onClick={() => setPage?.('resume')}>
+              <Icon name="upload-cloud" size={14}/> Upload a resume
+            </button>
+          )}
+          <button className="btn-ghost" onClick={async () => {
+            try {
+              await api.post('/api/profile', { name:'', target_titles:[], top_hard_skills:[], top_soft_skills:[], education:[], experience:[], research:[], projects:[] });
+              await refresh?.();
+            } catch (e) {
+              alert(e.message || 'Failed to create profile');
+            }
+          }}>
+            <Icon name="pencil" size={14}/> Create manually
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const showExtractingBanner = extracting || isExtractingPrimary;
 
   return (
     <>
       <div className="page-head">
         <div className="page-title-big">Profile</div>
+        {showExtractingBanner && (
+          <span style={{ marginLeft:14, fontSize:14.5, color:'var(--accent-h)', display:'inline-flex', alignItems:'center', gap:6 }}>
+            <span className="spin" style={{ width:11, height:11, borderWidth:1.5 }}/> Re-scraping resume…
+          </span>
+        )}
+        {dirty && !showExtractingBanner && (
+          <span style={{ marginLeft:14, fontSize:14.5, color:'var(--warn)' }}>● Unsaved changes</span>
+        )}
         <div className="head-spacer"/>
-        <button className="btn-ghost" onClick={rerunExtraction} disabled={extracting}>
-          <Icon name="scan-text" size={13}/> {extracting ? 'Extracting...' : 'Re-scrape resume'}
+        <button className="btn-ghost" onClick={rerunExtraction} disabled={showExtractingBanner || !hasPrimary}>
+          <Icon name="scan-text" size={13}/> {showExtractingBanner ? 'Extracting…' : 'Re-scrape resume'}
         </button>
         <button className="btn-ghost" onClick={saveProfile} disabled={saving} style={{ marginLeft:8 }}>
           <Icon name="save" size={13}/> {saving ? 'Saving...' : 'Save profile'}
         </button>
-        <button className="lp-btn-p" onClick={syncSearch} disabled={saving} style={{ marginLeft:8, padding:'6px 14px', fontSize:13 }}>
+        <button className="lp-btn-p" onClick={syncSearch} disabled={saving} style={{ marginLeft:8, padding:'6px 14px', fontSize:15.5 }}>
           <Icon name="search" size={13}/> Explore jobs
         </button>
       </div>
+      {extractError && (
+        <div className="notice-strip" style={{ background:'rgba(239,68,68,0.05)', borderColor:'rgba(239,68,68,0.2)', color:'var(--bad)', margin:'0 24px' }}>
+          <Icon name="alert-circle" size={13}/> Extraction failed: {extractError}
+        </div>
+      )}
 
       <div className="page-body solo">
         <div className="prof-nav-tabs">
@@ -1215,20 +2652,31 @@ function ProfilePage({ state, refresh, setPage }) {
           {activeTab === 'targets' && (
             <div className="settings-grid">
                <div className="data-card" style={{ padding:24 }}>
-                 <h3 className="prof-h" style={{ fontSize:14, marginBottom:16 }}><Icon name="target" size={14}/> Target Roles</h3>
+                 <h3 className="prof-h" style={{ fontSize:16.5, marginBottom:16 }}><Icon name="target" size={14}/> Target Roles</h3>
                  <ProfileInput label="Comma-separated titles" value={form.target_titles} onChange={v => updateField('target_titles', v)}/>
                  <ProfileInput label="Critical analysis" textarea value={form.critical_analysis} onChange={v => updateField('critical_analysis', v)}/>
                  <ProfileInput label="ATS gaps, comma-separated" value={form.resume_gaps} onChange={v => updateField('resume_gaps', v)}/>
                </div>
                <div className="data-card" style={{ padding:24 }}>
-                 <h3 className="prof-h" style={{ fontSize:14, marginBottom:16 }}><Icon name="list-checks" size={14}/> Skills</h3>
+                 <h3 className="prof-h" style={{ fontSize:16.5, marginBottom:16 }}><Icon name="list-checks" size={14}/> Skills</h3>
                  <ProfileInput label="Top Hard Skills" textarea value={form.top_hard_skills} onChange={v => updateField('top_hard_skills', v)}/>
                  <ProfileInput label="Soft Skills" value={form.top_soft_skills} onChange={v => updateField('top_soft_skills', v)}/>
                </div>
                <div className="data-card" style={{ padding:24 }}>
-                 <h3 className="prof-h" style={{ fontSize:14, marginBottom:16 }}><Icon name="search" size={14}/> Discovery & Search</h3>
-                 <ProfileInput label="Max jobs to scrape" type="number" value={form.max_scrape_jobs} onChange={v => updateField('max_scrape_jobs', parseInt(v))}/>
-                 <ProfileInput label="Posting age (days)" type="number" value={form.days_old} onChange={v => updateField('days_old', parseInt(v))}/>
+                 <h3 className="prof-h" style={{ fontSize:16.5, marginBottom:16 }}><Icon name="search" size={14}/> Discovery & Search</h3>
+                 <ProfileInput label="Location"
+                   value={form.search_location ?? state?.location ?? ''}
+                   onChange={v => updateField('search_location', v)}/>
+                 <ProfileInput label="Max jobs to scrape" type="number"
+                   value={form.search_max_scrape_jobs ?? state?.max_scrape_jobs ?? 20}
+                   onChange={v => updateField('search_max_scrape_jobs', parseInt(v))}/>
+                 <ProfileInput label="Posting age (days)" type="number"
+                   value={form.search_days_old ?? state?.days_old ?? 30}
+                   onChange={v => updateField('search_days_old', parseInt(v))}/>
+                 <ProfileInput label="Match threshold" type="number"
+                   value={form.search_threshold ?? state?.threshold ?? 75}
+                   onChange={v => updateField('search_threshold', parseInt(v))}/>
+                 <div className="set-helper" style={{ marginTop:6 }}>Click <strong>Save profile</strong> to apply these to your next search.</div>
                </div>
             </div>
           )}
@@ -1249,64 +2697,62 @@ function splitList(value) {
 function emptyRole() {
   return { title:'', company:'', dates:'', bullets:[] };
 }
-function profileToForm(p = {}) {
+function profileToForm(p) {
+  p = p || {};
   return {
-    name:p?.name || '', email:p?.email || '', phone:p?.phone || '',
-    location:p?.location || '', linkedin:p?.linkedin || '', github:p?.github || '',
-    summary:p?.summary || '', work_authorization:p?.work_authorization || '',
-    target_salary:p?.target_salary || '', critical_analysis:p?.critical_analysis || '',
-    target_titles:(p?.target_titles || []).join(', '),
-    top_hard_skills:(p?.top_hard_skills || []).join(', '),
-    top_soft_skills:(p?.top_soft_skills || []).join(', '),
-    resume_gaps:(p?.resume_gaps || []).join(', '),
-    education:p?.education || [],
-    experience:p?.experience || [],
-    research:p?.research || [],
-    projects:p?.projects || [],
-    // New fields from settings
-    max_scrape_jobs: p?.settings?.max_scrape_jobs || 20,
-    days_old: p?.settings?.days_old || 30,
-    threshold: p?.settings?.threshold || 75,
-    experience_levels: p?.settings?.experience_levels || [],
-    citizenship_filter: p?.settings?.citizenship_filter || 'none',
-    blacklist: (p?.settings?.blacklist || []).join(', '),
-    whitelist: (p?.settings?.whitelist || []).join(', '),
+    name: p.name || '', email: p.email || '', phone: p.phone || '',
+    location: p.location || '', linkedin: p.linkedin || '', github: p.github || '',
+    summary: p.summary || '', work_authorization: p.work_authorization || '',
+    target_salary: p.target_salary || '', critical_analysis: p.critical_analysis || '',
+    target_titles: (p.target_titles || []).join(', '),
+    top_hard_skills: (p.top_hard_skills || []).join(', '),
+    top_soft_skills: (p.top_soft_skills || []).join(', '),
+    resume_gaps: (p.resume_gaps || []).join(', '),
+    education: p.education || [],
+    experience: p.experience || [],
+    research: p.research || p.research_experience || [],
+    projects: p.projects || [],
   };
 }
 
 function formToProfile(form) {
-  const roleList = rows => rows.map(r => ({ ...r, bullets: (Array.isArray(r.bullets) ? r.bullets : splitBullets(r.bullets)).filter(Boolean) }));
+  const roleList = rows => (rows || []).map(r => ({
+    ...r,
+    bullets: (Array.isArray(r.bullets) ? r.bullets : splitBullets(r.bullets)).filter(Boolean),
+  }));
   return {
-    ...form,
+    name: form.name, email: form.email, phone: form.phone,
+    location: form.location, linkedin: form.linkedin, github: form.github,
+    summary: form.summary, work_authorization: form.work_authorization,
+    target_salary: form.target_salary, critical_analysis: form.critical_analysis,
     target_titles: splitList(form.target_titles).filter(Boolean),
     top_hard_skills: splitList(form.top_hard_skills).filter(Boolean),
     top_soft_skills: splitList(form.top_soft_skills).filter(Boolean),
     resume_gaps: splitList(form.resume_gaps).filter(Boolean),
     experience: roleList(form.experience),
     research: roleList(form.research),
-    education: form.education,
-    projects: form.projects.map(p => ({ ...p, skills_used: (Array.isArray(p.skills_used) ? p.skills_used : splitList(p.skills_used)).filter(Boolean) })),
-    // Send back settings fields
-    settings: {
-        max_scrape_jobs: form.max_scrape_jobs,
-        days_old: form.days_old,
-        threshold: form.threshold,
-        experience_levels: form.experience_levels,
-        citizenship_filter: form.citizenship_filter,
-        blacklist: splitList(form.blacklist).filter(Boolean),
-        whitelist: splitList(form.whitelist).filter(Boolean),
-    }
+    education: form.education || [],
+    projects: (form.projects || []).map(p => ({
+      ...p,
+      skills_used: (Array.isArray(p.skills_used) ? p.skills_used : splitList(p.skills_used)).filter(Boolean),
+    })),
   };
 }
 function splitBullets(value) {
   return String(value || '').split('\n').map(s => s.trim());
 }
-function ProfileInput({ label, value, onChange, textarea=false }) {
+function ProfileInput({ label, value, onChange, textarea=false, type='text' }) {
   const Tag = textarea ? 'textarea' : 'input';
+  const safeValue = (value === undefined || value === null || (typeof value === 'number' && Number.isNaN(value))) ? '' : value;
   return (
     <label className="set-field">
       <span className="set-label">{label}</span>
-      <Tag className={'profile-input' + (textarea ? ' profile-textarea' : '')} value={value || ''} onChange={e => onChange(e.target.value)}/>
+      <Tag
+        type={textarea ? undefined : type}
+        className={'profile-input' + (textarea ? ' profile-textarea' : '')}
+        value={safeValue}
+        onChange={e => onChange(e.target.value)}
+      />
     </label>
   );
 }
@@ -1739,18 +3185,31 @@ function AgentPage({ state, refresh }) {
 /* ══════════════════════════════════════════════════════════
    SETTINGS PAGE
 ══════════════════════════════════════════════════════════ */
-function SettingsPage({ state, refresh }) {
+function SettingsPage({ state, refresh, setPage }) {
   const [cfg, setCfg] = useState(state || {});
   const [saving, setSaving] = useState(false);
   const [ollamaModels, setOllamaModels] = useState([]);
   const [ollamaOk, setOllamaOk] = useState(null);
+  const [planError, setPlanError] = useState(null);
+
+  const isPro = !!state?.is_pro;
 
   const update = async (newCfg) => {
+    const prev = { ...cfg };
     setCfg(p => ({ ...p, ...newCfg }));
     setSaving(true);
     try {
       await api.post('/api/config', newCfg);
+      setPlanError(null);
       refresh();
+    } catch (e) {
+      // 402 Pro plan required: roll back optimistic state, surface inline.
+      if (/Pro plan/i.test(e.message || '')) {
+        setPlanError(e.message);
+        setCfg(prev);
+      } else {
+        console.error('Config save failed:', e);
+      }
     } finally {
       setTimeout(() => setSaving(false), 600);
     }
@@ -1783,22 +3242,40 @@ function SettingsPage({ state, refresh }) {
       <div className="page-head">
         <div className="page-title-big">Settings</div>
         <div className="head-spacer"/>
-        {saving && <div style={{ fontSize:12, color:'var(--accent-h)', marginRight:12, display:'flex', alignItems:'center', gap:6 }}><span className="spin"/> Saving…</div>}
+        {saving && <div style={{ fontSize:14.5, color:'var(--accent-h)', marginRight:12, display:'flex', alignItems:'center', gap:6 }}><span className="spin"/> Saving…</div>}
       </div>
 
       <div className="page-body solo" style={{ paddingTop:14 }}>
         <div className="settings-grid">
           {/* LLM Backend */}
           <div className="set-sec">
-            <div className="set-sec-h"><Icon name="cpu" size={14}/> LLM Provider</div>
+            <div className="set-sec-h">
+              <Icon name="cpu" size={14}/> LLM Provider
+              {isPro && <span className="plan-chip plan-chip-pro">Pro</span>}
+            </div>
             <div className="set-field">
-              <div className="set-label">Model mode</div>
+              <div className="set-label">
+                Model mode
+                {!isPro && <span className="set-label-hint">Claude requires Pro</span>}
+              </div>
               <select className="set-select" value={cfg.mode} onChange={e => update({ mode: e.target.value })}>
-                <option value="anthropic">Anthropic Claude (High quality)</option>
+                <option value="anthropic">Anthropic Claude (High quality){isPro ? '' : ' — Pro'}</option>
                 <option value="ollama">Local Ollama (Free/Private)</option>
                 <option value="demo">Demo mode (Offline/Template)</option>
               </select>
             </div>
+            {planError && (
+              <div className="plan-banner">
+                <Icon name="lock" size={14}/>
+                <div className="plan-banner-body">
+                  <b>{planError}</b>
+                  <span>Switch your provider, or upgrade to unlock Claude.</span>
+                </div>
+                <button className="plan-banner-cta" onClick={() => setPage && setPage('plans')}>
+                  View plans <Icon name="arrow-right" size={11}/>
+                </button>
+              </div>
+            )}
             {cfg.mode === 'anthropic' && (
               <div className="set-field">
                 <div className="set-label">Anthropic API Key</div>
@@ -1844,15 +3321,13 @@ function SettingsPage({ state, refresh }) {
           {/* General User Settings */}
           <div className="set-sec">
             <div className="set-sec-h"><Icon name="user" size={14}/> General Settings</div>
-            <Toggle field="dark_mode" label="Dark mode" sub="Toggle dark mode theme."/>
-            <Toggle field="email_notifications" label="Email notifications" sub="Receive updates on pipeline completion."/>
-            <Toggle field="auto_export" label="Auto-export tracker" sub="Automatically save Excel tracker on every run."/>
+            <Toggle field="light_mode" label="Light mode" sub="Switch to a light color theme."/>
           </div>
 
           {/* Account/Data */}
           <div className="set-sec">
             <div className="set-sec-h"><Icon name="database" size={14}/> Data Management</div>
-            <button className="btn-ghost" style={{ width:'100%', justifyContent:'flex-start', color:'var(--bad)' }} onClick={() => { if(confirm('Delete all data?')) { api.post('/api/reset', {}); refresh(); } }}>
+            <button className="btn-ghost" style={{ width:'100%', justifyContent:'flex-start', color:'var(--bad)' }} onClick={async () => { if (!confirm('Delete all data? This will permanently remove your resume, profile, jobs, and applications.')) return; try { await api.post('/api/reset', {}); } catch (err) { alert(err.message || 'Reset failed'); } await refresh(); }}>
               <Icon name="trash-2" size={14}/> Reset all data
             </button>
             <div className="set-helper" style={{ marginTop:8 }}>This will clear your resume, jobs, and all application data permanently.</div>
@@ -1862,7 +3337,6 @@ function SettingsPage({ state, refresh }) {
           <div className="set-sec">
             <div className="set-sec-h"><Icon name="cpu" size={14}/> Advanced</div>
             <Toggle field="quick_score_only" label="Quick score only" sub="Skip LLM rubric scoring (faster, less accurate)."/>
-            <Toggle field="force_dev_mode" label="Force Developer Mode" sub="Show Dev Ops tools regardless of connection origin."/>
           </div>
 
         </div>
@@ -1870,6 +3344,135 @@ function SettingsPage({ state, refresh }) {
     </>
   );
 }
+
+/* ══════════════════════════════════════════════════════════
+   PLANS PAGE — Free vs Pro. Stub until Stripe lands; the upgrade
+   CTA is informational and admins flip plan_tier from Dev Ops.
+══════════════════════════════════════════════════════════ */
+function PlansPage({ state, setPage }) {
+  const isPro = !!state?.is_pro;
+  const tier = state?.plan_tier || 'free';
+  const [contactSent, setContactSent] = useState(false);
+
+  const requestUpgrade = () => {
+    // Stub. v2 swaps this for an /api/checkout/start redirect to Stripe Checkout.
+    setContactSent(true);
+    api.post('/api/feedback', {
+      message: `Upgrade request from ${state?.user?.email || 'unknown'} — wants Pro plan.`,
+      kind: 'upgrade_request',
+    }).catch(() => {});
+  };
+
+  return (
+    <>
+      <div className="page-head">
+        <div>
+          <div className="page-title">Billing</div>
+          <div className="page-title-big">Plans</div>
+        </div>
+        <div className="head-spacer"/>
+        <div className="plan-current-pill">
+          <span className={'plan-dot ' + (isPro ? 'pro' : 'free')}/>
+          You're on <b>{isPro ? 'Pro' : 'Free'}</b>
+        </div>
+      </div>
+
+      <div className="page-body solo plans-wrap">
+        <div className="plans-eyebrow">
+          <Icon name="zap" size={11}/> One simple split — local LLMs are free, Claude is Pro.
+        </div>
+
+        <div className="plans-grid">
+          {/* FREE */}
+          <div className={'plan-card' + (tier === 'free' ? ' current' : '')}>
+            {tier === 'free' && <div className="plan-current-badge">Current plan</div>}
+            <div className="plan-card-h">
+              <div className="plan-name">Free</div>
+              <div className="plan-price"><b>$0</b><span>/forever</span></div>
+            </div>
+            <div className="plan-tag">Bring your own local LLM</div>
+            <ul className="plan-features">
+              <li><Icon name="check" size={13}/> Demo mode (offline, template-based)</li>
+              <li><Icon name="check" size={13}/> Local Ollama — private, free, your hardware</li>
+              <li><Icon name="check" size={13}/> Full 7-phase pipeline</li>
+              <li><Icon name="check" size={13}/> Excel tracker + run reports</li>
+              <li><Icon name="check" size={13}/> Job discovery across all scrapers</li>
+              <li><Icon name="check" size={13}/> Cover letter generation (template)</li>
+              <li className="plan-feature-muted"><Icon name="x" size={13}/> Anthropic Claude provider</li>
+            </ul>
+            <button className="plan-cta plan-cta-ghost" disabled>
+              {tier === 'free' ? 'Active' : 'Downgrade'}
+            </button>
+          </div>
+
+          {/* PRO */}
+          <div className={'plan-card plan-card-pro' + (tier === 'pro' ? ' current' : '')}>
+            {tier === 'pro' && <div className="plan-current-badge plan-current-badge-pro">Current plan</div>}
+            <div className="plan-glow"/>
+            <div className="plan-card-h">
+              <div className="plan-name">Pro</div>
+              <div className="plan-price"><b>$9</b><span>/month</span></div>
+            </div>
+            <div className="plan-tag">Unlock Claude — bring your own API key</div>
+            <ul className="plan-features">
+              <li><Icon name="check" size={13}/> Everything in Free</li>
+              <li className="plan-feature-hi"><Icon name="sparkles" size={13}/> Anthropic Claude provider unlocked</li>
+              <li><Icon name="check" size={13}/> Higher-fidelity scoring &amp; tailoring</li>
+              <li><Icon name="check" size={13}/> Better résumé critique &amp; ATS gap analysis</li>
+              <li><Icon name="check" size={13}/> Priority support</li>
+              <li className="plan-feature-muted"><Icon name="key" size={13}/> Bring your own ANTHROPIC_API_KEY</li>
+            </ul>
+            {tier === 'pro' ? (
+              <button className="plan-cta plan-cta-ghost" disabled>Active</button>
+            ) : contactSent ? (
+              <div className="plan-cta-sent">
+                <Icon name="check-circle-2" size={14}/>
+                Got it — we'll be in touch.
+              </div>
+            ) : (
+              <button className="plan-cta plan-cta-pro" onClick={requestUpgrade}>
+                <Icon name="zap" size={13}/> Request upgrade
+              </button>
+            )}
+            <div className="plan-helper">
+              Stripe checkout coming soon. For now, request upgrade and an admin flips you live.
+            </div>
+          </div>
+        </div>
+
+        <div className="plans-faq">
+          <div className="plans-faq-h">FAQ</div>
+          <details className="plans-faq-item" open>
+            <summary>Why does Claude cost more if I bring my own key?</summary>
+            <div>
+              You pay Anthropic directly for tokens — we don't mark up the LLM. Pro covers the
+              tooling around Claude: scoring rubrics, tailoring prompts, ATS gap analysis, and the
+              orchestration layer that turns a résumé into 50+ tailored applications.
+            </div>
+          </details>
+          <details className="plans-faq-item">
+            <summary>Can I cancel anytime?</summary>
+            <div>Yes — once Stripe billing is wired in, you'll have a self-serve customer portal. Today, contact the admin.</div>
+          </details>
+          <details className="plans-faq-item">
+            <summary>What if I run Ollama locally?</summary>
+            <div>
+              Free plan covers Ollama fully. The whole pipeline works against your local model with
+              zero API costs — just run <code>ollama serve</code> and pick a model in Settings.
+            </div>
+          </details>
+        </div>
+
+        <div className="plans-back">
+          <button className="btn-ghost" onClick={() => setPage && setPage('settings')}>
+            <Icon name="arrow-left" size={13}/> Back to Settings
+          </button>
+        </div>
+      </div>
+    </>
+  );
+}
+
 
 /* ══════════════════════════════════════════════════════════
    FEEDBACK PAGE
@@ -1901,8 +3504,8 @@ function FeedbackPage({ refresh }) {
         <div className="placeholder-icon" style={{ background:'var(--good-d)', border:'1px solid var(--good-b)' }}>
           <Icon name="check" size={22} color="var(--good)"/>
         </div>
-        <div style={{ fontSize:18, fontWeight:600 }}>Thank You</div>
-        <div style={{ fontSize:13, color:'var(--t2)', maxWidth:400, textAlign:'center', lineHeight:1.55, marginTop:8 }}>
+        <div style={{ fontSize:20, fontWeight:600 }}>Thank You</div>
+        <div style={{ fontSize:15.5, color:'var(--t2)', maxWidth:400, textAlign:'center', lineHeight:1.55, marginTop:8 }}>
           Your feedback has been sent directly to the development team. We read every message and use it to improve Atlas.
         </div>
         <button className="btn-primary" style={{ marginTop:24 }} onClick={() => setSuccess(false)}>
@@ -1924,8 +3527,8 @@ function FeedbackPage({ refresh }) {
               <div style={{ width:56, height:56, borderRadius:14, background:'var(--accent-d)', border:'1px solid var(--accent-b)', display:'flex', alignItems:'center', justifyContent:'center', margin:'0 auto 16px' }}>
                 <Icon name="message-square" size={24} color="var(--accent-h)"/>
               </div>
-              <h2 style={{ fontSize:20, fontWeight:700, color:'var(--t1)' }}>Tell us what you think</h2>
-              <p style={{ fontSize:14, color:'var(--t2)', marginTop:8, lineHeight:1.6 }}>
+              <h2 style={{ fontSize:22, fontWeight:700, color:'var(--t1)' }}>Tell us what you think</h2>
+              <p style={{ fontSize:16.5, color:'var(--t2)', marginTop:8, lineHeight:1.6 }}>
                 Have a feature request, found a bug, or just want to share your experience? We want to hear from you.
               </p>
             </div>
@@ -1958,16 +3561,49 @@ function FeedbackPage({ refresh }) {
   );
 }
 
-/* Dev overview */
+/* Dev console — operator surface */
+const DEV_TABS = [
+  { id:'overview', label:'OVERVIEW', icon:'gauge'              },
+  { id:'sessions', label:'SESSIONS', icon:'users'              },
+  { id:'server',   label:'SERVER',   icon:'sliders-horizontal' },
+  { id:'console',  label:'CONSOLE',  icon:'terminal'           },
+  { id:'tweaks',   label:'TWEAKS',   icon:'wand-sparkles'      },
+];
+
 function DevPage({ state: globalState, refresh: globalRefresh }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
+  const [devTab, setDevTab] = useState('overview');
   const [selected, setSelected] = useState(null);
   const [fullState, setFullState] = useState(null);
   const [cli, setCli] = useState({ command:'git_status', output:'', running:false });
   const [tweaks, setTweaks] = useState(null);
   const [loadingFull, setLoadingFull] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [runtime, setRuntime] = useState(null);
+  const [apiKeyDraft, setApiKeyDraft] = useState('');
+  const [savingKey, setSavingKey] = useState(false);
+  const [reloadFlash, setReloadFlash] = useState(null);
+  const [now, setNow] = useState(() => new Date());
+  const [planFlash, setPlanFlash] = useState(null);
+
+  const setPlanTier = async (userId, tier) => {
+    if (!userId) return;
+    try {
+      await api.post(`/api/dev/users/${userId}/plan`, { tier });
+      setPlanFlash({ userId, tier, kind: 'ok' });
+      refresh();
+    } catch (e) {
+      setPlanFlash({ userId, tier, kind: 'err', message: e.message });
+    }
+    setTimeout(() => setPlanFlash(null), 2400);
+  };
+
+  // Live tick for the ops-bar clock
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(id);
+  }, []);
 
   const refresh = useCallback(async () => {
     setRefreshing(true);
@@ -2009,12 +3645,6 @@ function DevPage({ state: globalState, refresh: globalRefresh }) {
     }
   }, [selected]);
 
-  const enableDev = async () => {
-    await api.post('/api/config', { force_dev_mode: true, force_customer_mode: false });
-    globalRefresh();
-    refresh();
-  };
-
   const impersonate = async (id) => {
     await api.post(`/api/dev/session/${id}/impersonate`, {});
     window.location.href = '/app';
@@ -2027,7 +3657,7 @@ function DevPage({ state: globalState, refresh: globalRefresh }) {
   };
 
   const testAsCustomer = async () => {
-    await api.post('/api/config', { force_customer_mode: true, force_dev_mode: false });
+    await api.post('/api/config', { force_customer_mode: true });
     window.location.href = '/app';
   };
 
@@ -2051,6 +3681,53 @@ function DevPage({ state: globalState, refresh: globalRefresh }) {
     refresh();
   };
 
+  const loadRuntime = useCallback(async () => {
+    try { setRuntime(await api.get('/api/dev/runtime')); }
+    catch (e) { /* dev permission failed — silent */ }
+  }, []);
+  useEffect(() => { loadRuntime(); }, [loadRuntime]);
+
+  const setRuntimeFlag = async (key, value) => {
+    setRuntime(r => r ? { ...r, runtime: { ...r.runtime, [key]: value } } : r);
+    try {
+      const res = await api.post('/api/dev/runtime', { [key]: value });
+      setRuntime(r => r ? { ...r, runtime: res.runtime } : r);
+    } catch (e) { loadRuntime(); }
+  };
+
+  const saveSessionConfig = async patch => {
+    await api.post('/api/config', patch);
+    globalRefresh?.();
+    loadRuntime();
+  };
+
+  const saveApiKey = async () => {
+    if (!apiKeyDraft.trim()) return;
+    setSavingKey(true);
+    try {
+      await api.post('/api/config', { api_key: apiKeyDraft.trim(), mode: 'anthropic' });
+      setApiKeyDraft('');
+      globalRefresh?.();
+    } finally { setSavingKey(false); }
+  };
+
+  const reloadEnv = async () => {
+    setReloadFlash({ kind: 'pending', text: 'Reloading…' });
+    try {
+      const res = await api.post('/api/dev/reload-env', {});
+      setReloadFlash({
+        kind: res.anthropic_key_present ? 'ok' : 'warn',
+        text: res.anthropic_key_present
+          ? `Loaded · ANTHROPIC_API_KEY ${res.anthropic_key_present ? 'present' : 'missing'}`
+          : 'Reloaded but ANTHROPIC_API_KEY still missing',
+      });
+      loadRuntime();
+    } catch (e) {
+      setReloadFlash({ kind: 'err', text: e.message || 'Reload failed' });
+    }
+    setTimeout(() => setReloadFlash(null), 4500);
+  };
+
   const summary = data?.summary || {};
   const status = data?.status || {};
   const sessions = data?.sessions || [];
@@ -2068,13 +3745,10 @@ function DevPage({ state: globalState, refresh: globalRefresh }) {
       <div className="placeholder-icon" style={{ background:'var(--warn-d)', border:'1px solid var(--warn-b)' }}>
         <Icon name="lock" size={22} color="var(--warn)"/>
       </div>
-      <div style={{ fontSize:18, fontWeight:600 }}>Developer Access Required</div>
-      <div style={{ fontSize:13, color:'var(--t2)', maxWidth:400, textAlign:'center', lineHeight:1.55, marginTop:8 }}>
-        This page contains diagnostic tools and session data. Access is restricted to local connections or authorized developer sessions.
+      <div style={{ fontSize:20, fontWeight:600 }}>Developer Access Required</div>
+      <div style={{ fontSize:15.5, color:'var(--t2)', maxWidth:400, textAlign:'center', lineHeight:1.55, marginTop:8 }}>
+        This page is restricted to accounts marked as developers. Ask an administrator to set <code>users.is_developer = 1</code> on your account.
       </div>
-      <button className="btn-primary" style={{ marginTop:24 }} onClick={enableDev}>
-        Authorize this session
-      </button>
     </div>
   );
 
@@ -2085,221 +3759,594 @@ function DevPage({ state: globalState, refresh: globalRefresh }) {
     </div>
   );
 
+  const isImpersonating = typeof document !== 'undefined' && document.cookie.includes('dev_impersonate_id');
+  const errorCount = sessions.reduce((acc, s) => acc + Object.values(s.errors || {}).filter(Boolean).length, 0);
+  const opsHealth = errorCount === 0 ? 'ok' : (errorCount < 3 ? 'warn' : 'bad');
+  const clock = now.toTimeString().slice(0, 8);
+  const dateStamp = now.toISOString().slice(0, 10);
+
   return (
-    <>
-      <div className="page-head">
-        <div>
-          <div className="page-title">Operations</div>
-          <div className="page-title-big">Dev Overview</div>
+    <div className="dop-shell">
+      <span className="dop-grain" aria-hidden="true"/>
+
+      {/* ── Ops bar ───────────────────────────────────────────────── */}
+      <div className="dop-opsbar">
+        <div className="dop-opsbar-left">
+          <span className="dop-brand">JOBSAI <span>·</span> DEV</span>
+          <span className={'dop-pulse dop-pulse-' + opsHealth}>
+            <span className="dop-dot"/>
+            {opsHealth === 'ok' ? 'LIVE' : opsHealth === 'warn' ? 'DEGRADED' : 'ALERT'}
+          </span>
+          {isImpersonating && (
+            <span className="dop-pulse dop-pulse-warn">
+              <Icon name="eye" size={10}/> IMPERSONATING
+            </span>
+          )}
         </div>
-        <div className="head-spacer"/>
-        {document.cookie.includes('dev_impersonate_id') && (
-          <button className="btn-primary" style={{ marginRight:12, background:'var(--warn)', color:'#000' }} onClick={stopImpersonating}>
-            <Icon name="user-minus" size={14}/> Stop Impersonating
+        <div className="dop-opsbar-meta">
+          <span><i>UTC</i><b>{clock}</b></span>
+          <span><i>DATE</i><b>{dateStamp}</b></span>
+          <span><i>PY</i><b>{status.python || '—'}</b></span>
+          <span><i>OUT</i><b>{status.output_files ?? 0}</b></span>
+          <span><i>DB</i><b>{status.session_db_mb ?? 0}MB</b></span>
+          <span><i>DISK</i><b>{status.disk_free_gb ?? 0}G</b></span>
+        </div>
+        <div className="dop-opsbar-right">
+          {isImpersonating && (
+            <button className="dop-btn dop-btn-warn" onClick={stopImpersonating}>
+              <Icon name="user-minus" size={11}/> STOP
+            </button>
+          )}
+          <button className="dop-btn" onClick={testAsCustomer}>
+            <Icon name="user" size={11}/> AS CUSTOMER
           </button>
-        )}
-        <button className="btn-ghost" onClick={testAsCustomer} style={{ marginRight:12 }}>
-          <Icon name="user" size={13}/> Test as Customer
-        </button>
-        <button className="btn-ghost" onClick={refresh} disabled={refreshing}>
-          {refreshing ? <span className="spin" style={{marginRight:6, width:13, height:13}}/> : <Icon name="refresh-cw" size={13}/>} 
-          {refreshing ? 'Refreshing...' : 'Refresh'}
-        </button>
+          <button className="dop-btn" onClick={refresh} disabled={refreshing}>
+            {refreshing ? <span className="spin" style={{ width:11, height:11, borderWidth:2 }}/> : <Icon name="refresh-cw" size={11}/>}
+            REFRESH
+          </button>
+        </div>
       </div>
 
-      <div className="dev-wrap">
-        <div className="dev-grid">
-          <div className="dev-card dev-span">
-            <div className="dev-kpis">
-              <DevKpi label="Users" value={summary.users || 0} icon="users"/>
-              <DevKpi label="Resumes" value={summary.with_resume || 0} icon="file-check-2"/>
+      {/* ── Sub-nav ───────────────────────────────────────────────── */}
+      <nav className="dop-tabs" role="tablist" aria-label="Dev sub-pages">
+        {DEV_TABS.map((t, idx) => (
+          <button
+            key={t.id}
+            role="tab"
+            aria-selected={devTab === t.id}
+            className={'dop-tab' + (devTab === t.id ? ' on' : '')}
+            onClick={() => setDevTab(t.id)}>
+            <span className="dop-tab-num">[{String(idx + 1).padStart(2, '0')}]</span>
+            <Icon name={t.icon} size={12}/>
+            <span className="dop-tab-label">{t.label}</span>
+          </button>
+        ))}
+        <span className="dop-tabs-trail">
+          <span className="dop-tab-cursor">▸</span> {DEV_TABS.find(t => t.id === devTab)?.label.toLowerCase()}
+        </span>
+      </nav>
+
+      {/* ── Sub-page body ────────────────────────────────────────── */}
+      <div className="dop-body">
+
+        {/* [01] OVERVIEW ── KPIs · system status · activity */}
+        {devTab === 'overview' && (
+          <div className="dop-page fade-in">
+            <div className="dop-secrow">
+              <div className="dop-sec-h"><span className="dop-sec-prefix">{'>'}</span> KPIs</div>
+              <div className="dop-sec-meta">last refresh {refreshing ? '… now' : '< 10s'}</div>
+            </div>
+            <div className="dop-kpis">
+              <DevKpi label="Users"        value={summary.users || 0}        icon="users"/>
+              <DevKpi label="Resumes"      value={summary.with_resume || 0}  icon="file-check-2"/>
               <DevKpi label="Applications" value={summary.applications || 0} icon="send"/>
-              <DevKpi label="Applied" value={summary.applied || 0} icon="check-circle-2"/>
-              <DevKpi label="Manual" value={summary.manual || 0} icon="hand"/>
-              <DevKpi label="Errors" value={summary.errors || 0} icon="alert-triangle" warn={summary.errors > 0}/>
+              <DevKpi label="Applied"      value={summary.applied || 0}      icon="check-circle-2"/>
+              <DevKpi label="Manual"       value={summary.manual || 0}       icon="hand"/>
+              <DevKpi label="Errors"       value={summary.errors || 0}       icon="alert-triangle" warn={summary.errors > 0}/>
             </div>
-          </div>
 
-          <div className="dev-card">
-            <div className="dev-card-h"><Icon name="activity" size={14}/> Site Status</div>
-            <div className="dev-status">
-              <div><span>App</span><b className="ok">{status.app}</b></div>
-              <div><span>Python</span><b>{status.python}</b></div>
-              <div><span>Output files</span><b>{status.output_files}</b></div>
-              <div><span>Session files</span><b>{status.session_files}</b></div>
-              <div><span>DB size</span><b>{status.session_db_mb} MB</b></div>
-              <div><span>Free disk</span><b>{status.disk_free_gb} GB</b></div>
-            </div>
-          </div>
-
-          <div className="dev-card">
-            <div className="dev-card-h"><Icon name="wand-sparkles" size={14}/> Site Tweaks</div>
-            <div className="dev-tweak-row">
-              {accents.map(color => (
-                <button key={color} className="dev-swatch" style={{ background:color }} onClick={() => saveTweaks({ accent:color })} title={color}/>
-              ))}
-            </div>
-            <div className="set-field">
-              <div className="set-label">Density</div>
-              <select className="set-select" value={tweaks?.density || 'comfortable'} onChange={e => saveTweaks({ density:e.target.value })}>
-                <option value="compact">Compact</option>
-                <option value="comfortable">Comfortable</option>
-                <option value="spacious">Spacious</option>
-              </select>
-            </div>
-            <div className="set-field">
-              <div className="set-label">Experiment mode</div>
-              <select className="set-select" value={tweaks?.experiment || 'standard'} onChange={e => saveTweaks({ experiment:e.target.value })}>
-                <option value="standard">Standard</option>
-                <option value="focus">Focus</option>
-                <option value="command">Command</option>
-                <option value="launch">Launch</option>
-              </select>
-            </div>
-            <div className="set-row">
-              <div>
-                <div className="set-label">Top banner</div>
-                <div className="set-helper">Use the dev banner as the site-wide strip.</div>
-              </div>
-              <button className={'set-toggle' + (tweaks?.show_promo !== false ? ' on' : '')} onClick={() => saveTweaks({ show_promo: tweaks?.show_promo === false })}/>
-            </div>
-            <input className="set-input" value={tweaks?.dev_banner || ''} onChange={e => setTweaks({ ...(tweaks || {}), dev_banner:e.target.value })} onBlur={e => saveTweaks({ dev_banner:e.target.value })} placeholder="Dev banner"/>
-          </div>
-
-          <div className="dev-card dev-users">
-            <div className="dev-card-h"><Icon name="users" size={14}/> Users</div>
-            <div className="dev-user-list">
-              {sessions.map(s => (
-                <button key={s.id} className={'dev-user' + (active?.id === s.id ? ' active' : '')} onClick={() => setSelected(s)}>
-                  <span className="user-avatar">{(s.name || 'U')[0]}</span>
-                  <span>
-                    <b>{s.name || 'Anonymous'}</b>
-                    <small>{s.email || s.resume_filename || s.id.slice(0, 10)}</small>
-                  </span>
-                  <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-end', gap:4 }}>
-                    <em>{s.done.length}/7</em>
-                    {s.unread_feedback_count > 0 && (
-                      <span title="Unread feedback message" style={{ display:'flex', alignItems:'center', gap:4, background:'var(--warn-d)', color:'var(--warn)', padding:'2px 6px', borderRadius:10, fontSize:10, fontWeight:600 }}>
-                        <Icon name="message-square" size={10}/> {s.unread_feedback_count}
-                      </span>
-                    )}
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="dev-card dev-span">
-            <div className="dev-card-h" style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-              <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-                <Icon name="user-cog" size={14}/> Selected User Detail
-              </div>
-              {active && (
-                <div style={{ display:'flex', gap:8 }}>
-                  <button className="btn-ghost" style={{ fontSize:11, padding:'4px 10px', color:'var(--warn)' }} 
-                    onClick={async () => { if(confirm('Reset this session state? Files will be deleted.')) { await api.post(`/api/dev/session/${active.id}/reset`, {}); refresh(); setSelected(null); } }}>
-                    <Icon name="rotate-ccw" size={12}/> Reset Session
-                  </button>
-                  <button className="btn-ghost" style={{ fontSize:11, padding:'4px 10px', color:'var(--bad)' }}
-                    onClick={async () => { if(confirm('Delete this user entirely? This cannot be undone.')) { await fetch(`/api/dev/session/${active.id}`, { method:'DELETE' }); refresh(); setSelected(null); } }}>
-                    <Icon name="trash-2" size={12}/> Delete Session
-                  </button>
-                  <button className="btn-primary" style={{ fontSize:11, padding:'4px 10px' }} onClick={() => impersonate(active.id)}>
-                    <Icon name="user-plus" size={12}/> View site as {active.name || 'this user'}
-                  </button>
-                </div>
-              )}
-            </div>
-            {active ? (
-              <div className="dev-inspect-grid">
-                <div className="inspect-sec">
-                  <h4>Stats & Pipeline</h4>
-                  <div className="dev-status">
-                    <div><span>ID</span><code style={{ fontSize:10 }}>{active.id}</code></div>
-                    <div><span>Resume</span><b>{active.has_resume ? 'yes' : 'no'}</b></div>
-                    <div><span>Target</span><b>{active.target || '-'}</b></div>
-                    <div><span>Jobs</span><b>{active.job_count}</b></div>
-                    <div><span>Scored</span><b>{active.scored_count}</b></div>
-                    <div><span>Apps</span><b>{active.application_count}</b></div>
-                    <div><span>Applied</span><b>{active.applied_count}</b></div>
-                  </div>
-                  <div className="dev-phases" style={{ marginTop:12 }}>
-                    {[1,2,3,4,5,6,7].map(n => <span key={n} className={active.done.includes(n) ? 'on' : ''}>{n}</span>)}
-                  </div>
-                </div>
-
-                <div className="inspect-sec" style={{ gridRow:'span 2' }}>
-                  <h4>User Feedback</h4>
-                  <div className="dev-terminal" style={{ height:'100%', fontSize:12, background:'var(--bg-1)' }}>
-                    {loadingFull ? 'Loading...' : (
-                      (fullState?.feedback || []).length > 0 ? (
-                        <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
-                          {fullState.feedback.map(f => (
-                            <div key={f.id} style={{ background:'var(--bg-2)', border:'1px solid var(--bdr)', borderRadius:8, padding:12 }}>
-                              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8, color:'var(--t3)', fontSize:11, fontFamily:'var(--mono)' }}>
-                                <span>{new Date(f.created_at).toLocaleString()}</span>
-                                {!f.read && <span style={{ background:'var(--warn)', color:'#000', padding:'2px 6px', borderRadius:4, fontWeight:700 }}>NEW</span>}
-                              </div>
-                              <div style={{ color:'var(--t1)', whiteSpace:'pre-wrap', lineHeight:1.5 }}>{f.message}</div>
-                            </div>
-                          ))}
-                          {fullState.feedback.some(f => !f.read) && (
-                            <button className="btn-ghost" style={{ marginTop:8 }} onClick={async () => {
-                              await api.post(`/api/dev/session/${active.id}/feedback/read`, {});
-                              api.get(`/api/dev/session/${active.id}`).then(setFullState);
-                              refresh();
-                            }}>
-                              <Icon name="check-check" size={13}/> Mark all as read
-                            </button>
-                          )}
-                        </div>
-                      ) : <div style={{ color:'var(--t3)' }}>No feedback from this user.</div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="inspect-sec">
-                  <h4>Resume Text</h4>
-                  <div className="dev-terminal" style={{ height:200, fontSize:11 }}>
-                    {loadingFull ? 'Loading...' : (fullState?.resume_text || 'No resume uploaded.')}
-                  </div>
-                </div>
-
-                <div className="inspect-sec">
-                  <h4>Full State JSON</h4>
-                  <div className="dev-terminal" style={{ height:200, fontSize:11 }}>
-                    {loadingFull ? 'Loading...' : JSON.stringify(fullState, null, 2)}
-                  </div>
+            <div className="dop-overview-grid">
+              <div className="dop-panel">
+                <div className="dop-sec-h"><span className="dop-sec-prefix">{'>'}</span> SYSTEM</div>
+                <div className="dop-keyval">
+                  <div><span>app</span><b className={'tag tag-' + (status.app === 'running' ? 'ok' : 'bad')}>{status.app || '—'}</b></div>
+                  <div><span>python</span><b>{status.python || '—'}</b></div>
+                  <div><span>output_files</span><b>{status.output_files ?? 0}</b></div>
+                  <div><span>session_files</span><b>{status.session_files ?? 0}</b></div>
+                  <div><span>session_db_mb</span><b>{status.session_db_mb ?? 0}</b></div>
+                  <div><span>disk_free_gb</span><b>{status.disk_free_gb ?? 0}</b></div>
                 </div>
               </div>
-            ) : <div className="set-helper">No session selected.</div>}
-          </div>
 
-          <div className="dev-card dev-span">
-            <div className="dev-card-h"><Icon name="terminal" size={14}/> CLI Output</div>
-            <div className="dev-cli-actions">
-              {commands.map(([id, label]) => <button key={id} className="btn-ghost" disabled={cli.running} onClick={() => runCli(id)}>{label}</button>)}
+              <div className="dop-panel">
+                <div className="dop-sec-h"><span className="dop-sec-prefix">{'>'}</span> ENV</div>
+                <div className="dop-keyval">
+                  <div><span>ANTHROPIC_API_KEY</span><b className={'tag tag-' + (runtime?.env?.anthropic_key_present ? 'ok' : 'bad')}>{runtime?.env?.anthropic_key_present ? 'present' : 'missing'}</b></div>
+                  <div><span>SMTP</span><b className={'tag tag-' + (runtime?.env?.smtp_configured ? 'ok' : 'mid')}>{runtime?.env?.smtp_configured ? 'configured' : 'unset'}</b></div>
+                  <div><span>OLLAMA_URL</span><b className="tag tag-mid">{runtime?.env?.ollama_url || '—'}</b></div>
+                  <div><span>LOCAL_DEV_BYPASS</span><b className={'tag tag-' + (runtime?.env?.local_dev_bypass ? 'warn' : 'mid')}>{runtime?.env?.local_dev_bypass ? 'on' : 'off'}</b></div>
+                  <div><span>maintenance</span><b className={'tag tag-' + (runtime?.runtime?.maintenance ? 'warn' : 'mid')}>{runtime?.runtime?.maintenance ? 'on' : 'off'}</b></div>
+                  <div><span>verbose_logs</span><b className={'tag tag-' + (runtime?.runtime?.verbose_logs ? 'ok' : 'mid')}>{runtime?.runtime?.verbose_logs ? 'on' : 'off'}</b></div>
+                </div>
+              </div>
+
+              <div className="dop-panel">
+                <div className="dop-sec-h"><span className="dop-sec-prefix">{'>'}</span> RECENT USERS</div>
+                <div className="dop-recent-users">
+                  {sessions.slice(0, 6).map(s => (
+                    <button key={s.id} className="dop-recent-row" onClick={() => { setSelected(s); setDevTab('sessions'); }}>
+                      <span className="dop-recent-id">{s.id.slice(0, 8)}</span>
+                      <span className="dop-recent-name">{s.name || 'Anonymous'}</span>
+                      <span className="dop-recent-phase">{s.done.length}/7</span>
+                      {s.unread_feedback_count > 0 && (
+                        <span className="dop-recent-fb"><Icon name="message-square" size={9}/>{s.unread_feedback_count}</span>
+                      )}
+                    </button>
+                  ))}
+                  {sessions.length === 0 && <div className="dop-empty">No sessions yet.</div>}
+                </div>
+              </div>
             </div>
-            <pre className="dev-terminal">{cli.output || 'Run a safe command to inspect the app.'}</pre>
-          </div>
 
-          <div className="dev-card dev-span">
-            <div className="dev-card-h"><Icon name="list-tree" size={14}/> Recent Events</div>
-            <div className="dev-events">
-              {(data.events || []).slice(0, 80).map((e, i) => (
-                <div key={i} className="dev-event">
+            <div className="dop-secrow" style={{ marginTop: 4 }}>
+              <div className="dop-sec-h"><span className="dop-sec-prefix">{'>'}</span> ACTIVITY</div>
+              <button className="dop-btn dop-btn-link" onClick={() => setDevTab('console')}>view full log →</button>
+            </div>
+            <div className="dop-events">
+              {(data.events || []).slice(0, 8).map((e, i) => (
+                <div key={i} className="dop-event">
                   <span>{new Date(e.ts).toLocaleTimeString()}</span>
                   <b>{e.kind}</b>
                   <p>{e.message}</p>
                 </div>
               ))}
+              {(data.events || []).length === 0 && <div className="dop-empty">No recent events.</div>}
             </div>
           </div>
-        </div>
+        )}
+
+        {/* [02] SESSIONS ── user list + inspector */}
+        {devTab === 'sessions' && (
+          <div className="dop-page dop-sessions fade-in">
+            <aside className="dop-userlist">
+              <div className="dop-sec-h" style={{ paddingLeft: 4 }}>
+                <span className="dop-sec-prefix">{'>'}</span> USERS
+                <span className="dop-pill-mini">{sessions.length}</span>
+              </div>
+              <div className="dop-userlist-scroll">
+                {sessions.map(s => (
+                  <button key={s.id}
+                    className={'dop-user' + (active?.id === s.id ? ' on' : '')}
+                    onClick={() => setSelected(s)}>
+                    <span className="dop-user-av">{(s.name || 'U')[0]}</span>
+                    <span className="dop-user-meta">
+                      <b>{s.name || 'Anonymous'}</b>
+                      <small>{s.email || s.resume_filename || s.id.slice(0, 10)}</small>
+                    </span>
+                    <span className="dop-user-tail">
+                      {s.user_id && (
+                        <span className={'plan-pill-mini plan-pill-' + (s.plan_tier || 'free')}>
+                          {(s.plan_tier || 'free').slice(0, 4).toUpperCase()}
+                        </span>
+                      )}
+                      <em>{s.done.length}/7</em>
+                      {s.unread_feedback_count > 0 && (
+                        <span className="dop-user-fb"><Icon name="message-square" size={9}/>{s.unread_feedback_count}</span>
+                      )}
+                    </span>
+                  </button>
+                ))}
+                {sessions.length === 0 && <div className="dop-empty">No sessions.</div>}
+              </div>
+            </aside>
+
+            <section className="dop-inspect">
+              {!active ? (
+                <div className="dop-empty-card">
+                  <Icon name="user-cog" size={22} color="var(--accent-h)"/>
+                  <div>Select a user from the left to inspect.</div>
+                </div>
+              ) : (
+                <>
+                  <div className="dop-inspect-head">
+                    <div className="dop-inspect-id">
+                      <div className="dop-inspect-name">{active.name || 'Anonymous'}</div>
+                      <code className="dop-inspect-sid">{active.id}</code>
+                    </div>
+                    <div className="dop-inspect-actions">
+                      <button className="dop-btn dop-btn-warn"
+                        onClick={async () => { if (confirm('Reset this session state? Files will be deleted.')) { await api.post(`/api/dev/session/${active.id}/reset`, {}); refresh(); setSelected(null); } }}>
+                        <Icon name="rotate-ccw" size={11}/> RESET
+                      </button>
+                      <button className="dop-btn dop-btn-bad"
+                        onClick={async () => { if (confirm('Delete this user entirely? This cannot be undone.')) { await fetch(`/api/dev/session/${active.id}`, { method:'DELETE' }); refresh(); setSelected(null); } }}>
+                        <Icon name="trash-2" size={11}/> DELETE
+                      </button>
+                      <button className="dop-btn dop-btn-accent" onClick={() => impersonate(active.id)}>
+                        <Icon name="user-plus" size={11}/> VIEW AS USER
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="dop-inspect-grid">
+                    <div className="dop-panel dop-panel-plan">
+                      <div className="dop-sec-h">
+                        <span className="dop-sec-prefix">{'>'}</span> PLAN
+                        {active.is_developer && <span className="dop-pill-mini">DEV</span>}
+                      </div>
+                      {!active.user_id ? (
+                        <div className="dop-empty">Anonymous session — no user account to bill.</div>
+                      ) : (
+                        <>
+                          <div className="dop-keyval">
+                            <div><span>tier</span>
+                              <b className={'plan-pill plan-pill-' + (active.plan_tier || 'free')}>
+                                {(active.plan_tier || 'free').toUpperCase()}
+                              </b>
+                            </div>
+                            <div><span>email</span><b style={{fontFamily:'var(--mono)',fontSize:11}}>{active.email || '—'}</b></div>
+                          </div>
+                          <div className="dop-plan-actions">
+                            {(active.plan_tier || 'free') === 'free' ? (
+                              <button className="dop-btn dop-btn-accent" onClick={() => setPlanTier(active.user_id, 'pro')}>
+                                <Icon name="zap" size={11}/> GRANT PRO
+                              </button>
+                            ) : (
+                              <button className="dop-btn dop-btn-warn" onClick={() => setPlanTier(active.user_id, 'free')}>
+                                <Icon name="arrow-down" size={11}/> REVOKE PRO
+                              </button>
+                            )}
+                            {planFlash?.userId === active.user_id && (
+                              <span className={'dop-plan-flash dop-plan-flash-' + planFlash.kind}>
+                                <Icon name={planFlash.kind === 'ok' ? 'check' : 'x'} size={10}/>
+                                {planFlash.kind === 'ok'
+                                  ? `set to ${planFlash.tier}`
+                                  : (planFlash.message || 'failed')}
+                              </span>
+                            )}
+                          </div>
+                        </>
+                      )}
+                    </div>
+
+                    <div className="dop-panel">
+                      <div className="dop-sec-h"><span className="dop-sec-prefix">{'>'}</span> STATS</div>
+                      <div className="dop-keyval">
+                        <div><span>resume</span><b>{active.has_resume ? 'yes' : 'no'}</b></div>
+                        <div><span>target</span><b>{active.target || '—'}</b></div>
+                        <div><span>jobs</span><b>{active.job_count}</b></div>
+                        <div><span>scored</span><b>{active.scored_count}</b></div>
+                        <div><span>apps</span><b>{active.application_count}</b></div>
+                        <div><span>applied</span><b>{active.applied_count}</b></div>
+                      </div>
+                      <div className="dop-phases">
+                        {[1,2,3,4,5,6,7].map(n => (
+                          <span key={n} className={active.done.includes(n) ? 'on' : ''}>{n}</span>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="dop-panel dop-panel-feedback">
+                      <div className="dop-sec-h"><span className="dop-sec-prefix">{'>'}</span> FEEDBACK <span className="dop-pill-mini">{(fullState?.feedback || []).length}</span></div>
+                      {loadingFull ? <div className="dop-empty">Loading…</div> :
+                        ((fullState?.feedback || []).length > 0 ? (
+                          <div className="dop-fb-list">
+                            {fullState.feedback.map(f => (
+                              <div key={f.id} className="dop-fb-item">
+                                <div className="dop-fb-meta">
+                                  <span>{new Date(f.created_at).toLocaleString()}</span>
+                                  {!f.read && <span className="dop-fb-new">NEW</span>}
+                                </div>
+                                <div className="dop-fb-msg">{f.message}</div>
+                              </div>
+                            ))}
+                            {fullState.feedback.some(f => !f.read) && (
+                              <button className="dop-btn dop-btn-link" style={{ alignSelf:'flex-start' }} onClick={async () => {
+                                await api.post(`/api/dev/session/${active.id}/feedback/read`, {});
+                                api.get(`/api/dev/session/${active.id}`).then(setFullState);
+                                refresh();
+                              }}>
+                                <Icon name="check-check" size={11}/> mark all read
+                              </button>
+                            )}
+                          </div>
+                        ) : <div className="dop-empty">No feedback from this user.</div>)
+                      }
+                    </div>
+
+                    <div className="dop-panel">
+                      <div className="dop-sec-h"><span className="dop-sec-prefix">{'>'}</span> RESUME TEXT</div>
+                      <pre className="dop-pre dop-pre-fixed">
+                        {loadingFull ? 'Loading…' : (fullState?.resume_text || '∅  No resume uploaded.')}
+                      </pre>
+                    </div>
+
+                    <div className="dop-panel">
+                      <div className="dop-sec-h"><span className="dop-sec-prefix">{'>'}</span> FULL STATE JSON</div>
+                      <pre className="dop-pre dop-pre-fixed dop-pre-json">
+                        {loadingFull ? 'Loading…' : JSON.stringify(fullState, null, 2)}
+                      </pre>
+                    </div>
+                  </div>
+                </>
+              )}
+            </section>
+          </div>
+        )}
+
+        {/* [03] SERVER ── runtime + LLM + pipeline */}
+        {devTab === 'server' && (
+          <div className="dop-page fade-in">
+            <div className="dop-secrow">
+              <div className="dop-sec-h"><span className="dop-sec-prefix">{'>'}</span> SERVER CONTROLS</div>
+              <div className="dop-sec-meta">live · no restart</div>
+            </div>
+
+            <div className="sc-grid">
+              <div className="sc-col sc-runtime">
+                <div className="sc-col-h"><Icon name="server" size={11}/> Runtime · all sessions</div>
+
+                <div className="sc-row">
+                  <div className="sc-row-l">
+                    <div className="sc-row-h">Maintenance mode</div>
+                    <div className="sc-row-d">Block new phase runs across every session.</div>
+                  </div>
+                  <button
+                    className={'set-toggle' + (runtime?.runtime?.maintenance ? ' on warn' : '')}
+                    onClick={() => setRuntimeFlag('maintenance', !runtime?.runtime?.maintenance)}/>
+                </div>
+
+                <div className="sc-row">
+                  <div className="sc-row-l">
+                    <div className="sc-row-h">Verbose phase logs</div>
+                    <div className="sc-row-d">Mirror SSE log lines to the server stderr.</div>
+                  </div>
+                  <button
+                    className={'set-toggle' + (runtime?.runtime?.verbose_logs ? ' on' : '')}
+                    onClick={() => setRuntimeFlag('verbose_logs', !runtime?.runtime?.verbose_logs)}/>
+                </div>
+
+                <div className="sc-row">
+                  <div className="sc-row-l">
+                    <div className="sc-row-h">.env reload</div>
+                    <div className="sc-row-d">
+                      Re-read .env to pick up <code>ANTHROPIC_API_KEY</code> changes without restarting.
+                    </div>
+                  </div>
+                  <button className="btn-ghost sc-action" onClick={reloadEnv} disabled={reloadFlash?.kind === 'pending'}>
+                    {reloadFlash?.kind === 'pending'
+                      ? <><span className="spin"/> Reload</>
+                      : <><Icon name="refresh-cw" size={12}/> Reload</>}
+                  </button>
+                </div>
+
+                {reloadFlash && (
+                  <div className={'sc-flash sc-flash-' + reloadFlash.kind}>
+                    <Icon name={reloadFlash.kind === 'ok' ? 'check-circle-2' : reloadFlash.kind === 'err' ? 'x-circle' : 'loader'} size={12}/>
+                    {reloadFlash.text}
+                  </div>
+                )}
+
+                <div className="sc-env">
+                  <div className="sc-env-row">
+                    <span>ANTHROPIC_API_KEY</span>
+                    <b className={runtime?.env?.anthropic_key_present ? 'ok' : 'bad'}>
+                      {runtime?.env?.anthropic_key_present ? 'present' : 'missing'}
+                    </b>
+                  </div>
+                  <div className="sc-env-row">
+                    <span>SMTP</span>
+                    <b className={runtime?.env?.smtp_configured ? 'ok' : 'mid'}>
+                      {runtime?.env?.smtp_configured ? 'configured' : 'not configured'}
+                    </b>
+                  </div>
+                  <div className="sc-env-row">
+                    <span>OLLAMA_URL</span>
+                    <b className="mid">{runtime?.env?.ollama_url || '—'}</b>
+                  </div>
+                  <div className="sc-env-row">
+                    <span>LOCAL_DEV_BYPASS</span>
+                    <b className={runtime?.env?.local_dev_bypass ? 'warn' : 'mid'}>
+                      {runtime?.env?.local_dev_bypass ? 'on (insecure)' : 'off'}
+                    </b>
+                  </div>
+                </div>
+              </div>
+
+              <div className="sc-col">
+                <div className="sc-col-h"><Icon name="cpu" size={11}/> LLM Provider · this session</div>
+                <div className="sc-radio-row">
+                  {['anthropic', 'ollama', 'demo'].map(m => (
+                    <button
+                      key={m}
+                      className={'sc-radio' + (globalState?.mode === m ? ' on' : '')}
+                      onClick={() => saveSessionConfig({ mode: m })}>
+                      {m === 'anthropic' ? 'Claude' : m === 'ollama' ? 'Ollama' : 'Demo'}
+                    </button>
+                  ))}
+                </div>
+                <div className="sc-field">
+                  <label>Anthropic API key</label>
+                  <div className="sc-key-row">
+                    <input
+                      type="password"
+                      className="set-input"
+                      placeholder="sk-ant-…"
+                      value={apiKeyDraft}
+                      onChange={e => setApiKeyDraft(e.target.value)}
+                      autoComplete="off"
+                      spellCheck={false}/>
+                    <button className="btn-primary sc-action" onClick={saveApiKey} disabled={savingKey || !apiKeyDraft.trim()}>
+                      {savingKey ? <span className="spin"/> : <Icon name="key" size={12}/>}
+                      Save
+                    </button>
+                  </div>
+                  <div className="sc-helper">Held in volatile session memory only. Never written to disk.</div>
+                </div>
+                <div className="sc-field">
+                  <label>Ollama model</label>
+                  <input
+                    type="text"
+                    className="set-input"
+                    value={globalState?.ollama_model || ''}
+                    onChange={e => saveSessionConfig({ ollama_model: e.target.value })}
+                    placeholder="llama3.2"/>
+                </div>
+              </div>
+
+              <div className="sc-col">
+                <div className="sc-col-h"><Icon name="gauge" size={11}/> Pipeline · this session</div>
+                <div className="sc-field">
+                  <label>Score threshold <i>{globalState?.threshold ?? 75}</i></label>
+                  <input type="range" min="50" max="95" step="1" className="set-range"
+                    value={globalState?.threshold ?? 75}
+                    onChange={e => saveSessionConfig({ threshold: Number(e.target.value) })}/>
+                </div>
+                <div className="sc-field">
+                  <label>Max scrape jobs <i>{globalState?.max_scrape_jobs ?? 20}</i></label>
+                  <input type="range" min="5" max="100" step="5" className="set-range"
+                    value={globalState?.max_scrape_jobs ?? 20}
+                    onChange={e => saveSessionConfig({ max_scrape_jobs: Number(e.target.value) })}/>
+                </div>
+                <div className="sc-field">
+                  <label>Days old <i>{globalState?.days_old ?? 30}</i></label>
+                  <input type="range" min="1" max="90" step="1" className="set-range"
+                    value={globalState?.days_old ?? 30}
+                    onChange={e => saveSessionConfig({ days_old: Number(e.target.value) })}/>
+                </div>
+                <div className="sc-row">
+                  <div className="sc-row-l"><div className="sc-row-h">Generate cover letters</div></div>
+                  <button className={'set-toggle' + (globalState?.cover_letter ? ' on' : '')}
+                    onClick={() => saveSessionConfig({ cover_letter: !globalState?.cover_letter })}/>
+                </div>
+                <div className="sc-row">
+                  <div className="sc-row-l"><div className="sc-row-h">SimplifyJobs scraper</div></div>
+                  <button className={'set-toggle' + (globalState?.use_simplify !== false ? ' on' : '')}
+                    onClick={() => saveSessionConfig({ use_simplify: globalState?.use_simplify === false })}/>
+                </div>
+                <div className="sc-row">
+                  <div className="sc-row-l"><div className="sc-row-h">Light theme</div></div>
+                  <button className={'set-toggle' + (globalState?.light_mode ? ' on' : '')}
+                    onClick={() => saveSessionConfig({ light_mode: !globalState?.light_mode })}/>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* [04] CONSOLE ── CLI + events */}
+        {devTab === 'console' && (
+          <div className="dop-page dop-console fade-in">
+            <div className="dop-panel dop-panel-cli">
+              <div className="dop-secrow">
+                <div className="dop-sec-h"><span className="dop-sec-prefix">{'>'}</span> CLI</div>
+                <div className="dop-sec-meta">whitelist · sandboxed</div>
+              </div>
+              <div className="dop-cli-actions">
+                {commands.map(([id, label]) => (
+                  <button key={id}
+                    className={'dop-cli-cmd' + (cli.command === id && cli.output ? ' on' : '')}
+                    disabled={cli.running}
+                    onClick={() => runCli(id)}>
+                    <span className="dop-cli-prompt">$</span> {label.toLowerCase()}
+                  </button>
+                ))}
+              </div>
+              <pre className="dop-pre dop-pre-cli">
+                {cli.output
+                  ? <>
+                      <span className="dop-pre-prompt">$ {cli.command}</span>{'\n'}
+                      {cli.output}
+                    </>
+                  : <span className="dop-pre-hint">$ — pick a command above to run a sandboxed inspection.</span>}
+              </pre>
+            </div>
+
+            <div className="dop-panel">
+              <div className="dop-secrow">
+                <div className="dop-sec-h"><span className="dop-sec-prefix">{'>'}</span> RECENT EVENTS</div>
+                <div className="dop-sec-meta">{(data.events || []).length} entries</div>
+              </div>
+              <div className="dop-events dop-events-tall">
+                {(data.events || []).slice(0, 80).map((e, i) => (
+                  <div key={i} className="dop-event">
+                    <span>{new Date(e.ts).toLocaleTimeString()}</span>
+                    <b>{e.kind}</b>
+                    <p>{e.message}</p>
+                  </div>
+                ))}
+                {(data.events || []).length === 0 && <div className="dop-empty">No events recorded yet.</div>}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* [05] TWEAKS ── UI customizations */}
+        {devTab === 'tweaks' && (
+          <div className="dop-page fade-in" style={{ maxWidth: 720 }}>
+            <div className="dop-secrow">
+              <div className="dop-sec-h"><span className="dop-sec-prefix">{'>'}</span> SITE TWEAKS</div>
+              <div className="dop-sec-meta">applied to this session only</div>
+            </div>
+
+            <div className="dop-panel">
+              <div className="sc-col-h"><Icon name="palette" size={11}/> Accent</div>
+              <div className="dev-tweak-row">
+                {accents.map(color => (
+                  <button key={color}
+                    className={'dev-swatch' + (tweaks?.accent === color ? ' on' : '')}
+                    style={{ background: color }}
+                    onClick={() => saveTweaks({ accent: color })}
+                    title={color}/>
+                ))}
+              </div>
+            </div>
+
+            <div className="dop-panel">
+              <div className="sc-col-h"><Icon name="layout" size={11}/> Layout</div>
+              <div className="set-field">
+                <div className="set-label">Density</div>
+                <select className="set-select" value={tweaks?.density || 'comfortable'} onChange={e => saveTweaks({ density: e.target.value })}>
+                  <option value="compact">Compact</option>
+                  <option value="comfortable">Comfortable</option>
+                  <option value="spacious">Spacious</option>
+                </select>
+              </div>
+              <div className="set-field">
+                <div className="set-label">Experiment mode</div>
+                <select className="set-select" value={tweaks?.experiment || 'standard'} onChange={e => saveTweaks({ experiment: e.target.value })}>
+                  <option value="standard">Standard</option>
+                  <option value="focus">Focus</option>
+                  <option value="command">Command</option>
+                  <option value="launch">Launch</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="dop-panel">
+              <div className="sc-col-h"><Icon name="megaphone" size={11}/> Site banner</div>
+              <div className="sc-row">
+                <div className="sc-row-l">
+                  <div className="sc-row-h">Show banner</div>
+                  <div className="sc-row-d">Use the dev banner as the site-wide promo strip.</div>
+                </div>
+                <button className={'set-toggle' + (tweaks?.show_promo !== false ? ' on' : '')}
+                  onClick={() => saveTweaks({ show_promo: tweaks?.show_promo === false })}/>
+              </div>
+              <input
+                className="set-input"
+                value={tweaks?.dev_banner || ''}
+                onChange={e => setTweaks({ ...(tweaks || {}), dev_banner: e.target.value })}
+                onBlur={e => saveTweaks({ dev_banner: e.target.value })}
+                placeholder="Dev banner text"/>
+            </div>
+          </div>
+        )}
       </div>
-    </>
+    </div>
   );
 }
+
 
 function DevKpi({ label, value, icon, warn }) {
   return (
@@ -2314,12 +4361,26 @@ function DevKpi({ label, value, icon, warn }) {
 /* ══════════════════════════════════════════════════════════
    ROOT
 ══════════════════════════════════════════════════════════ */
+function GoogleG() {
+  return (
+    <svg viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <path d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.49h4.84a4.14 4.14 0 0 1-1.79 2.72v2.26h2.9c1.7-1.56 2.69-3.87 2.69-6.63z" fill="#4285F4"/>
+      <path d="M9 18c2.43 0 4.46-.81 5.95-2.18l-2.9-2.26c-.8.54-1.83.86-3.05.86-2.34 0-4.32-1.58-5.03-3.71H.96v2.33A9 9 0 0 0 9 18z" fill="#34A853"/>
+      <path d="M3.97 10.71a5.41 5.41 0 0 1 0-3.42V4.96H.96a9 9 0 0 0 0 8.08l3.01-2.33z" fill="#FBBC05"/>
+      <path d="M9 3.58c1.32 0 2.5.45 3.44 1.35l2.58-2.58A8.99 8.99 0 0 0 9 0 9 9 0 0 0 .96 4.96l3.01 2.33C4.68 5.16 6.66 3.58 9 3.58z" fill="#EA4335"/>
+    </svg>
+  );
+}
+
 function AuthPage({ onAuth }) {
-  const [mode, setMode] = useState('login'); // 'login' | 'signup'
-  const [email, setEmail] = useState('');
+  const [mode, setMode]         = useState('login');
+  const [email, setEmail]       = useState('');
   const [password, setPassword] = useState('');
-  const [error, setError] = useState(null);
-  const [loading, setLoading] = useState(false);
+  const [showPw, setShowPw]     = useState(false);
+  const [error, setError]       = useState(null);
+  const [loading, setLoading]   = useState(false);
+
+  const isLogin = mode === 'login';
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -2327,11 +4388,8 @@ function AuthPage({ onAuth }) {
     setLoading(true);
     try {
       const res = await api.post(`/api/auth/${mode}`, { email, password });
-      if (res.ok) {
-        await onAuth(res.user);
-      } else {
-        setError(res.error || 'Authentication failed');
-      }
+      if (res.ok) await onAuth(res.user);
+      else setError(res.error || 'Authentication failed');
     } catch (err) {
       setError(err.message || 'An error occurred. Please try again.');
     } finally {
@@ -2343,52 +4401,121 @@ function AuthPage({ onAuth }) {
     setError(null);
     try {
       const res = await api.get('/api/auth/google');
-      if (res.url) {
-        window.location.href = res.url;
-      } else {
-        throw new Error('No redirect URL received');
-      }
+      if (res.url) window.location.href = res.url;
+      else throw new Error('No redirect URL received');
     } catch (err) {
-      console.error('Google Auth Error:', err);
       setError(err.message || 'Could not initialize Google login');
     }
   };
 
   return (
     <div className="auth-page">
+      <div className="auth-grain" aria-hidden="true"/>
       <div className="auth-card">
-        <BrandMark />
-        <h2>{mode === 'login' ? 'Sign in to your account' : 'Create your account'}</h2>
-        <p className="auth-sub">{mode === 'login' ? 'Welcome back! Please enter your details.' : 'Start your automated job search today.'}</p>
-        
-        <button className="auth-google" onClick={handleGoogle}>
-          <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google" width="18"/>
-          Continue with Google
+        <div className="auth-brand"><BrandMark/></div>
+
+        <header className="auth-head">
+          <div className="auth-eyebrow">{isLogin ? 'Welcome back' : 'New account'}</div>
+          <h1 className="auth-h">
+            {isLogin ? <>Sign in to <em>jobsai</em></> : <>Start your <em>automated</em> search</>}
+          </h1>
+          <p className="auth-sub">
+            {isLogin
+              ? 'Pick up where you left off — your tailored applications and tracker are waiting.'
+              : 'Upload a resume once. We discover, score, tailor, and apply on your behalf.'}
+          </p>
+        </header>
+
+        <button type="button" className="auth-google" onClick={handleGoogle}>
+          <GoogleG/>
+          <span>Continue with Google</span>
         </button>
+        <div style={{
+          marginTop: 8,
+          padding: '8px 12px',
+          borderRadius: 8,
+          background: 'var(--warn-d)',
+          border: '1px solid var(--warn-b)',
+          color: 'var(--warn)',
+          fontSize:15,
+          lineHeight: 1.45,
+          textAlign: 'center',
+        }}>
+          Google sign-in is currently under development — please sign in with email below.
+        </div>
 
-        <div className="auth-divider"><span>OR</span></div>
+        <div className="auth-divider"><span>or with email</span></div>
 
-        <form className="auth-form" onSubmit={handleSubmit}>
-          <div className="set-field">
-            <label className="set-label">Email address</label>
-            <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="name@company.com" required/>
+        <form className="auth-form" onSubmit={handleSubmit} noValidate>
+          <div className="auth-field">
+            <label className="auth-label" htmlFor="auth-email">Email address</label>
+            <div className="auth-input-wrap">
+              <Icon name="mail" size={15}/>
+              <input
+                id="auth-email"
+                className="auth-input"
+                type="email"
+                inputMode="email"
+                autoComplete="email"
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
+                value={email}
+                onChange={e => setEmail(e.target.value)}
+                placeholder="name@company.com"
+                required
+              />
+            </div>
           </div>
-          <div className="set-field">
-            <label className="set-label">Password</label>
-            <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" required/>
+
+          <div className="auth-field">
+            <label className="auth-label" htmlFor="auth-password">Password</label>
+            <div className="auth-input-wrap">
+              <Icon name="lock" size={15}/>
+              <input
+                id="auth-password"
+                className="auth-input"
+                type={showPw ? 'text' : 'password'}
+                autoComplete={isLogin ? 'current-password' : 'new-password'}
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+                placeholder={isLogin ? 'Enter your password' : 'At least 6 characters'}
+                minLength={6}
+                required
+              />
+              <button
+                type="button"
+                className="auth-eye"
+                onClick={() => setShowPw(v => !v)}
+                aria-label={showPw ? 'Hide password' : 'Show password'}
+                tabIndex={-1}
+              >
+                <Icon name={showPw ? 'eye-off' : 'eye'} size={15}/>
+              </button>
+            </div>
           </div>
-          
-          {error && <div className="auth-error">{error}</div>}
-          
-          <button className="lp-btn-p" style={{ width:'100%', marginTop:12, padding:'14px' }} disabled={loading}>
-            {loading ? <span className="spin"/> : (mode === 'login' ? 'Sign in' : 'Create account')}
+
+          {error && (
+            <div className="auth-error" role="alert">
+              <Icon name="circle-alert" size={14}/>
+              <span>{error}</span>
+            </div>
+          )}
+
+          <button className="auth-submit" type="submit" disabled={loading}>
+            {loading
+              ? <span className="spin"/>
+              : <>
+                  <span>{isLogin ? 'Sign in' : 'Create account'}</span>
+                  <Icon name="arrow-right" size={14}/>
+                </>}
           </button>
         </form>
 
         <div className="auth-switch">
-          {mode === 'login' ? "Don't have an account?" : "Already have an account?"}{' '}
-          <button onClick={() => setMode(mode === 'login' ? 'signup' : 'login')}>
-            {mode === 'login' ? 'Sign up' : 'Sign in'}
+          {isLogin ? 'New to Jobs AI?' : 'Already have an account?'}
+          <button type="button" onClick={() => { setMode(isLogin ? 'signup' : 'login'); setError(null); }}>
+            {isLogin ? 'Create an account' : 'Sign in'}
           </button>
         </div>
       </div>
@@ -2398,10 +4525,58 @@ function AuthPage({ onAuth }) {
 
 function App() {
   const [state,     setState]     = useState(null);
-  const [page,      setPage]      = useState(() => location.hash === '#dev' ? 'dev' : 'home');
+  const [page,      _setPage]     = useState(pageFromHash);
   const [showPromo, setShowPromo] = useState(true);
   const [booted,    setBooted]    = useState(false);
-  const prefetchStarted = useRef(false);
+  const [navOpen,   setNavOpen]   = useState(false);
+
+  // Wrap setPage so navigation always updates the URL hash. Children call
+  // this exactly like before — they don't need to know about routing.
+  const setPage = useCallback((next) => {
+    if (!VALID_PAGES.has(next)) next = 'home';
+    const targetHash = hashFromPage(next);
+    if (location.hash !== targetHash) {
+      // pushState lets the back button return to the previous page; using a
+      // bare hash assignment would also work but doesn't let us suppress
+      // history entries for redundant transitions.
+      const url = location.pathname + location.search + targetHash;
+      try { history.pushState(null, '', url); }
+      catch (e) { location.hash = targetHash; }  // fallback for older browsers
+    }
+    _setPage(next);
+  }, []);
+
+  // React to back/forward navigation and direct hash edits in the URL bar.
+  useEffect(() => {
+    const sync = () => _setPage(pageFromHash());
+    window.addEventListener('popstate', sync);
+    window.addEventListener('hashchange', sync);
+    return () => {
+      window.removeEventListener('popstate', sync);
+      window.removeEventListener('hashchange', sync);
+    };
+  }, []);
+
+  // Always close the mobile drawer when the active page changes — keeps the
+  // drawer from lingering after navigating from the rail.
+  useEffect(() => { setNavOpen(false); }, [page]);
+
+  // Lock body scroll while the drawer is open so the underlying page doesn't
+  // bounce on iOS Safari.
+  useEffect(() => {
+    if (!navOpen) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = prev; };
+  }, [navOpen]);
+
+  // Close the drawer on Escape.
+  useEffect(() => {
+    if (!navOpen) return;
+    const onKey = (e) => { if (e.key === 'Escape') setNavOpen(false); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [navOpen]);
 
   const refresh = useCallback(async () => {
     try {
@@ -2415,6 +4590,15 @@ function App() {
 
   useEffect(() => { refresh(); }, [refresh]);
 
+  // Apply light/dark theme to <html> whenever the setting changes
+  useEffect(() => {
+    if (state?.light_mode) {
+      document.documentElement.dataset.theme = 'light';
+    } else {
+      delete document.documentElement.dataset.theme;
+    }
+  }, [state?.light_mode]);
+
   // Adaptive polling: 2 s while any resume is extracting, 8 s otherwise
   const anyExtracting = (state?.resumes || []).some(r => r.extracting);
   useEffect(() => {
@@ -2422,35 +4606,12 @@ function App() {
     return () => clearInterval(id);
   }, [refresh, anyExtracting]);
 
-  useEffect(() => {
-    if (!state?.has_resume || state?.scored_summary || prefetchStarted.current || page === 'jobs') return;
-    // Don't kick off Phase 1 SSE if background extraction is already running
-    if (anyExtracting) return;
-    prefetchStarted.current = true;
-    const id = setTimeout(async () => {
-      try {
-        const done = new Set(state?.done || []);
-        if (!state?.profile) {
-          await runPhasePromise(1, { rerun: done.has(1) });
-          await refresh();
-        }
-        if (!done.has(2) || !state?.job_count) {
-          await runPhasePromise(2, { rerun: false });
-          await refresh();
-        }
-        if (!done.has(3) || !state?.scored_summary) {
-          await runPhasePromise(3, { rerun: false, params: { fast: 1 } });
-          await refresh();
-        }
-      } catch {
-        await refresh();
-      }
-    }, 1200);
-    return () => clearTimeout(id);
-  }, [state, page, refresh]);
+  // Note: discovery (phases 1/2/3) is owned by JobsPage when the user opens it.
+  // We deliberately do NOT prefetch from App.jsx — running both led to two
+  // parallel SSE chains hitting the same session and clobbering scored results.
 
   if (!booted) return (
-    <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:'100vh', color:'var(--t3)', fontSize:13 }}>
+    <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:'100vh', color:'var(--t3)', fontSize:15.5 }}>
       <span className="spin" style={{ marginRight:8 }}/> Loading workspace…
     </div>
   );
@@ -2460,8 +4621,12 @@ function App() {
     return <AuthPage onAuth={refresh} />;
   }
 
-  /* Onboarding gate */
+  /* Onboarding gate — resume upload requires a real authenticated user.
+     is_dev alone is NOT sufficient: /api/resume/upload calls _require_auth_user. */
   if (!state?.has_resume && page !== 'dev') {
+    if (!state?.user) {
+      return <AuthPage onAuth={refresh} />;
+    }
     return (
       <div style={{ display:'flex', flexDirection:'column', height:'100vh', background:'var(--bg)' }}>
         <Onboarding onLoaded={refresh} isDev={state?.is_dev} setPage={setPage}/>
@@ -2483,7 +4648,8 @@ function App() {
       case 'agent':     return <AgentPage state={state} refresh={refresh}/>;
       case 'dev':       return <DevPage state={state} refresh={refresh}/>;
       case 'feedback':  return <FeedbackPage refresh={refresh}/>;
-      case 'settings':  return <SettingsPage state={state} refresh={refresh}/>;
+      case 'settings':  return <SettingsPage state={state} refresh={refresh} setPage={setPage}/>;
+      case 'plans':     return <PlansPage state={state} setPage={setPage}/>;
       case 'auth':      return <AuthPage onAuth={async () => { await refresh(); setPage('home'); }} />;
       default:          return <Dashboard state={state} setPage={setPage}/>;
     }
@@ -2495,23 +4661,66 @@ function App() {
     window.location.reload();
   };
 
+  const exitCustomerMode = async () => {
+    await api.post('/api/config', { force_customer_mode: false });
+    window.location.href = '/app#dev';
+    window.location.reload();
+  };
+
   return (
     <div className="shell">
-      {/* Brand cell — clicking logo goes home */}
+      {/* Brand cell — clicking logo goes home. The hamburger sits before
+         the wordmark and is hidden on desktop via .nav-toggle media rule. */}
       <div className="brand-cell">
+        <button
+          className="nav-toggle"
+          aria-label={navOpen ? 'Close navigation menu' : 'Open navigation menu'}
+          aria-expanded={navOpen}
+          onClick={() => setNavOpen(o => !o)}
+        >
+          <Icon name={navOpen ? 'x' : 'menu'} size={18}/>
+        </button>
         <BrandMark onClick={() => window.location.href = '/'}/>
       </div>
 
-      {/* Promo strip (dismissable) */}
-      {showPromo && state?.dev_tweaks?.show_promo !== false ? (
-        <PromoStrip onClose={() => setShowPromo(false)} text={state?.dev_tweaks?.dev_banner}/>
+      {/* Promo strip (dismissable) — only shown when a dev_banner is set */}
+      {showPromo && state?.dev_tweaks?.show_promo !== false && state?.dev_tweaks?.dev_banner ? (
+        <PromoStrip onClose={() => setShowPromo(false)} text={state.dev_tweaks.dev_banner}/>
       ) : (
         <div style={{ gridArea:'promo', background:'var(--bg-1)', borderBottom:'1px solid var(--bdr)' }}/>
       )}
 
-      <Rail page={page} setPage={setPage} counts={counts} isDev={state?.is_dev} onLogout={handleLogout}/>
+      {/* Backdrop dims the main content while the mobile drawer is open.
+         Desktop hides this via .rail-backdrop CSS. */}
+      <div
+        className={'rail-backdrop' + (navOpen ? ' is-open' : '')}
+        onClick={() => setNavOpen(false)}
+        aria-hidden="true"
+      />
+
+      <Rail
+        page={page}
+        setPage={setPage}
+        counts={counts}
+        isDev={state?.is_dev}
+        onLogout={handleLogout}
+        navOpen={navOpen}
+        closeNav={() => setNavOpen(false)}
+      />
 
       <main className="main">{pageEl}</main>
+
+      {/* Escape hatch: when a dev has flipped "Test as Customer", is_dev is false
+         everywhere (Rail dev item hidden, dev-float gone). Without this pill the
+         dev would be trapped without a way back to /api/dev/*. Always shown when
+         the underlying user is a developer in simulation mode. */}
+      {state?.dev_simulating && (
+        <button className="sim-pill" onClick={exitCustomerMode} title="You're viewing as a customer. Click to return to Dev Ops.">
+          <span className="sim-dot"/>
+          <span className="sim-text"><b>Customer mode</b><i>Click to exit</i></span>
+          <Icon name="log-out" size={13}/>
+        </button>
+      )}
     </div>
   );
 }

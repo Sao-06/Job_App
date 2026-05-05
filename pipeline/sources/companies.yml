@@ -1,0 +1,77 @@
+# Per-company ATS allowlist used by ats_*.py source modules.
+# Each entry is `slug: provider`. The slug is the company's identifier
+# inside that provider's URL space.
+#
+# Add new entries by inspecting the careers page:
+#   - boards.greenhouse.io/<slug>      → greenhouse
+#   - jobs.lever.co/<slug>             → lever
+#   - jobs.ashbyhq.com/<slug>          → ashby
+#   - apply.workable.com/<slug>        → workable
+
+greenhouse:
+  - airbnb
+  - airtable
+  - anthropic
+  - asana
+  - benchling
+  - block
+  - brex
+  - cloudflare
+  - coinbase
+  - databricks
+  - datadog
+  - dbtlabs
+  - discord
+  - doordash
+  - duolingo
+  - elastic
+  - figma
+  - fivetran
+  - flexport
+  - getbridge
+  - github
+  - glean
+  - gusto
+  - hashicorp
+  - hubspot
+  - instacart
+  - intercom
+  - jane
+  - lyft
+  - mercury
+  - modernhealth
+  - mongodb
+  - newfront
+  - notion
+  - nvidia
+  - okta
+  - openai
+  - palantir
+  - pinterest
+  - plaid
+  - quora
+  - ramp
+  - reddit
+  - retool
+  - robinhood
+  - roblox
+  - rubrik
+  - samsara
+  - scaleai
+  - segment
+  - shopify
+  - snowflake
+  - sofi
+  - splunk
+  - square
+  - stripe
+  - twilio
+  - vimeo
+  - wealthfront
+  - wish
+  - zoom
+  - zscaler
+
+lever: []
+ashby: []
+workable: []

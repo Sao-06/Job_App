@@ -16,9 +16,18 @@ from .config import console, OWNER_NAME, DEMO_JOBS
 # ── Base ───────────────────────────────────────────────────────────────────────
 
 class BaseProvider:
-    """Abstract base — all providers must implement these methods."""
+    """Abstract base — all providers must implement these methods.
 
-    def extract_profile(self, resume_text: str, preferred_titles: list = None) -> dict:
+    `extract_profile` accepts an optional `heuristic_hint`: a profile dict
+    pre-extracted by `pipeline.profile_extractor.scan_profile`. Providers
+    that take an LLM should use it as a verified baseline (verify each
+    field, correct mistakes, fill the gaps) instead of re-deriving from
+    scratch — this is what eliminates the "boxes left blank" failure mode.
+    Providers that ignore the hint fall back to their previous behavior.
+    """
+
+    def extract_profile(self, resume_text: str, preferred_titles: list = None,
+                        heuristic_hint: dict = None) -> dict:
         raise NotImplementedError
 
     def score_job(self, job: dict, profile: dict) -> dict:
@@ -35,6 +44,77 @@ class BaseProvider:
 
     def generate_demo_jobs(self, profile: dict, titles: list, location: str) -> list:
         raise NotImplementedError
+
+    def chat(self, system: str, messages: list, max_tokens: int = 1024) -> str:
+        """Free-form conversational call. `messages` is [{role, content}, ...] with
+        roles 'user' or 'assistant'. Used by the Ask-Atlas job advisor.
+        Default raises so providers must opt in explicitly."""
+        raise NotImplementedError
+
+
+# ── Shared heuristic-priming block (Phase 1) ──────────────────────────────────
+# Both Ollama and Anthropic providers prepend this block to their resume-
+# parsing prompts. It hands the LLM the heuristic baseline so it can verify
+# rather than re-derive every field — which is the failure mode the user
+# described as "the boxes are not getting filled in".
+
+def _build_heuristic_block(heuristic: dict | None) -> str:
+    if not heuristic:
+        return ""
+    h = heuristic
+    bits: list[str] = []
+    contact = []
+    for k in ("name", "email", "phone", "linkedin", "github", "location"):
+        v = h.get(k)
+        if v:
+            contact.append(f"  {k:<10}: {v}")
+    if contact:
+        bits.append("[Contact — already extracted by regex; only correct if wrong]\n" + "\n".join(contact))
+    skills = h.get("top_hard_skills") or []
+    if skills:
+        bits.append("[Hard skills found verbatim in the resume]\n  " + ", ".join(skills[:30]))
+    edu = h.get("education") or []
+    if edu:
+        lines = []
+        for e in edu[:5]:
+            d = e.get("degree", "")
+            i = e.get("institution", "")
+            y = e.get("year", "")
+            lines.append(f"  • {d} | {i} | {y}".strip())
+        bits.append("[Education entries detected]\n" + "\n".join(lines))
+    exp = h.get("experience") or []
+    if exp:
+        lines = []
+        for e in exp[:6]:
+            t = e.get("title", "")
+            c = e.get("company", "")
+            d = e.get("dates", "")
+            lines.append(f"  • {t} | {c} | {d}".strip())
+        bits.append("[Work / industry experience detected]\n" + "\n".join(lines))
+    res = h.get("research_experience") or []
+    if res:
+        lines = []
+        for e in res[:5]:
+            t = e.get("title", "")
+            c = e.get("company", "")
+            d = e.get("dates", "")
+            lines.append(f"  • {t} | {c} | {d}".strip())
+        bits.append("[Research experience detected]\n" + "\n".join(lines))
+    proj = h.get("projects") or []
+    if proj:
+        lines = []
+        for p in proj[:6]:
+            n = p.get("name", "")
+            tools = ", ".join(p.get("skills_used") or [])[:80]
+            lines.append(f"  • {n}" + (f"   ({tools})" if tools else ""))
+        bits.append("[Projects detected]\n" + "\n".join(lines))
+    if not bits:
+        return ""
+    return (
+        "===== HEURISTIC BASELINE (do not duplicate, only verify/correct) =====\n"
+        + "\n\n".join(bits)
+        + "\n=====================================================================\n"
+    )
 
 
 # ── Shared rubric scorer (Phase 3) ─────────────────────────────────────────────
@@ -91,6 +171,27 @@ class AnthropicProvider(BaseProvider):
         self.client = _anthropic.Anthropic(api_key=api_key)
         self.model = "claude-opus-4-6"
 
+    def chat(self, system: str, messages: list, max_tokens: int = 1024) -> str:
+        # Anthropic SDK takes system as a top-level kwarg, not a message role.
+        clean = [
+            {"role": m["role"], "content": str(m.get("content", ""))}
+            for m in (messages or [])
+            if m.get("role") in ("user", "assistant") and (m.get("content") or "").strip()
+        ]
+        if not clean:
+            return ""
+        resp = self.client.messages.create(
+            model=self.model,
+            max_tokens=max_tokens,
+            system=system or "",
+            messages=clean,
+        )
+        out_parts: list[str] = []
+        for block in resp.content:
+            if getattr(block, "type", None) == "text":
+                out_parts.append(getattr(block, "text", "") or "")
+        return "".join(out_parts).strip()
+
     def _tool_call(self, tool_def: dict, prompt: str,
                    max_tokens: int = 4096, thinking: bool = False) -> dict:
         kwargs = dict(
@@ -107,7 +208,8 @@ class AnthropicProvider(BaseProvider):
                 return block.input
         return {}
 
-    def extract_profile(self, resume_text: str, preferred_titles: list = None) -> dict:
+    def extract_profile(self, resume_text: str, preferred_titles: list = None,
+                        heuristic_hint: dict = None) -> dict:
         from .profile_audit import DOMAIN_TITLE_FAMILIES, FORBIDDEN_GENERIC_TITLES
 
         tool = {
@@ -247,8 +349,11 @@ class AnthropicProvider(BaseProvider):
                 "Use these as a TIEBREAKER only — they do NOT override the domain whitelist."
             )
 
+        heur_block = _build_heuristic_block(heuristic_hint)
+
         prompt = (
             "Parse this resume in THREE ORDERED PASSES. Do not skip passes.\n\n"
+            f"{heur_block}\n"
             "PASS 1 — Section map:\n"
             "Identify and label Education, Research Experience, Work Experience, "
             "Projects, Skills, and Publications. Separate research roles (lab / PI / "
@@ -463,14 +568,18 @@ def _extract_name_from_text(text: str) -> str:
     #   Irish/hyphenated         — O'Brien, D'Angelo, Jean-Paul
     #   ALL-CAPS word            — JOHN, WILLIAMS
     #   Single initial (± dot)   — A, J, M.
+    # Latin-extended ranges so accented names ("L\u00f3pez", "M\u00fcller", "Ji\u0159\u00ed")
+    # match the title-case patterns just like ASCII names do.
+    _UPPER = r"A-Z\u00c0-\u00d6\u00d8-\u00de\u0100-\u017f"
+    _LOWER = r"a-z\u00df-\u00f6\u00f8-\u00ff\u0100-\u017f"
     _WORD_RE = re.compile(
-        r"^(?:"
-        r"[A-Z][a-z\-]+"                   # plain title-case: Jane, Smith
-        r"|[A-Z]['\u2019][A-Z][a-z]+"      # O'Brien / O\u2019Brien
-        r"|[A-Z][a-z]*\-[A-Z][a-z]+"       # hyphenated: Jean-Paul
-        r"|[A-Z]{2,}"                       # ALL-CAPS: JOHN, WILLIAMS
-        r"|[A-Z]\.?"                        # single initial: A or A.
-        r")$"
+        rf"^(?:"
+        rf"[{_UPPER}][{_LOWER}\-]+"                                  # plain title-case
+        rf"|[{_UPPER}]['\u2019][{_UPPER}][{_LOWER}]+"                # O'Brien / O\u2019Brien
+        rf"|[{_UPPER}][{_LOWER}]*\-[{_UPPER}][{_LOWER}]+"            # hyphenated
+        rf"|[{_UPPER}]{{2,}}"                                         # ALL-CAPS
+        rf"|[{_UPPER}]\.?"                                            # single initial
+        rf")$"
     )
 
     def _name_re_match(line: str) -> bool:
@@ -640,39 +749,90 @@ class DemoProvider(BaseProvider):
         except Exception:
             return list(DemoProvider._DEFAULT_KEYWORDS)
 
-    @staticmethod
-    def _split_sections(resume_text: str) -> dict:
-        """Split a plain-text resume into {section_name_lower: lines[]}.
+    # Map fuzzy header tokens to a canonical bucket name so callers can
+    # request any synonym and find the matching content.
+    _HEADER_ALIASES: dict = {
+        "experience": "experience",
+        "work experience": "experience",
+        "professional experience": "experience",
+        "employment": "experience",
+        "employment history": "experience",
+        "industry experience": "experience",
+        "research experience": "research experience",
+        "research": "research experience",
+        "research projects": "research experience",
+        "lab experience": "research experience",
+        "laboratory experience": "research experience",
+        "projects": "projects",
+        "personal projects": "projects",
+        "academic projects": "projects",
+        "selected projects": "projects",
+        "side projects": "projects",
+        "education": "education",
+        "academic background": "education",
+        "academics": "education",
+        "education and training": "education",
+        "skills": "skills",
+        "technical skills": "skills",
+        "core competencies": "skills",
+        "competencies": "skills",
+        "coursework": "coursework",
+        "relevant coursework": "coursework",
+        "publications": "publications",
+        "objective": "objective",
+        "summary": "summary",
+        "profile": "summary",
+        "interests": "interests",
+        "certifications": "certifications",
+        "awards": "awards",
+        "honors": "awards",
+        "awards and honors": "awards",
+    }
 
-        Section headers are detected as lines that are mostly uppercase or match
-        common resume headings.  Everything before the first header lands in
-        the synthetic 'header' bucket.
+    @classmethod
+    def _classify_header(cls, line: str) -> str | None:
+        """Return the canonical section name for `line`, or None if not a header."""
+        stripped = line.strip()
+        if not stripped or len(stripped) > 60:
+            return None
+        # Strip trailing punctuation/colons and common decoration.
+        cleaned = re.sub(r"[\s:_\-=•]+$", "", stripped).strip()
+        if not cleaned:
+            return None
+        low = cleaned.lower()
+        # Exact alias match
+        if low in cls._HEADER_ALIASES:
+            return cls._HEADER_ALIASES[low]
+        # Permit decorated headers like "── EDUCATION ──" or "Education History"
+        # by reducing to alphanumeric tokens and matching prefix.
+        normalized = re.sub(r"[^a-z0-9 ]+", " ", low)
+        normalized = re.sub(r"\s+", " ", normalized).strip()
+        if normalized in cls._HEADER_ALIASES:
+            return cls._HEADER_ALIASES[normalized]
+        # All-caps heuristic: short lines that are mostly uppercase letters and
+        # whose first word is a known alias root.
+        is_caps = stripped == stripped.upper() and any(c.isalpha() for c in stripped)
+        if is_caps and len(stripped) <= 40:
+            first = normalized.split(" ", 1)[0] if normalized else ""
+            for alias, canonical in cls._HEADER_ALIASES.items():
+                if alias.startswith(first) and first:
+                    return canonical
+        return None
+
+    @classmethod
+    def _split_sections(cls, resume_text: str) -> dict:
+        """Split a plain-text resume into {canonical_section_name: lines[]}.
+
+        Section headers are detected via `_classify_header`. Lines before the
+        first header land in the synthetic 'header' bucket.
         """
-        known = {
-            "experience", "work experience", "professional experience",
-            "research experience", "research", "lab experience",
-            "projects", "personal projects", "academic projects",
-            "education", "skills", "technical skills", "core competencies",
-            "coursework", "relevant coursework", "publications",
-            "objective", "summary", "profile", "interests",
-            "certifications", "awards",
-        }
         sections: dict = {"header": []}
         current = "header"
         for raw in resume_text.splitlines():
             line = raw.rstrip()
-            stripped = line.strip()
-            if not stripped:
-                sections.setdefault(current, []).append("")
-                continue
-            low = stripped.lower().rstrip(":")
-            is_header = (
-                low in known
-                or (len(stripped) <= 40 and stripped == stripped.upper()
-                    and any(c.isalpha() for c in stripped) and low in known)
-            )
-            if is_header:
-                current = low
+            canonical = cls._classify_header(line) if line.strip() else None
+            if canonical:
+                current = canonical
                 sections.setdefault(current, [])
             else:
                 sections.setdefault(current, []).append(line)
@@ -709,49 +869,328 @@ class DemoProvider(BaseProvider):
                 cur["bullets"].append(text)
         return roles
 
-    @staticmethod
-    def _parse_projects_block(lines: list) -> list:
-        """Parse a PROJECTS section into [{name, description, skills_used}]."""
+    # Tokens that very likely indicate a degree level on a line.
+    _DEGREE_PATTERNS = re.compile(
+        r"\b(?:"
+        r"ph\.?d|d\.?phil|doctor(?:ate)?|"
+        r"m\.?s\.?c?|m\.?eng|m\.?sc|m\.?phil|m\.?b\.?a|master(?:'s)?|"
+        r"b\.?s\.?c?|b\.?eng|b\.?sc|b\.?a|bachelor(?:'s)?|"
+        r"associate(?:'s)?|a\.?a\.?s?|"
+        r"high school|h\.?s\.?\s*diploma|diploma|certificate"
+        r")\b",
+        re.IGNORECASE,
+    )
+
+    # Words that strongly suggest the line names an institution.
+    _INSTITUTION_PATTERNS = re.compile(
+        r"\b(?:university|college|institute|institut|school|academy|polytechnic"
+        r"|conservatory|seminary)\b",
+        re.IGNORECASE,
+    )
+
+    @classmethod
+    def _parse_projects_block(cls, lines: list) -> list:
+        """Parse a PROJECTS section into [{name, description, bullets, skills_used, dates, url}].
+
+        Heuristic:
+          - A line that is NOT a bullet and that looks like a project title
+            (Title Case, contains a separator like '|' / '—' / ':' / '@', or
+            sits flush-left after a blank line) starts a new project.
+          - Subsequent bullet lines (•, -, *, –) become entries in `bullets`.
+          - The first non-bullet sentence after the title becomes `description`.
+          - A trailing tech-tag list (Tools: …, Tech: …, Stack: …) populates
+            `skills_used`.
+          - Any GitHub/demo URL on the title line populates `url`.
+          - Any date range on the title line populates `dates`.
+        """
+        date_re = re.compile(
+            r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\s*\d{0,4}"
+            r"\s*[-–—]\s*(?:Present|Current|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\s*\d{0,4}|\d{4})"
+            r"|\b(?:19|20)\d{2}\s*[-–—]\s*(?:Present|Current|(?:19|20)\d{2})"
+            r"|\b(?:19|20)\d{2}\b",
+            re.IGNORECASE,
+        )
+        url_re = re.compile(r"https?://\S+|github\.com/\S+", re.IGNORECASE)
+        tech_tag_re = re.compile(
+            r"^\s*(?:tech(?:nologies)?|stack|tools|skills|languages)[\s:]+(.+)$",
+            re.IGNORECASE,
+        )
+
+        def _looks_like_title(line: str, raw: str) -> bool:
+            if line.startswith(("•", "-", "*", "–", "—", "·")):
+                return False
+            if raw.startswith(("  ", "\t")) and len(line) > 80:
+                return False
+            # Title-Case-ish: most letter-words start with uppercase, OR contains a
+            # well-known separator pattern.
+            if any(sep in line for sep in ("|", " — ", " – ", " - ", " @ ", " : ")):
+                return True
+            words = [w for w in re.findall(r"[A-Za-z][A-Za-z'\-]*", line) if w]
+            if not words:
+                return False
+            cap_ratio = sum(1 for w in words if w[0].isupper()) / len(words)
+            return cap_ratio >= 0.6 and len(words) <= 12
+
         projects: list = []
-        cur: dict = None
+        cur: dict | None = None
+
+        def _new_project(title: str) -> dict:
+            entry = {
+                "name": title,
+                "description": "",
+                "bullets": [],
+                "skills_used": [],
+                "dates": "",
+                "url": "",
+            }
+            # Pull URLs and dates out so the name stays clean.
+            url_match = url_re.search(title)
+            if url_match:
+                entry["url"] = url_match.group(0).rstrip(".,;:")
+            date_match = date_re.search(title)
+            if date_match:
+                entry["dates"] = date_match.group(0)
+            cleaned = title
+            for chunk in (entry["url"], entry["dates"]):
+                if chunk:
+                    cleaned = cleaned.replace(chunk, "")
+
+            # Strip empty parens left over from date/url removal so they don't
+            # become a "()" pseudo-tag downstream.
+            cleaned = re.sub(r"\(\s*\)", "", cleaned)
+
+            # Split on "|" / " — " / " – " to separate name from tag/date.
+            # The first segment is the name; remaining segments that look
+            # like tech-stack tokens become skills_used.
+            season_re = re.compile(
+                r"^(spring|summer|fall|autumn|winter)$", re.IGNORECASE
+            )
+            split_parts = [
+                p.strip() for p in re.split(r"\s*[|—–]\s*", cleaned) if p.strip()
+            ]
+            if len(split_parts) > 1:
+                cleaned = split_parts[0]
+                for part in split_parts[1:]:
+                    if not part:
+                        continue
+                    if "," in part or len(part.split()) <= 4:
+                        for tok in re.split(r"[,/]+", part):
+                            tok = tok.strip(" ()")
+                            if not tok:
+                                continue
+                            if date_re.search(tok) or season_re.match(tok):
+                                continue
+                            entry["skills_used"].append(tok)
+            cleaned = re.sub(r"[\s,|–—\-:()]+$", "", cleaned).strip()
+            entry["name"] = cleaned or title
+            return entry
+
         for raw in lines:
             line = raw.strip()
             if not line:
                 continue
-            indented = raw.startswith(("  ", "\t"))
-            bullet_marker = line.startswith(("•", "-", "*"))
-            if not indented and not bullet_marker:
-                cur = {"name": line, "description": "", "skills_used": []}
+            tag_match = tech_tag_re.match(line)
+            if tag_match and cur is not None:
+                tags = re.split(r"[;,/]+| - ", tag_match.group(1))
+                cur["skills_used"].extend(t.strip() for t in tags if t.strip())
+                continue
+            bullet_marker = line[:1] in ("•", "-", "*", "–", "—", "·")
+            if not bullet_marker and _looks_like_title(line, raw):
+                cur = _new_project(line)
                 projects.append(cur)
+                continue
+            text = line.lstrip("•-*–—· ").strip()
+            if not text:
+                continue
+            if cur is None:
+                cur = _new_project(text)
+                projects.append(cur)
+                continue
+            if bullet_marker or cur["description"]:
+                cur["bullets"].append(text)
             else:
-                text = line.lstrip("•-* ").strip()
-                if cur is None:
-                    cur = {"name": "", "description": text, "skills_used": []}
-                    projects.append(cur)
-                else:
-                    cur["description"] = (cur["description"] + " " + text).strip()
+                cur["description"] = text
+
+        # Deduplicate skills_used per project.
+        for p in projects:
+            seen: set = set()
+            ordered = []
+            for s in p["skills_used"]:
+                k = s.lower()
+                if k and k not in seen:
+                    seen.add(k)
+                    ordered.append(s)
+            p["skills_used"] = ordered
+
         return projects
 
-    @staticmethod
-    def _parse_education_block(lines: list) -> list:
-        """Parse an EDUCATION section into [{degree, institution, year, gpa}]."""
-        entries: list = []
+    @classmethod
+    def _parse_education_block(cls, lines: list) -> list:
+        """Parse an EDUCATION section into [{degree, institution, year, gpa, location, coursework, honors}].
+
+        Real-world resumes use a wide variety of formats. We split the section
+        into one entry per "school chunk" — a contiguous block of non-empty
+        lines separated by a blank line OR introduced by a fresh institution /
+        degree line. Each entry is then post-processed to fill the structured
+        fields.
+        """
+        # Pre-split the block into per-entry chunks separated by blank lines.
+        chunks: list[list[str]] = []
+        cur: list[str] = []
         for raw in lines:
-            line = raw.strip()
-            if not line:
-                continue
-            parts = [p.strip() for p in line.split("|")]
-            year_match = re.search(r"(19|20)\d{2}", line)
-            gpa_match  = re.search(r"GPA[:\s]*([\d.]+)", line, re.I)
+            if raw.strip():
+                cur.append(raw.strip())
+            elif cur:
+                chunks.append(cur)
+                cur = []
+        if cur:
+            chunks.append(cur)
+
+        # Heuristic re-split: only break a chunk when a new line repeats the
+        # SAME primary field that's already been seen — e.g. a second
+        # institution after the first one. Complementary lines (degree after
+        # institution, or vice versa) stay in the same entry.
+        refined_chunks: list[list[str]] = []
+        for chunk in chunks:
+            piece: list[str] = []
+            piece_has_institution = False
+            piece_has_degree = False
+            for line in chunk:
+                line_has_inst = bool(cls._INSTITUTION_PATTERNS.search(line))
+                line_has_deg = bool(cls._DEGREE_PATTERNS.search(line))
+                duplicate_field = (
+                    (line_has_inst and piece_has_institution)
+                    or (line_has_deg and piece_has_degree)
+                )
+                if piece and duplicate_field:
+                    refined_chunks.append(piece)
+                    piece = [line]
+                    piece_has_institution = line_has_inst
+                    piece_has_degree = line_has_deg
+                else:
+                    piece.append(line)
+                    piece_has_institution = piece_has_institution or line_has_inst
+                    piece_has_degree = piece_has_degree or line_has_deg
+            if piece:
+                refined_chunks.append(piece)
+
+        entries: list = []
+        for chunk in refined_chunks:
             entry = {
-                "degree":      parts[0] if parts else "",
-                "institution": parts[1] if len(parts) > 1 else "",
-                "year":        year_match.group() if year_match else (
-                    parts[2] if len(parts) > 2 else ""
-                ),
-                "gpa":         gpa_match.group(1) if gpa_match else "",
+                "degree": "",
+                "institution": "",
+                "year": "",
+                "gpa": "",
+                "location": "",
+                "coursework": [],
+                "honors": [],
             }
-            entries.append(entry)
+            joined = " | ".join(chunk)
+
+            # Extract year (graduation year or range)
+            year_match = re.search(
+                r"(?:(?:19|20)\d{2}\s*[-–—]\s*(?:Present|Current|(?:19|20)\d{2}))"
+                r"|(?:19|20)\d{2}",
+                joined,
+                re.IGNORECASE,
+            )
+            if year_match:
+                entry["year"] = year_match.group(0)
+
+            # GPA — accept "GPA: 3.8", "GPA 3.8/4.0", "Cumulative GPA 3.85"
+            gpa_match = re.search(
+                r"GPA[\s:]*([0-4]\.\d{1,2})(?:\s*/\s*[0-4](?:\.\d+)?)?",
+                joined,
+                re.IGNORECASE,
+            )
+            if gpa_match:
+                entry["gpa"] = gpa_match.group(1)
+
+            # First pass: split "|" / "•" line-form (e.g. "Stanford University | B.S. EE | 2024")
+            for line in chunk:
+                parts = [p.strip() for p in re.split(r"\s*[|•]\s*", line) if p.strip()]
+                if len(parts) >= 2:
+                    for part in parts:
+                        if not entry["degree"] and cls._DEGREE_PATTERNS.search(part):
+                            entry["degree"] = part
+                        elif not entry["institution"] and cls._INSTITUTION_PATTERNS.search(part):
+                            entry["institution"] = part
+
+            # Second pass: line-by-line classification when the pipe form failed.
+            for line in chunk:
+                low = line.lower()
+                if low.startswith(("relevant coursework", "coursework")):
+                    after = line.split(":", 1)[-1] if ":" in line else line
+                    items = [c.strip() for c in re.split(r"[;,]+", after) if c.strip()
+                             and not c.strip().lower().startswith("coursework")]
+                    entry["coursework"].extend(items)
+                    continue
+                if low.startswith(("honors", "awards", "scholarship", "dean")):
+                    after = line.split(":", 1)[-1] if ":" in line else line
+                    items = [h.strip() for h in re.split(r"[;,]+", after) if h.strip()]
+                    entry["honors"].extend(items)
+                    continue
+                if not entry["degree"] and cls._DEGREE_PATTERNS.search(line):
+                    entry["degree"] = re.sub(r"\s{2,}", " ", line).strip()
+                elif not entry["institution"] and cls._INSTITUTION_PATTERNS.search(line):
+                    entry["institution"] = re.sub(r"\s{2,}", " ", line).strip()
+
+            # Strip year/GPA artifacts out of degree/institution text.
+            for field in ("degree", "institution"):
+                if entry[field]:
+                    cleaned = re.sub(
+                        r"\bGPA[\s:]*[0-4]\.\d{1,2}(?:\s*/\s*[0-4](?:\.\d+)?)?\b",
+                        "",
+                        entry[field],
+                        flags=re.IGNORECASE,
+                    )
+                    if entry["year"]:
+                        cleaned = cleaned.replace(entry["year"], "")
+                    entry[field] = re.sub(r"[\s,|]+$", "", cleaned).strip()
+
+            # Fall back: if neither field matched, treat the first chunk line as
+            # the degree (preserves data even when the format is unusual).
+            if not entry["degree"] and not entry["institution"] and chunk:
+                entry["degree"] = chunk[0]
+
+            # Multi-line fallback: institutions like "MIT", "UCLA", "USC" are
+            # acronyms and don't match _INSTITUTION_PATTERNS. If we have a
+            # degree but no institution, scan the chunk for a short Title-
+            # Case-or-acronym line that isn't itself a degree/coursework/honors.
+            if entry["degree"] and not entry["institution"]:
+                for line in chunk:
+                    s = line.strip()
+                    if not s or len(s) > 80:
+                        continue
+                    if cls._DEGREE_PATTERNS.search(s):
+                        continue
+                    low = s.lower()
+                    if low.startswith(("relevant coursework", "coursework",
+                                        "honors", "awards", "scholarship", "dean",
+                                        "gpa")):
+                        continue
+                    # Strip trailing date / GPA so "MIT, 2024" → "MIT".
+                    candidate = re.sub(r",?\s*(?:19|20)\d{2}.*$", "", s).strip()
+                    candidate = re.sub(r",?\s*GPA[\s:].*$", "", candidate, flags=re.I).strip()
+                    if not candidate or len(candidate) > 60:
+                        continue
+                    # Accept lines that are mostly uppercase (acronym) or that
+                    # are short Title Case (≤4 words) — the typical pattern
+                    # for institution-only lines above the degree.
+                    is_acronym = candidate.isupper() and 2 <= len(candidate) <= 12
+                    words = candidate.split()
+                    is_title = (
+                        1 <= len(words) <= 5
+                        and sum(1 for w in words if w[:1].isupper()) >= max(1, len(words) - 1)
+                    )
+                    if is_acronym or is_title:
+                        entry["institution"] = candidate
+                        break
+
+            # Skip pure noise entries.
+            if any(entry[f] for f in ("degree", "institution", "year", "gpa")):
+                entries.append(entry)
+
         return entries
 
     def _skills_from_text(self, text: str, limit: int = 40) -> list:
@@ -790,7 +1229,8 @@ class DemoProvider(BaseProvider):
             base += f" and {count} structured resume role(s) extracted for job matching"
         return base + "."
 
-    def extract_profile(self, resume_text: str, preferred_titles: list = None) -> dict:
+    def extract_profile(self, resume_text: str, preferred_titles: list = None,
+                        heuristic_hint: dict = None) -> dict:  # noqa: ARG002
         text_lower = resume_text.lower()
 
         email_match = re.search(r'[\w.+-]+@[\w-]+\.[a-zA-Z]{2,}', resume_text)
@@ -860,10 +1300,22 @@ class DemoProvider(BaseProvider):
             _grab("projects", "personal projects", "academic projects")
         )
         for project in projects:
-            project["skills_used"] = self._skills_from_text(
-                f"{project.get('name', '')} {project.get('description', '')}",
-                limit=10,
-            )
+            text_for_skills = " ".join([
+                project.get("name", ""),
+                project.get("description", ""),
+                " ".join(project.get("bullets") or []),
+            ])
+            inferred = self._skills_from_text(text_for_skills, limit=12)
+            # Merge tag-derived skills (already on the project) with the
+            # keyword-inferred ones; preserve order, dedupe case-insensitively.
+            seen: set = set()
+            merged: list = []
+            for s in (project.get("skills_used") or []) + inferred:
+                k = s.lower()
+                if k and k not in seen:
+                    seen.add(k)
+                    merged.append(s)
+            project["skills_used"] = merged
         education_parsed = self._parse_education_block(_grab("education"))
         summary = self._summary_from_profile(name, target_titles, hard_skills, experience, research)
         critical = (
@@ -984,6 +1436,16 @@ class DemoProvider(BaseProvider):
     def generate_demo_jobs(self, profile: dict, titles: list, location: str) -> list:  # noqa: ARG002
         return DEMO_JOBS
 
+    def chat(self, system: str, messages: list, max_tokens: int = 1024) -> str:
+        # Demo mode has no LLM. Return a clear, honest message so the UI degrades
+        # gracefully instead of bubbling a NotImplementedError.
+        return (
+            "Demo mode doesn't include a live chat assistant — switch to Ollama "
+            "(free, local) or Anthropic Claude (Pro plan) in Settings to enable "
+            "Ask Atlas. The job description and your profile are still loaded for "
+            "scoring and tailoring; only the chat advisor is gated."
+        )
+
 
 # ── 3. Ollama (local LLM) ──────────────────────────────────────────────────────
 
@@ -1022,7 +1484,28 @@ class OllamaProvider(BaseProvider):
                 f"Fix: ollama pull {self.model}"
             )
 
-    def _chat(self, prompt: str) -> str:
+    def chat(self, system: str, messages: list, max_tokens: int = 1024) -> str:
+        try:
+            from openai import OpenAI
+        except ImportError as exc:
+            raise ImportError(
+                "openai package required for Ollama mode.  Run: pip install openai"
+            ) from exc
+        oc = OpenAI(base_url=f"{self.OLLAMA_URL}/v1", api_key="ollama", timeout=180)
+        msgs: list = []
+        if system:
+            msgs.append({"role": "system", "content": str(system)})
+        for m in (messages or []):
+            if m.get("role") in ("user", "assistant") and (m.get("content") or "").strip():
+                msgs.append({"role": m["role"], "content": str(m["content"])})
+        if len(msgs) == (1 if system else 0):
+            return ""
+        resp = oc.chat.completions.create(
+            model=self.model, messages=msgs, max_tokens=max_tokens,
+        )
+        return (resp.choices[0].message.content or "").strip()
+
+    def _chat(self, prompt: str, json_mode: bool = False) -> str:
         try:
             from openai import OpenAI
         except ImportError as exc:
@@ -1031,13 +1514,17 @@ class OllamaProvider(BaseProvider):
             ) from exc
 
         import time as _time
-        oc = OpenAI(base_url=f"{self.OLLAMA_URL}/v1", api_key="ollama", timeout=120)
+        oc = OpenAI(base_url=f"{self.OLLAMA_URL}/v1", api_key="ollama", timeout=180)
+        kwargs: dict = {
+            "model": self.model,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        if json_mode:
+            # Ollama's OpenAI-compatible endpoint honors response_format=json_object.
+            kwargs["response_format"] = {"type": "json_object"}
         for attempt in range(5):
             try:
-                resp = oc.chat.completions.create(
-                    model=self.model,
-                    messages=[{"role": "user", "content": prompt}],
-                )
+                resp = oc.chat.completions.create(**kwargs)
                 return resp.choices[0].message.content or ""
             except Exception as e:
                 if "429" in str(e) or "too many concurrent" in str(e).lower():
@@ -1047,6 +1534,10 @@ class OllamaProvider(BaseProvider):
                         f"(attempt {attempt+1}/5)…[/yellow]"
                     )
                     _time.sleep(wait)
+                elif json_mode and "response_format" in str(e):
+                    # Older Ollama builds may not support response_format — retry
+                    # without it instead of failing.
+                    kwargs.pop("response_format", None)
                 else:
                     raise
         raise RuntimeError("Ollama rate limit: exceeded 5 retry attempts")
@@ -1095,36 +1586,93 @@ class OllamaProvider(BaseProvider):
                         break
         return fallback
 
-    def extract_profile(self, resume_text: str, preferred_titles: list = None) -> dict:
+    def extract_profile(self, resume_text: str, preferred_titles: list = None,
+                        heuristic_hint: dict = None) -> dict:
         from .profile_audit import DOMAIN_TITLE_FAMILIES
 
         pref_hint = ""
         if preferred_titles:
-            pref_hint = f"\nPreferences: {', '.join(preferred_titles)}"
-        prompt = (
-            "Extract resume info. Return ONLY a JSON object with these fields:\n"
-            '{"name": str, "email": str, "linkedin": str, "github": str, "phone": str, "location": str,\n'
-            '"target_titles": [str], "top_hard_skills": [str], "top_soft_skills": [str],\n'
-            '"education": [{"degree": str, "institution": str, "year": str, "gpa": str}],\n'
-            '"research_experience": [{"title": str, "company": str, "dates": str, "bullets": [str]}],\n'
-            '"work_experience": [{"title": str, "company": str, "dates": str, "bullets": [str]}],\n'
-            '"projects": [{"name": str, "description": str, "skills_used": [str]}],\n'
-            '"resume_gaps": [str],\n'
-            '"critical_analysis": str}\n\n'
-            "critical_analysis: A 3-4 paragraph brutally honest and detailed critique of the resume focusing on: 1. Impact & Quantified Achievements, 2. Skill Density, 3. Structural Clarity for ATS/Human, 4. Specific high-value action items.\n"
-            f"Target title families (extract titles matching these): {', '.join(DOMAIN_TITLE_FAMILIES)}\n"
-            "Hard skills: ONLY technical tools, languages, equipment. No soft skills here.\n"
-            "Soft skills: ONLY behavioral (communication, teamwork, etc.).\n"
-            f"{pref_hint}\n\n"
-            f"Resume:\n{resume_text[:3000]}"
+            pref_hint = f"\nCandidate's stated title preferences (tiebreaker only): {', '.join(preferred_titles)}\n"
+
+        # Education and projects sit near the bottom of most resumes. The
+        # previous 3000-char truncation cut them off entirely. We keep a
+        # generous cap to stay under the model's context window but include
+        # enough text that those sections survive.
+        excerpt = resume_text if len(resume_text) <= 16000 else (
+            resume_text[:14000] + "\n[...truncated...]\n" + resume_text[-2000:]
         )
-        raw = self._chat(prompt)
+
+        heur_block = _build_heuristic_block(heuristic_hint)
+
+        prompt = (
+            "You are verifying a resume parser's output. A heuristic regex pass "
+            "has already extracted a baseline profile (shown below). Your job: "
+            "VERIFY each field, CORRECT mistakes, and FILL IN missing fields by "
+            "reading the resume. Keep correct values verbatim — do not paraphrase.\n\n"
+            f"{heur_block}\n"
+            "Return ONE JSON object with exactly these keys "
+            "(use [] / \"\" for missing fields):\n"
+            '{"name": str, "email": str, "linkedin": str, "github": str, '
+            '"phone": str, "location": str,\n'
+            ' "target_titles": [str], "top_hard_skills": [str], "top_soft_skills": [str],\n'
+            ' "education": [{"degree": str, "institution": str, "year": str, "gpa": str, '
+            '"location": str, "coursework": [str], "honors": [str]}],\n'
+            ' "research_experience": [{"title": str, "company": str, "dates": str, "bullets": [str]}],\n'
+            ' "work_experience":     [{"title": str, "company": str, "dates": str, "bullets": [str]}],\n'
+            ' "projects": [{"name": str, "description": str, "bullets": [str], '
+            '"skills_used": [str], "dates": str, "url": str}],\n'
+            ' "resume_gaps": [str],\n'
+            ' "critical_analysis": str}\n\n'
+            "EDUCATION RULES:\n"
+            "  • One entry per degree/program. Common formats include:\n"
+            "      'B.S. in EE, Stanford University, 2024, GPA 3.85'\n"
+            "      'Stanford University — B.S. Electrical Engineering — Aug 2020 – May 2024'\n"
+            "      Multi-line: institution on line 1, degree on line 2, dates/GPA on line 3.\n"
+            "  • degree: keep the full degree (e.g. 'B.S. in Electrical Engineering').\n"
+            "  • institution: full school name only (no degree, no city).\n"
+            "  • year: graduation year (4 digits) or date range if explicit.\n"
+            "  • gpa: numeric only (e.g. '3.85'); empty string if absent.\n"
+            "  • coursework: bullet list under 'Relevant Coursework' if present.\n"
+            "  • honors: scholarships, dean's list, awards under that program.\n"
+            "  • Include EVERY school listed (undergrad + grad + study abroad).\n\n"
+            "PROJECTS RULES:\n"
+            "  • One entry per project. The project header line is usually a Title-Case "
+            "name; following bullets / sentences describe it.\n"
+            "  • name: the project title only (strip dates, tech stack, links).\n"
+            "  • description: a one-sentence summary if present at the start of the entry.\n"
+            "  • bullets: each bullet/achievement line as a separate string. Do NOT "
+            "concatenate them into description.\n"
+            "  • skills_used: technical nouns from the bullets — languages, frameworks, "
+            "instruments, methods. Pull from the same project's text only.\n"
+            "  • dates: any time range present on the project header.\n"
+            "  • url: any GitHub/demo link tied to the project.\n"
+            "  • Include EVERY project — personal, academic, course, hackathon.\n\n"
+            "SKILLS RULES:\n"
+            "  • Hard skills = technical nouns only (languages, tools, equipment, methods).\n"
+            "  • Soft skills = behavioral traits only (teamwork, communication).\n"
+            "  • Never put lab techniques or software under soft skills.\n\n"
+            "TARGET TITLES:\n"
+            f"  Pick 5–8 from these families: {', '.join(DOMAIN_TITLE_FAMILIES)}\n"
+            f"{pref_hint}"
+            "\ncritical_analysis: 3-4 paragraph honest critique covering impact & "
+            "quantified achievements, skill density, ATS/structural clarity, and "
+            "specific high-value action items.\n\n"
+            "Return ONLY the JSON object — no prose, no markdown fences.\n\n"
+            f"Resume:\n{excerpt}"
+        )
+        raw = self._chat(prompt, json_mode=True)
         result = self._parse_json(raw, {})
         if not result:
-            # Ollama returned unparse-able output — fall back to regex extraction
-            # so the user's real resume data is never silently replaced with defaults.
-            console.print("  [yellow]⚠  Ollama JSON parse failed — using regex extractor as fallback[/yellow]")
-            return DemoProvider().extract_profile(resume_text, preferred_titles=preferred_titles)
+            console.print(
+                "  [yellow]⚠  Ollama JSON parse failed — falling back to the heuristic baseline[/yellow]"
+            )
+            # The heuristic baseline has already been computed by the caller;
+            # if it's missing we recompute on the spot so we never return {}.
+            if heuristic_hint:
+                return dict(heuristic_hint)
+            return DemoProvider().extract_profile(
+                resume_text, preferred_titles=preferred_titles,
+            )
         return result
 
     def score_job(self, job: dict, profile: dict) -> dict:

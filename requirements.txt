@@ -16,6 +16,8 @@ python-jobspy>=1.1.0
 reportlab>=4.0.0
 google-auth>=2.0.0
 google-auth-oauthlib>=1.2.0
+python-dotenv>=1.0.0
+apscheduler>=3.10.0
 
 # Optional: needed for --ollama mode only
 openai>=1.0.0

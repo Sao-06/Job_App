@@ -24,7 +24,11 @@
       "Bash(grep -v \"^\\\\s*$\")",
       "Bash(curl -s http://localhost:8000/)",
       "Bash(curl -s http://localhost:8000/api/state)",
-      "Bash(taskkill /F /IM python.exe /FI \"WINDOWTITLE eq uvicorn\")"
+      "Bash(taskkill /F /IM python.exe /FI \"WINDOWTITLE eq uvicorn\")",
+      "Bash(git checkout *)",
+      "Bash(awk '{print $NF}')",
+      "Bash(Select-String -Path \"C:\\\\Users\\\\jonny\\\\Desktop\\\\Coding Projects\\\\Job_App\\\\Job_App\\\\frontend\\\\index.html\" -Pattern \"app\\\\.jsx|script.*src|root|ReactDOM\")",
+      "Bash(Select-Object -First 20)"
     ]
   }
 }

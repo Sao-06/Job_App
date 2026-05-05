@@ -1,0 +1,58 @@
+{
+  "name": "",
+  "email": "",
+  "linkedin": "",
+  "github": "",
+  "phone": "",
+  "location": "",
+  "target_titles": [
+    "IC Design / VLSI",
+    "Analog / Mixed-Signal Design",
+    "Semiconductor Process / Device Engineering"
+  ],
+  "top_hard_skills": [
+    "LabVIEW",
+    "C++",
+    "MATLAB"
+  ],
+  "top_soft_skills": [
+    "Effective Communication",
+    "Team Collaboration",
+    "Adaptability"
+  ],
+  "top_hard_skills_detailed": [
+    {
+      "skill": "LabVIEW",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "C++",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "MATLAB",
+      "category": "unknown",
+      "evidence": ""
+    }
+  ],
+  "target_titles_detailed": [
+    {
+      "title": "IC Design / VLSI",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "Analog / Mixed-Signal Design",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "Semiconductor Process / Device Engineering",
+      "family": "",
+      "evidence": ""
+    }
+  ],
+  "experience": []
+}

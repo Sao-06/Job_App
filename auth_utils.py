@@ -1,0 +1,79 @@
+import bcrypt
+import os
+import json
+from pathlib import Path
+
+# Password hashing
+def hash_password(password: str) -> str:
+    salt = bcrypt.gensalt()
+    return bcrypt.hashpw(password.encode('utf-8'), salt).decode('utf-8')
+
+def verify_password(password: str, hashed: str) -> bool:
+    if not hashed:
+        return False
+    return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('utf-8'))
+
+# Google OAuth placeholder (actual implementation will need client secrets)
+# For now, I'll provide the logic, but the user will need to set up the Google Cloud Project.
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")
+GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET")
+
+def get_google_auth_url(redirect_uri: str):
+    if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
+        # Return a dummy URL that points back to our own callback for dev purposes
+        return f"/api/auth/google/callback?code=dummy_code&state=dummy_state", "dummy_state"
+
+    from google_auth_oauthlib.flow import Flow
+
+    client_config = {
+        "web": {
+            "client_id": GOOGLE_CLIENT_ID,
+            "client_secret": GOOGLE_CLIENT_SECRET,
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "redirect_uris": [redirect_uri]
+        }
+    }
+
+    flow = Flow.from_client_config(
+        client_config,
+        scopes=['https://www.googleapis.com/auth/userinfo.email', 'openid', 'https://www.googleapis.com/auth/userinfo.profile']
+    )
+    flow.redirect_uri = redirect_uri
+    authorization_url, state = flow.authorization_url(
+        access_type='offline',
+        include_granted_scopes='true'
+    )
+    return authorization_url, state
+
+def verify_google_token(code: str, redirect_uri: str, state: str):
+    if code == "dummy_code" and state == "dummy_state":
+        return {
+            "email": "dev@example.com",
+            "sub": "dummy_google_id",
+            "name": "Developer"
+        }
+
+    from google_auth_oauthlib.flow import Flow
+    from google.oauth2 import id_token
+    from google.auth.transport import requests
+    
+    client_config = {
+        "web": {
+            "client_id": GOOGLE_CLIENT_ID,
+            "client_secret": GOOGLE_CLIENT_SECRET,
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "redirect_uris": [redirect_uri]
+        }
+    }
+
+    flow = Flow.from_client_config(client_config, scopes=['https://www.googleapis.com/auth/userinfo.email', 'openid', 'https://www.googleapis.com/auth/userinfo.profile'], state=state)
+    flow.redirect_uri = redirect_uri
+    flow.fetch_token(code=code)
+    
+    credentials = flow.credentials
+    id_info = id_token.verify_oauth2_token(
+        credentials.id_token, requests.Request(), GOOGLE_CLIENT_ID
+    )
+    return id_info

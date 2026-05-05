@@ -1,0 +1,103 @@
+{
+  "_meta": {
+    "created_at": 1777946411.7621665,
+    "titles": [
+      "FPGA Engineer"
+    ],
+    "location": "United States",
+    "days_old": 30,
+    "deep_search": true
+  },
+  "jobs": [
+    {
+      "id": "35e5a599f6",
+      "title": "Senior R&D Electrical Engineer",
+      "company": "Halo Industries, Inc.",
+      "location": "Santa Clara, CA, US",
+      "remote": false,
+      "posted_date": "2026-05-04",
+      "description": "***The Company***\n\n\nHalo Industries, Inc., a pioneer in manufacturing innovation with light\\-based technologies, seeks a highly skilled Senior Electrical Engineer to join our dynamic team. Halo was founded in 2014 at Stanford University and is now moving into a production phase with significant funding secured in 2024\\. Our proprietary advancements replace traditional processes with novel laser\\-based equivalents offering higher quality, lower cost, and enhanced functionality. As we rapidly expand our operations, we're growing the team to oversee our transition from prototype to production.\n\n ***The Opportunity***\n\n\nThe Sr. R\\&D Electrical Engineer will operate in a dynamic, R\\&D environment developing semiconductor capital equipment in close collaboration with software, mechanical and process engineers. This role will lead the specification, design, build and validation of electrical systems for wafer processing equipment. The ideal candidate will have broad experience applying solid electrical engineering principles to equipment design and enjoy the opportunity to participate in the engineering process from definition through production.\n\n ***Role and Responsibilities:***\n\n* Partner closely with Software, Mechanical, and Process Engineers to define system requirements and ensure cross\\-functional integration of semiconductor capital equipment\n* Design electrical power distribution, device I/O control, interlock schemes and interface circuitry\n* Lead design reviews, risk assessments and DFMEA processes within a stage\\-gate process\n* Create and manage project schedules with strong ownership of deliverables\n* Collaborate with internal and external manufacturing partners to build, refine and release designs\n* Build, test, debug prototype machines and subsystems\n* Drive methodical multi\\-disciplinary root cause analysis when necessary\n* Elevate the team by sharing your expertise and guiding other team members\n\n  \n\n**Requirements** ***Basic Qualifications***\n\n* BSEE with 7\\+ years or MSEE with 5\\+ years experience in equipment design\n* Experience with electrical engineering fundamentals with demonstrated expertise in machine design\n* Experience with design of electrical power distribution, I/O control systems, interlock design, motion control subsystems for capital equipment\n* Experience with electrical system and PCBA design tools (Autocad Electrical, Altium, SPICE)\n* Strong working knowledge and proficiency to apply industry standards such as NFPA79 and UL 508A\n* Experience with lab tools (oscilloscope, DVM, logic analyzers, hand tools)\n* Experience with build, test, debug of prototype power panels, PCBAs, cables, I/O systems, computers\n* Experience working effectively with PLM and ERP systems to manage BOMs, ECOs\n\n ***Preferred Qualifications***\n\n* Proficiency to diagnose and resolve complex, cross\\-functional hardware and embedded system issues\n* Experience developing semiconductor capital equipment to SEMI S2, S22 standards\n* Analog circuit and FPGA design and modeling experience\n* Experience integrating EtherCAT and safety PLC systems\n* Experience with industrial computer, OS integration and configuration\n* Experience integrating motion control or high power laser systems\n* Proficient with mechanical CAD (SolidWorks or similar)\n* Experience with test automation and data analysis techniques\n* Experience with structured methods for root cause analysis and problem\\-solving\n* Excellent leadership, problem\\-solving, and cross\\-functional collaboration skills\n* Strong technical acumen, communication and presentation skills: capable of engaging in detailed technical discussions while simplifying complex topics for broader audiences\n\n  \n\n**Benefits**  \n\n* Health Care Plan (Medical, Dental \\& Vision)\n* Retirement Plan (401k, IRA)\n* Paid Time Off (Vacation, Sick \\& Public Holidays)\n* Family Leave (Maternity, Paternity)\n* Stock Option Plan\n* Health Care Plan (Medical, Dental \\& Vision)\n* Retirement Plan (401k, IRA)\n* Paid Time Off (Vacation, Sick \\& Public Holidays)\n* Life Insurance (Basic, Voluntary \\& AD\\&D)\n* Family Leave (Maternity, Paternity)\n* Free Food \\& Snacks\n* Stock Option Plan\n* Short Term \\& Long Term Disability\n* Base salary $115,000 \\- $140,000\n\n*Additional Information*\n\n\nWe are committed to creating an inclusive workplace where all team members feel valued and supported. We welcome applicants from diverse backgrounds, including those from underrepresented communities in STEM. If you meet most of the qualifications and are excited about this opportunity, we encourage you to apply.",
+      "requirements": [],
+      "salary_range": "$115,000\u2013$140,000/yearly",
+      "application_url": "https://www.indeed.com/viewjob?jk=b6ba4d0867be9e4f",
+      "platform": "indeed",
+      "source": "jobspy",
+      "experience_level": "senior",
+      "education_required": "masters",
+      "citizenship_required": "unknown",
+      "url_status": "broken"
+    },
+    {
+      "id": "7c6fb17a3d",
+      "title": "AI Inference Infrastructure Software Engineer (Kubernetes / Cloud)",
+      "company": "nan",
+      "location": "Seattle, WA, US",
+      "remote": false,
+      "posted_date": "2026-05-03",
+      "description": "**Location:** Seattle, WA (Hybrid \\- 3 days/week in office)\n\n**About ElastixAI:**\n\n\nElastixAI is an early\\-stage Software startup on a mission to reinvent AI inference infrastructure from the ground up. We're building a next\\-generation inference platform that delivers unprecedented efficiency by tightly integrating machine learning, software stack, and custom hardware. Our philosophy is simple: the best performance comes from holistic co\\-design, where every layer, from model architecture to kernels to silicon, works in harmony.\n\n\nIf you're excited about pushing AI performance to physical limits and shaping the future of large\\-scale inference, we'd love to meet you.\n\n**Role Summary:**\n\n\nWe're looking for an Inference Infrastructure Software Engineer to own and evolve the cloud and Kubernetes backbone behind our **Token\\-as\\-a\\-Service** platform. You'll be the connective tissue between our inference engine and the production environments where customers actually consume tokens \u2014 making sure our accelerated workloads run reliably, scale predictably, and deploy seamlessly across managed and self\\-hosted clusters.\n\n\nThis is a hands\\-on role with broad surface area. You'll touch everything from cluster bring\\-up, automating the software releases, and AI Accelerator scheduling to service reliability and cost optimization, working closely with our ML, runtime, and hardware teams to expose the full performance of our co\\-designed stack to end users.\n\n**Key Responsibilities:**\n\n* Build, operate, and evolve ElastixAI's Kubernetes infrastructure powering our Token\\-as\\-a\\-Service capability.\n* Run accelerated inference workloads in production at scale, with strong SLAs around latency, throughput, and availability.\n* Manage and harden our AWS, GCP, and on\\-prem infrastructure, including networking, storage, IAM, and observability layers tied to our services.\n* Develop tooling and automation in Python, Bash, Rust, and Go to streamline deployments, rollouts, autoscaling, and incident response.\n* Partner with the ML and runtime teams to productionize new inference capabilities, model deployments, and routing strategies.\n* Contribute to capacity planning, cost optimization, and reliability engineering across multi\\-cloud and self\\-hosted environments.\n* Help define the platform roadmap as we scale from early customers to broad production deployments.\n* Be a member of the Elastix On\\-Call rotation\n\n**Required Qualifications:**\n\n* Minimum BS in Computer Science, Software Engineering, or a related field.\n* 3\u20135 years of hands\\-on Kubernetes experience, including EKS, GKE, and/or self\\-hosted clusters.\n* 2\u20133 years of production experience operating workloads on AWS or GCP.\n* Proven track record running ML or inference services at scale on Kubernetes in production.\n* Strong experience running accelerated workloads in Kubernetes, scheduling, drivers, device plugins, MIG, networking, and storage considerations.\n* Solid coding skills in Python, Bash and proficiency in Go\n* Proficient in configuring and leveraging Linux OS in production\n* Experience with infrastructure\\-as\\-code (Terraform, Pulumi), OS configuration state (Ansible, Puppet, Salt) and GitOps workflows (Argo CD, Flux).\n* Experience in OS configuration tooling.\n* Familiarity with AI inference and/or training workflows and the operational patterns around them.\n* Pragmatic, ownership\\-oriented mindset; comfortable operating in early\\-stage ambiguity and shipping iteratively.\n\n**Preferred/Bonus Qualifications:**\n\n* MS/PhD in Computer Science, Software Engineering, or a related field.\n* Experience with inference servers and runtimes (e.g., Triton, vLLM, TGI) and model\\-serving patterns (batching, streaming, KV\\-cache aware routing).\n* Exposure to heterogeneous accelerators beyond GPUs (FPGAs, custom ASICs).\n* Background in observability, SRE, or performance engineering for latency\\-sensitive services.\n* Experience building customer facing API platforms including onboarding, API keys/auth management, and usage metering.\n\n**What We Offer:**\n\n* A chance to be a foundational engineer in an innovative AI startup.\n* A dynamic and collaborative work environment and the change to have a significant impact on new technology\n* The opportunity to work on challenging problems at the intersection of ML, software, and systems.\n* Competitive compensation and startup equity package\n* Comprehensive medical, dental, and vision coverage (premiums 100% paid by employer)\n* Flexible Time Off (FTO)\n* Paid parental leave\n* Gym or fitness benefit\n* Commuter benefit\n* Investment in employee learning \\& development",
+      "requirements": [],
+      "salary_range": "Unknown",
+      "application_url": "https://www.indeed.com/viewjob?jk=9410268a0812e3ed",
+      "platform": "indeed",
+      "source": "jobspy",
+      "experience_level": "unknown",
+      "education_required": "phd",
+      "citizenship_required": "unknown",
+      "url_status": "broken"
+    },
+    {
+      "id": "becd923b85",
+      "title": "Application-Specific Integrated Circuit (ASIC) Engineer Internship \u2013 2026 (US)",
+      "company": "Amazon",
+      "location": "Seattle, WA",
+      "remote": false,
+      "posted_date": "2026-04-28",
+      "description": "nan",
+      "requirements": [],
+      "salary_range": "Unknown",
+      "application_url": "https://www.linkedin.com/jobs/view/4340151834",
+      "platform": "linkedin",
+      "source": "jobspy",
+      "experience_level": "internship",
+      "education_required": "unknown",
+      "citizenship_required": "unknown",
+      "url_status": "ok"
+    },
+    {
+      "id": "2ce6292a2d",
+      "title": "(Fall 2026) Annapurna Labs at AWS Internship (US) - Machine Learning Systems & Silicon Innovation",
+      "company": "Amazon Web Services",
+      "location": "Seattle, WA, US",
+      "remote": false,
+      "posted_date": "2026-04-21",
+      "description": "**DESCRIPTION**\n---------------\n\n\nWhat if you could help build something that's never existed before? At Annapurna Labs, an Amazon company, we're not just participating in the AI revolution, we're accelerating it. We design custom silicon and revolutionary software systems that were considered impossible just yesterday, powering the world's most advanced AI infrastructure at AWS. From training the largest language models on Earth to developing breakthrough ML accelerator chips, we're inventing the future of cloud computing.  \n\n  \n\nWe're seeking bold innovators and builders for our Fall 2026 internship program. At Annapurna Labs, you'll work on projects that directly impact millions of AWS customers worldwide, tackling real technical challenges that push the boundaries of what's possible in AI acceleration. Our program offers multiple technical tracks, matching your skills and interests with projects across our organization.\n  \n\n  \n\nSome of our technical placements include:  \n\n  \n\n* Framework Optimization (PyTorch, JAX)\n* Compiler Development \\& Optimization\n* Distributed Training Systems\n* Performance Engineering\n* ML Infrastructure Development\n* Firmware \\& Driver Development\n* Runtime Systems\n* Fleet Management \\& Automation\n* Hardware/Software Integration\n* Performance Analysis Tools\n* RTL Development for ML Accelerators\n* Hardware Architecture \\& Modeling\n* Physical Design \\& Power Optimization\n* Custom Circuit Design\n* Pre/Post Silicon Validation\n\n  \n\nYour placement will be determined through our interview process, taking into account your technical background, interests, and the exciting projects we have in development. One application opens the door to all these opportunities, so we'll work together to find where you can learn the most and have the biggest impact.  \n\n  \n\nNOTE: Accepting applications for Fall 2026 ONLY. Must be available for a minimum of 40 hours per week, for 12\\-weeks of in\\-person employment.  \n\n  \n\nAbout the team  \n\nAt Annapurna Labs, our internship program is built on a foundation of meaningful work and genuine mentorship. You'll be part of a diverse cohort of interns from universities nationwide, each bringing unique perspectives to our mission of accelerating AI innovation. What sets us apart? Many of our senior engineers began their careers as interns here, creating a culture where mentorship isn't just a program \\- it's part of our DNA. Your experience will blend hands\\-on technical work with opportunities to connect with fellow interns through team events, tech talks, and social activities. We're proud that many of our interns return as full\\-time engineers, continuing to push the boundaries of what's possible in AI acceleration.**BASIC QUALIFICATIONS**\n------------------------\n\n* Work 40 hours/week minimum and commit to 12 week internship maximum\n* Currently pursuing a BS, MS, or PhD in Computer Science, Computer Engineering, Electrical Engineering, or related technical field\n* Must be enrolled in a full\\-time degree program at time of application and returning to school after the internship\n* Programming experience in C, C\\+\\+, Python, or similar languages\n* Experience in two or more of the following areas: 1\\. Systems programming or low\\-level software development 2\\. Compiler design or optimization 3\\. Machine learning frameworks (PyTorch, JAX, TensorFlow) 4\\. Distributed systems or parallel computing 5\\. Performance analysis and optimization 6\\. Hardware design (RTL, Verilog, FPGA development)\n\n**PREFERRED QUALIFICATIONS**\n----------------------------\n\n* Previous internship, research, or project experience in hardware/software co\\-design, ML systems, or computer architecture\n* Contributions to open\\-source projects or research publications\n* Completed or currently enrolled in coursework covering machine learning, parallel computing, computer architecture and/or compiler construction\n\n  \n\nAmazon is an equal opportunity employer and does not discriminate on the basis of protected veteran status, disability, or other legally protected status.  \n\n  \n\nLos Angeles County applicants: Job duties for this position include: work safely and cooperatively with other employees, supervisors, and staff; adhere to standards of excellence despite stressful conditions; communicate effectively and respectfully with employees, supervisors, and staff to ensure exceptional customer service; and follow all federal, state, and local laws and Company policies. Criminal history may have a direct, adverse, and negative relationship with some of the material job duties of this position. These include the duties and responsibilities listed above, as well as the abilities to adhere to company policies, exercise sound judgment, effectively manage stress and work safely and respectfully with others, exhibit trustworthiness and professionalism, and safeguard business operations and the Company\u2019s reputation. Pursuant to the Los Angeles County Fair Chance Ordinance, we will consider for employment qualified applicants with arrest and conviction records.  \n\n  \n\nOur inclusive culture empowers Amazonians to deliver the best results for our customers. If you have a disability and need a workplace accommodation or adjustment during the application and hiring process, including support for the interview or onboarding process, please visit https://amazon.jobs/content/en/how\\-we\\-hire/accommodations for more information. If the country/region you\u2019re applying in isn\u2019t listed, please contact your Recruiting Partner.  \n\nThe starting pay for this position is listed below. Final starting pay will be based on factors including experience, qualifications, and location. Starting Day 1 of employment, Amazon offers EAP, Mental Health Support, Medical Advice Line, 401(k) matching. Learn more about our benefits at https://hiring.amazon.com/why\\-amazon/benefits.\n\n  \n\nUSA, CA, Cupertino \\- 127,100\\.00 \\- 185,000\\.00 USD annually  \n\nUSA, TX, AUSTIN \\- 110,500\\.00 \\- 160,000\\.00 USD annually  \n\nUSA, TX, Austin \\- 110,500\\.00 \\- 160,000\\.00 USD annually  \n\nUSA, WA, SEATTLE \\- 110,500\\.00 \\- 160,000\\.00 USD annually  \n\nUSA, WA, Seattle \\- 110,500\\.00 \\- 160,000\\.00 USD annually",
+      "requirements": [],
+      "salary_range": "$110,500\u2013$185,000/yearly",
+      "application_url": "https://www.indeed.com/viewjob?jk=45a1e4e7fba8ab28",
+      "platform": "indeed",
+      "source": "jobspy",
+      "experience_level": "internship",
+      "education_required": "phd",
+      "citizenship_required": "no",
+      "url_status": "broken"
+    },
+    {
+      "id": "34f39786e2",
+      "title": "FPGA Engineer",
+      "company": "Inceed",
+      "location": "Overland Park, KS",
+      "remote": false,
+      "posted_date": "nan",
+      "description": "nan",
+      "requirements": [],
+      "salary_range": "Unknown",
+      "application_url": "https://www.linkedin.com/jobs/view/4406216788",
+      "platform": "linkedin",
+      "source": "jobspy",
+      "experience_level": "unknown",
+      "education_required": "unknown",
+      "citizenship_required": "unknown",
+      "url_status": "ok"
+    }
+  ]
+}

@@ -108,7 +108,10 @@ def migrate_db_path() -> None:
 
 
 # Run the migration at import time so the rest of the app sees the new path.
-migrate_db_path()
+# Tests set JOBS_AI_SKIP_MIGRATION=1 to neutralize this import-time side effect.
+import os as _os_for_migration
+if not _os_for_migration.environ.get("JOBS_AI_SKIP_MIGRATION"):
+    migrate_db_path()
 
 console = Console()
 

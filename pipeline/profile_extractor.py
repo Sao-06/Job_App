@@ -56,8 +56,27 @@ def scan_profile(resume_text: str) -> dict:
     github = _normalize_url(_first(
         r"(?:https?://)?(?:[\w]+\.)?github\.com/[\w\-_./]+", text, re.I,
     ))
+    # Industry-specific profile sites. Each pattern is:
+    # 1) tolerant of optional `https://` and optional `www.`,
+    # 2) anchored on the canonical hostname so partial substring junk doesn't
+    #    false-positive (e.g. `crunchbase.com/discover/...` is NOT a person URL),
+    # 3) keyed under a stable name the frontend & merge layer can round-trip.
+    industry_links = _scan_industry_links(text)
+    # Any URL that doesn't match the recognized industry sites is treated as
+    # the user's personal website. The exclusion list now spans every site we
+    # already pull out separately so we don't double-store the same profile.
     website = _first(
-        r"https?://(?!(?:www\.)?(?:linkedin|github|gitlab|bitbucket|google|gmail|yahoo|outlook|hotmail)\.)[\w\-./]+\.[a-z]{2,}[\w\-./]*",
+        r"https?://(?!(?:www\.)?("
+        r"linkedin|github|gitlab|bitbucket|google|gmail|yahoo|outlook|hotmail|"
+        r"stackoverflow|stackexchange|leetcode|kaggle|huggingface|hf|"
+        r"paperswithcode|dribbble|behance|artstation|sketchfab|"
+        r"medium|substack|youtube|vimeo|soundcloud|bandcamp|"
+        r"scholar\.google|orcid|researchgate|academia|"
+        r"instagram|flickr|500px|imdb|"
+        r"wellfound|angel|crunchbase|producthunt|"
+        r"twitter|x\.com|mastodon|bsky|threads|"
+        r"doximity|muckrack|martindale"
+        r")\.)[\w\-./]+\.[a-z]{2,}[\w\-./]*",
         text, re.I,
     )
 
@@ -142,8 +161,120 @@ def scan_profile(resume_text: str) -> dict:
         "resume_gaps": gaps,
         "work_authorization": "",
         "target_salary": "",
+        # Industry-specific profile URLs detected from the resume. Stored as a
+        # flat dict so the frontend can render them by category and so future
+        # additions don't require a new top-level key per site. The keys are
+        # stable identifiers (see PROFILE_LINK_KEYS); empty strings are kept
+        # for fields we looked for but didn't find — that lets the merge layer
+        # tell "regex tried and gave up" apart from "field doesn't exist".
+        "links": industry_links,
         "_extraction_method": "heuristic",
     }
+
+
+# Stable identifiers for industry-specific profile sites. Used by the
+# frontend to render labeled inputs in the correct category and by the
+# heuristic + merge layers to round-trip values without colliding.
+# Keep this list and PROFILE_LINK_PATTERNS in lock-step.
+PROFILE_LINK_KEYS: tuple[str, ...] = (
+    # Universal
+    "twitter",
+    # Software & Engineering
+    "gitlab", "stackoverflow", "leetcode",
+    # Data Science & ML/AI
+    "kaggle", "huggingface", "paperswithcode",
+    # Design & Creative
+    "dribbble", "behance", "artstation", "sketchfab",
+    # Writing & Content
+    "medium", "substack",
+    # Academic & Research
+    "google_scholar", "orcid", "researchgate", "academia",
+    # Visual & Photography
+    "instagram", "flickr", "500px",
+    # Video & Audio
+    "youtube", "vimeo", "soundcloud", "bandcamp",
+    # Business & Startups
+    "wellfound", "crunchbase", "producthunt",
+    # Industry-specific
+    "doximity",      # healthcare
+    "muckrack",      # journalism
+    "imdb",          # film / TV
+    "martindale",    # legal
+)
+
+# (key, regex) — patterns are case-insensitive, accept optional https://www.
+# prefixes, and are anchored on a unique substring of the canonical URL so
+# generic landing-page mentions (e.g. "powered by Hugging Face") don't match.
+PROFILE_LINK_PATTERNS: tuple[tuple[str, str], ...] = (
+    # Universal — tolerate both old twitter.com and new x.com hosts
+    ("twitter",        r"(?:https?://)?(?:[\w]+\.)?(?:twitter|x)\.com/[A-Za-z0-9_]{1,15}\b"),
+
+    # Software / Engineering
+    ("gitlab",         r"(?:https?://)?(?:[\w]+\.)?gitlab\.com/[\w\-./]+"),
+    ("stackoverflow",  r"(?:https?://)?(?:[\w]+\.)?stackoverflow\.com/users/\d+(?:/[\w\-]+)?"),
+    ("leetcode",       r"(?:https?://)?(?:[\w]+\.)?leetcode\.com/(?:u/)?[\w\-]+/?"),
+
+    # Data Science / ML
+    ("kaggle",         r"(?:https?://)?(?:[\w]+\.)?kaggle\.com/[\w\-]+/?"),
+    ("huggingface",    r"(?:https?://)?(?:[\w]+\.)?(?:huggingface\.co|hf\.co)/[\w\-]+/?"),
+    ("paperswithcode", r"(?:https?://)?(?:[\w]+\.)?paperswithcode\.com/(?:author|user)/[\w\-]+/?"),
+
+    # Design & Creative
+    ("dribbble",       r"(?:https?://)?(?:[\w]+\.)?dribbble\.com/[\w\-]+/?"),
+    ("behance",        r"(?:https?://)?(?:[\w]+\.)?behance\.net/[\w\-]+/?"),
+    ("artstation",     r"(?:https?://)?(?:[\w]+\.)?artstation\.com/[\w\-]+/?"),
+    ("sketchfab",      r"(?:https?://)?(?:[\w]+\.)?sketchfab\.com/[\w\-]+/?"),
+
+    # Writing / Content
+    ("medium",         r"(?:https?://)?(?:[\w\-]+\.)?medium\.com/(?:@?[\w\-.]+)/?"),
+    ("substack",       r"(?:https?://)?(?:[\w\-]+\.)substack\.com/?(?:[\w\-./@]*)?"),
+
+    # Academic / Research
+    ("google_scholar", r"(?:https?://)?scholar\.google\.(?:com|co\.[a-z]{2,3})/citations\?[\w\=&\-]*user=[\w\-]+"),
+    ("orcid",          r"(?:https?://)?(?:[\w]+\.)?orcid\.org/(?:\d{4}-){3}\d{3}[\dX]"),
+    ("researchgate",   r"(?:https?://)?(?:[\w]+\.)?researchgate\.net/profile/[\w\-]+"),
+    ("academia",       r"(?:https?://)?(?:[\w\-]+\.)?academia\.edu/[\w\-]+"),
+
+    # Visual / Photography
+    ("instagram",      r"(?:https?://)?(?:[\w]+\.)?instagram\.com/[\w\-_.]+/?"),
+    ("flickr",         r"(?:https?://)?(?:[\w]+\.)?flickr\.com/(?:people|photos)/[\w\-@.]+/?"),
+    ("500px",          r"(?:https?://)?(?:[\w]+\.)?500px\.com/(?:p/)?[\w\-]+/?"),
+
+    # Video / Audio
+    ("youtube",        r"(?:https?://)?(?:[\w]+\.)?youtube\.com/(?:@[\w\-]+|c/[\w\-]+|user/[\w\-]+|channel/[\w\-]+)/?"),
+    ("vimeo",          r"(?:https?://)?(?:[\w]+\.)?vimeo\.com/[\w\-]+/?"),
+    ("soundcloud",     r"(?:https?://)?(?:[\w]+\.)?soundcloud\.com/[\w\-]+/?"),
+    ("bandcamp",       r"(?:https?://)?[\w\-]+\.bandcamp\.com/?"),
+
+    # Business / Startups
+    ("wellfound",      r"(?:https?://)?(?:[\w]+\.)?(?:wellfound|angel)\.(?:com|co)/u/[\w\-]+/?"),
+    ("crunchbase",     r"(?:https?://)?(?:[\w]+\.)?crunchbase\.com/person/[\w\-]+/?"),
+    ("producthunt",    r"(?:https?://)?(?:[\w]+\.)?producthunt\.com/(?:@|users/)[\w\-]+/?"),
+
+    # Industry-specific
+    ("doximity",       r"(?:https?://)?(?:[\w]+\.)?doximity\.com/pub/[\w\-]+/?"),
+    ("muckrack",       r"(?:https?://)?(?:[\w]+\.)?muckrack\.com/[\w\-]+/?"),
+    ("imdb",           r"(?:https?://)?(?:[\w]+\.)?imdb\.com/name/nm\d+/?"),
+    ("martindale",     r"(?:https?://)?(?:[\w]+\.)?martindale\.com/attorney/[\w\-]+/?"),
+)
+
+
+def _scan_industry_links(text: str) -> dict[str, str]:
+    """Run every PROFILE_LINK_PATTERNS regex against `text` and return a
+    dict of the matched URLs. Keys missing from the resume are simply
+    absent (we don't pre-fill empty strings — the frontend treats absence
+    as "blank input")."""
+    if not text:
+        return {}
+    out: dict[str, str] = {}
+    for key, pat in PROFILE_LINK_PATTERNS:
+        m = re.search(pat, text, re.IGNORECASE)
+        if not m:
+            continue
+        url = _normalize_url(m.group(0).rstrip(",.;:)"))
+        if url:
+            out[key] = url
+    return out
 
 
 def merge_profiles(heuristic: dict, llm: dict | None) -> dict:
@@ -191,6 +322,20 @@ def merge_profiles(heuristic: dict, llm: dict | None) -> dict:
     # Make sure 'experience' / 'work_experience' stay aligned for back-compat.
     if not out.get("experience") and out.get("work_experience"):
         out["experience"] = out["work_experience"]
+
+    # Industry-specific profile links: regex wins on a per-key basis (URL
+    # patterns are deterministic), but the LLM is allowed to fill any key
+    # the regex didn't find. The LLM may also have stuffed an unknown link
+    # into a freeform spot — we tolerate any key it produced.
+    h_links = dict(out.get("links") or {})
+    l_links = llm.get("links") or {}
+    if isinstance(l_links, dict):
+        for k, v in l_links.items():
+            if not isinstance(v, str) or not v.strip():
+                continue
+            if not h_links.get(k):
+                h_links[k] = v.strip()
+    out["links"] = h_links
 
     out["_extraction_method"] = "heuristic+llm"
     if isinstance(llm.get("_audit_log"), list):

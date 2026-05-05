@@ -76,12 +76,25 @@ Job_App/
 - `users.plan_tier` is `'free'` | `'pro'` (default `'free'`). Mirrors the `is_developer` end-to-end pattern: DB column → `auth_user` dict → `/api/state` → `state.plan_tier` / `state.is_pro`.
 - **Gate**: `POST /api/config` returns 402 if `body.mode === 'anthropic'` and the caller is non-Pro and non-dev. A belt-and-suspenders check inside `_run_phase_sse` aborts SSE phase runs with `code: 'plan_required'` if state was set before a downgrade.
 - Free tier covers Demo + local Ollama (full pipeline). Pro unlocks Anthropic Claude. BYOK — Pro users still paste their own `ANTHROPIC_API_KEY`.
-- Flip a user via `_user_store.set_user_plan_tier(user_id, 'pro')` or via the Dev Ops Sessions tab → PLAN panel → GRANT PRO. The dev endpoint is `POST /api/dev/users/{user_id}/plan` with `{tier}`. There is no Stripe wiring yet — the upgrade button on the Plans page POSTs a feedback record so the admin can flip it manually.
+- **Manual flip** (ops escape, comp Pro for testers): `_user_store.set_user_plan_tier(user_id, 'pro')` or Dev Ops Sessions → PLAN panel → GRANT PRO. Dev endpoint is `POST /api/dev/users/{user_id}/plan` with `{tier}`. The shared helper `_apply_plan_change(user_id, tier)` in `app.py` is the single source of truth — it writes the DB column AND refreshes every cached `auth_tokens.user_json` so the next `/api/state` poll reflects the change without re-login.
+
+### Stripe billing (Pro $4/month) — ⚠️ backend wired, frontend parked
+- **Status**: the entire server-side flow exists and compiles, but the SPA Plans page deliberately still uses the legacy `requestUpgrade` feedback stub (admin manually flips `plan_tier`). Flipping to live billing is purely a frontend swap once the Stripe account is provisioned — no backend changes required.
+- **Setup once** (when ready to go live): `pip install stripe`, set `STRIPE_SECRET_KEY` in `.env`, run `python scripts/setup_stripe.py` to create the Product + recurring Price. Paste the printed `STRIPE_PRICE_ID_PRO_MONTHLY` and the `STRIPE_WEBHOOK_SECRET` (from `stripe listen` for dev, dashboard for prod) into `.env`. Then in `frontend/app.jsx` `PlansPage`, swap `requestUpgrade` for `startCheckout`/`openPortal` (the comment in the code marks the spot).
+- **Endpoints** (in `app.py`, all auth-gated except the webhook):
+  - `POST /api/billing/checkout` → creates subscription-mode Checkout Session, returns `{url}` for the SPA to redirect to. Already-Pro callers get 409. Returns 503 until `STRIPE_PRICE_ID_PRO_MONTHLY` is set.
+  - `POST /api/billing/portal` → returns a Stripe Customer Portal URL. 404s for users with no `stripe_customer_id` yet.
+  - `POST /api/webhooks/stripe` → HMAC-signature verified. NOT cookie-authenticated. Handles `checkout.session.completed` (links customer/subscription IDs to user only — does NOT flip plan_tier), `customer.subscription.created` / `.updated` (drives plan_tier from `subscription.status`), `customer.subscription.deleted` (flips back to free).
+- **Source of truth**: the Stripe webhook is what flips `plan_tier`. The success URL redirect alone is just a UI hint — `/api/state` keeps reporting `free` until the webhook fires (typically <5s).
+- **State exposure**: `/api/state` includes `billing_configured` (server-side feature flag — false when `STRIPE_PRICE_ID_PRO_MONTHLY` is unset) and `has_billing_customer` (true when the user has gone through Checkout at least once — gates the Manage Subscription button on the Plans page once that UI is wired back in).
+- **Module layout**: SDK is wrapped in `pipeline/stripe_billing.py` (lazy import, raises `RuntimeError` when key/SDK missing). User store gained `stripe_customer_id` + `stripe_subscription_id` columns and helpers (`set_user_stripe_customer`, `set_user_subscription`, `get_user_by_stripe_customer`, `refresh_user_plan_in_tokens`).
+- **Webhook URL must be publicly reachable.** For local dev: `stripe listen --forward-to http://localhost:8000/api/webhooks/stripe`. For Tailscale Funnel: enable Funnel on the node (plain Tailnet alone won't reach Stripe). The dev `stripe listen` webhook secret is DIFFERENT from the dashboard endpoint secret — match the env to the active source of events.
+- **Middleware**: `/api/webhooks/stripe` is in the `skip_save` list so Stripe deliveries don't churn anonymous session_state rows.
 
 ### Route inventory (high-level)
 - **Static**: `GET /` (landing), `GET /app` (SPA), `GET /frontend/{f}`, `GET /output/{path}` (sandboxed download).
 - **Auth**: `POST /api/auth/{login,signup,logout}`, `GET /api/auth/google`, `GET /api/auth/google/callback`.
-- **Resume**: `POST /api/resume/upload`, `POST /api/resume/demo`, `GET /api/resume/content`, `POST /api/resume/text`, `DELETE /api/resume/{id}`, `POST /api/resume/primary/{id}`, `POST /api/resume/rename/{id}`.
+- **Resume**: `POST /api/resume/upload`, `POST /api/resume/demo`, `GET /api/resume/content`, `POST /api/resume/text`, `DELETE /api/resume/{id}`, `POST /api/resume/primary/{id}`, `POST /api/resume/rename/{id}`, `POST /api/resume/tailor` (per-job on-demand tailoring; same shape as one phase-4 item).
 - **Config / state**: `POST /api/config` (whitelisted keys only — see below), `GET /api/state`, `POST /api/reset`.
 - **Profile**: `GET /api/profile`, `POST /api/profile`, `POST /api/profile/extract`.
 - **Jobs / feedback**: `POST /api/jobs/action`, `POST /api/feedback`.

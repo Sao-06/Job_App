@@ -19,5 +19,8 @@ google-auth-oauthlib>=1.2.0
 python-dotenv>=1.0.0
 apscheduler>=3.10.0
 
+# Stripe billing (Pro plan checkout + webhook)
+stripe>=8.0.0
+
 # Optional: needed for --ollama mode only
 openai>=1.0.0

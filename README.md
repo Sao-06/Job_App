@@ -376,7 +376,7 @@ These are stored in session state and editable from the **Settings** page or via
 | `days_old` | `30` | Drop postings older than this |
 | `cover_letter` | `false` | Generate cover letters |
 | `blacklist` | `""` | Comma-separated companies to drop |
-| `whitelist` | `"NVIDIA, Apple, Microsoft, Intel, IBM, Micron, Samsung, TSMC"` | Always surfaced regardless of score |
+| `whitelist` | `""` | Comma-separated priority companies — boosted in ranking when present |
 | `experience_levels` | `["internship", "entry-level"]` | Allowed seniority bands |
 | `education_filter` | `["bachelors"]` | Education levels you hold |
 | `include_unknown_education` | `true` | Keep jobs with unknown education req. |

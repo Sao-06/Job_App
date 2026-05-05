@@ -159,7 +159,19 @@ def compute_skill_coverage(job: dict, profile: dict) -> tuple[float, list, list]
         return result
 
     reqs = [str(r).strip() for r in (job.get("requirements") or []) if r]
+    # Reqs that look like ingestion seed strings ("[seed] internship role")
+    # are noise — they pollute the haystack without telling us anything about
+    # the actual JD. Drop them so coverage isn't dragged toward zero by a row
+    # whose only "requirement" is the placeholder we wrote at fetch time.
+    reqs = [r for r in reqs if not r.lower().startswith("[seed]")]
+    title = str(job.get("title") or "").lower()
+    # Include the title in the haystack. Most ingested rows store metadata
+    # only — empty description, no real requirements — so the title is the
+    # only signal we have. Without this, "FPGA Digital Design Verification
+    # Intern" with no body matches nothing for a candidate whose top skill
+    # is FPGA. Title weight is naturally bounded by token count vs body.
     full_haystack = " ".join([
+        title,
         " ".join(reqs).lower(),
         str(job.get("description") or "").lower(),
     ]).strip()
@@ -175,17 +187,48 @@ def compute_skill_coverage(job: dict, profile: dict) -> tuple[float, list, list]
         if s_lower in full_haystack or (s_tokens and s_tokens.issubset(haystack_tokens)):
             matched.append(s_orig)
 
-    if not full_haystack:
-        coverage = 0.3
+    # Coverage = fraction of THIS JOB's stated requirements that the user
+    # satisfies. Using len(skills) as the denominator (the previous behavior)
+    # penalized broad profiles — a 30-skill candidate satisfying 3 of 3 reqs
+    # scored 0.10, not 1.00, which crushed the entire downstream scale.
+    missing: list = []
+    if reqs:
+        matched_reqs = 0
+        for r in reqs:
+            r_lower = r.lower()
+            covered = False
+            for s_lower in skills_lower:
+                if s_lower in r_lower or r_lower in s_lower:
+                    covered = True
+                    break
+            if not covered:
+                r_tokens = {t for t in _tokenize(r_lower) if len(t) >= 3}
+                if r_tokens and any(
+                    r_tokens & {t for t in _tokenize(s) if len(t) >= 3}
+                    for s in skills_lower
+                ):
+                    covered = True
+            if covered:
+                matched_reqs += 1
+            else:
+                missing.append(r.title())
+        coverage = matched_reqs / len(reqs)
+    elif full_haystack:
+        # No structured reqs — saturate at ~5 distinct user-skill mentions in
+        # the title/description so jobs without tags aren't pinned to 0.
+        coverage = min(1.0, len(matched) / 5.0) if matched else 0.1
     else:
-        coverage = len(matched) / max(len(skills), 1)
-        # Small floor so 0 matches isn't always a hard 0 (synonyms etc.).
-        coverage = min(max(coverage, 0.1 if matched else 0.0), 1.0)
+        coverage = 0.3
 
-    missing = [
-        r.title() for r in reqs
-        if (rt := _tokenize(r)) and not (rt & skill_tokens)
-    ]
+    # Title-match boost. A skill appearing in the JOB TITLE is a much
+    # stronger signal than the same skill buried in a long description —
+    # an "FPGA Verification Engineer" posting is essentially announcing
+    # "we want someone who knows FPGA". Floor the coverage at 0.5 for a
+    # single title match, scaling up to ~0.85 for three.
+    if title and matched:
+        title_hits = sum(1 for s in matched if s.lower() in title)
+        if title_hits:
+            coverage = max(coverage, min(0.85, 0.5 + 0.15 * (title_hits - 1) + 0.15))
 
     result = (coverage, matched[:8], missing[:8])
     job["_skill_coverage"] = result
@@ -1290,8 +1333,23 @@ class DemoProvider(BaseProvider):
         return entries
 
     def _skills_from_text(self, text: str, limit: int = 40) -> list:
-        text_lower = text.lower()
-        found = [s for s in self.SKILL_KEYWORDS if s.lower() in text_lower]
+        """Scan *text* for tokens from the YAML lexicon, with word-boundary
+        matching so short tokens don't false-positive inside larger words
+        ('git' must not match in 'github', 'spice' must not match in
+        'spice up', 'rie' must not match in 'enterprise')."""
+        if not text:
+            return []
+        found: list[str] = []
+        for s in self.SKILL_KEYWORDS:
+            tok = (s or "").strip()
+            if not tok or len(tok) < 2:
+                continue
+            if re.search(r"\W", tok):
+                pattern = rf"(?<!\w){re.escape(tok)}(?!\w)"
+            else:
+                pattern = rf"\b{re.escape(tok)}\b"
+            if re.search(pattern, text, re.IGNORECASE):
+                found.append(tok)
         skill_display = {
             "verilog": "Verilog", "vhdl": "VHDL", "fpga": "FPGA", "spice": "SPICE",
             "matlab": "MATLAB", "python": "Python", "java": "Java", "latex": "LaTeX",
@@ -1315,7 +1373,7 @@ class DemoProvider(BaseProvider):
 
     @staticmethod
     def _summary_from_profile(name: str, titles: list, skills: list, experience: list, research: list) -> str:
-        role = titles[0] if titles else "engineering candidate"
+        role = titles[0] if titles else "candidate"
         skill_text = ", ".join(skills[:6])
         count = len(experience or []) + len(research or [])
         base = f"{name} is a {role}"
@@ -1324,6 +1382,53 @@ class DemoProvider(BaseProvider):
         if count:
             base += f" and {count} structured resume role(s) extracted for job matching"
         return base + "."
+
+    @staticmethod
+    def _skills_from_skills_section(sections: dict, limit: int = 30) -> list[str]:
+        """Field-agnostic fallback: when the YAML lexicon misses everything
+        (e.g. a marketing/finance/healthcare resume in demo mode), pull tokens
+        directly from the resume's own Skills section.
+
+        Splits on commas, semicolons, slashes, pipes, and bullet markers so
+        "SEO, Salesforce, HubSpot · Tableau" yields four entries. Strips
+        category-label prefixes like "Tools:" / "Languages:" so they don't
+        leak into the skill list.
+
+        Returns an empty list when no Skills section exists — callers MUST
+        accept that and not synthesize hardware-flavored placeholders.
+        """
+        lines = sections.get("skills") or []
+        if not lines:
+            return []
+        out: list[str] = []
+        seen: set[str] = set()
+        label_prefix = re.compile(
+            r"^\s*(?:tools?|languages?|frameworks?|technologies|tech|stack|skills?|"
+            r"software|hardware|libraries|platforms?|databases?|cloud|other)\s*[:\-–]\s*",
+            re.IGNORECASE,
+        )
+        for raw in lines:
+            line = label_prefix.sub("", str(raw or "")).strip()
+            line = line.lstrip("•-*–—· ").strip()
+            if not line:
+                continue
+            for tok in re.split(r"[,;|/]+|\s•\s|\s·\s", line):
+                t = tok.strip().strip(".").strip()
+                # Ignore very long / very short shards.
+                if not t or len(t) < 2 or len(t) > 40:
+                    continue
+                # Drop trailing parenthetical years / proficiencies.
+                t = re.sub(r"\s*\([^)]*\)\s*$", "", t).strip()
+                if not t:
+                    continue
+                key = t.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append(t)
+                if len(out) >= limit:
+                    return out
+        return out
 
     def extract_profile(self, resume_text: str, preferred_titles: list = None,
                         heuristic_hint: dict = None) -> dict:  # noqa: ARG002
@@ -1341,13 +1446,26 @@ class DemoProvider(BaseProvider):
         phone_match = re.search(r'(\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}', resume_text)
         phone = phone_match.group() if phone_match else ""
 
+        # Pre-split sections so the skill-fallback path can see the resume's
+        # own Skills block when the YAML lexicon doesn't recognise anything
+        # (e.g. a marketing or finance resume in demo mode).
+        sections = self._split_sections(resume_text)
+
         hard_skills = self._skills_from_text(resume_text)
         if not hard_skills:
-            hard_skills = ["MATLAB", "Python", "Verilog", "FPGA", "SPICE"]
+            # Field-agnostic fallback. NEVER synthesize a hardcoded list — a
+            # marketing resume should NOT come out the other side claiming
+            # MATLAB/Verilog/FPGA expertise. Better to surface an empty
+            # skill list and let the user know demo mode is field-narrow.
+            hard_skills = self._skills_from_skills_section(sections)
 
         name = _extract_name_from_text(resume_text)
         location = _extract_location_from_text(resume_text)
 
+        # Title inference — fires only on word-boundary matches against the
+        # *extracted* hard skills (not raw text), so a resume that merely
+        # mentions "spice" inside "spice up your campaigns" can't be tagged
+        # as an IC Design candidate.
         title_map = {
             "fpga":          "FPGA/Hardware Engineering Intern",
             "photolithography": "Photonics Engineering Intern",
@@ -1361,15 +1479,17 @@ class DemoProvider(BaseProvider):
             "semiconductor": "Semiconductor Process Engineering Intern",
             "thin film":     "Thin Film / Materials Engineering Intern",
         }
-        inferred = list({title_map[k] for k in title_map if k in text_lower})
+        skill_keys = {s.lower() for s in hard_skills}
+        inferred = sorted({title_map[k] for k in title_map if k in skill_keys})
         seen: set = set()
         target_titles: list = []
         for t in (preferred_titles or []) + inferred:
             if t not in seen:
                 seen.add(t)
                 target_titles.append(t)
-        if not target_titles:
-            target_titles = ["IC Design Engineering Intern", "Hardware Engineering Intern"]
+        # Empty target_titles is a valid state — Phase 2 falls back to the
+        # user-configured `job_titles` setting. Never inject hardware
+        # placeholders for non-hardware resumes.
 
         gaps = []
         if "summary" not in text_lower and "objective" not in text_lower:
@@ -1377,8 +1497,7 @@ class DemoProvider(BaseProvider):
         if not re.search(r'\d+%|\d+ students|\d+ projects', resume_text):
             gaps.append("Few quantified achievements — add metrics")
 
-        # Parse free-form sections out of the resume text.
-        sections = self._split_sections(resume_text)
+        # ``sections`` was already computed above for the skill-fallback path.
 
         def _grab(*keys):
             for k in keys:
@@ -1555,10 +1674,12 @@ class OllamaProvider(BaseProvider):
     deployment is the RPi's own Ollama, not the visiting user's laptop.
     """
 
-    import os as _os
-    OLLAMA_URL = _os.environ.get("OLLAMA_URL", "http://localhost:11434").rstrip("/")
-
     def __init__(self, model: str = "llama3.2"):
+        # Read OLLAMA_URL per-instance so tests can monkeypatch the env after
+        # import. Class-body reads happen at module-import time and are
+        # effectively frozen for the process lifetime.
+        import os as _os
+        self.OLLAMA_URL = _os.environ.get("OLLAMA_URL", "http://localhost:11434").rstrip("/")
         self.model = model
         self._check_ollama()
 

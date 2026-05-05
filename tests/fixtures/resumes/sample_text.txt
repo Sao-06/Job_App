@@ -1,0 +1,40 @@
+Jane Tester
+jane.tester@example.com | (415) 555-0199 | Berkeley, CA
+linkedin.com/in/jane-tester | github.com/jane-tester
+
+OBJECTIVE
+Electrical Engineering student seeking a summer internship in IC design,
+photonics, or FPGA development.
+
+EDUCATION
+University of California, Berkeley | B.S. Electrical Engineering and Computer Sciences | 2026
+GPA: 3.85 / 4.00
+Relevant Coursework: Digital Integrated Circuits, Solid-State Devices, Photonics, VLSI Design
+
+TECHNICAL SKILLS
+Languages: Python, C++, Verilog, SystemVerilog, MATLAB
+EDA / Simulation: Cadence Virtuoso, HSPICE, ModelSim, Vivado, Lumerical, COMSOL
+Fab / Lab: Photolithography, Cleanroom Processes, SEM, AFM, Reactive-Ion Etching
+Methodologies: Digital Design, Mixed-Signal, RTL, FPGA, PCB Design
+
+PROJECTS
+8-bit ALU in Verilog | Spring 2025
+  Designed and verified an 8-bit ALU in SystemVerilog with a UVM testbench.
+  Tools: SystemVerilog, ModelSim, Vivado.
+
+Photonic Ring Resonator Simulation | Fall 2024
+  Simulated a silicon photonic ring resonator in Lumerical with COMSOL thermal coupling.
+  Achieved Q-factor of 12,000 in simulation; submitted to undergraduate symposium.
+
+RESEARCH EXPERIENCE
+Undergraduate Research Assistant | Berkeley Wireless Research Center | Jun 2024 – Present
+  Built mixed-signal SPICE testbenches for low-power ADC characterization.
+  Improved PSRR measurement automation by 40% via a Python+VISA harness.
+
+WORK EXPERIENCE
+FPGA Engineering Intern | NovaSemi Inc. | May 2023 – Aug 2023
+  Implemented a SerDes equalizer block in SystemVerilog targeting Xilinx UltraScale+.
+  Wrote constrained-random tests covering 95% of the block's RTL paths.
+
+INTERESTS
+Amateur radio (KK6XYZ) · Cycling · Mechanical keyboards

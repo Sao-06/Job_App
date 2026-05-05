@@ -1,0 +1,64 @@
+name: tests
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / Python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Linux 3.11 omitted — Linux 3.12 already covers Linux + Python and
+        # both Windows cells cover the OS edge. Keeping 3.11 only on Windows
+        # because that's where users most often run Jobs AI day-to-day.
+        include:
+          - { os: ubuntu-latest,  python: '3.12' }
+          - { os: windows-latest, python: '3.11' }
+          - { os: windows-latest, python: '3.12' }
+    env:
+      JOBS_AI_DISABLE_INGESTION: '1'
+      JOBS_AI_SKIP_MIGRATION: '1'
+      OLLAMA_URL: 'http://ollama-test.local:11434'
+      STRIPE_SECRET_KEY: 'sk_test_dummy_for_ci'
+      STRIPE_WEBHOOK_SECRET: 'whsec_dummy_for_ci'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: 'pip'
+          cache-dependency-path: |
+            requirements.txt
+            requirements-test.txt
+
+      - name: Install runtime + test dependencies
+        run: pip install -r requirements.txt -r requirements-test.txt
+
+      - name: Run tests
+        # Linux 3.12 collects coverage in the same invocation that runs the
+        # suite. Other cells skip --cov for speed.
+        run: |
+          if [ "${{ matrix.os }}-${{ matrix.python }}" = "ubuntu-latest-3.12" ]; then
+            pytest tests/ \
+              --cov=pipeline --cov=app --cov=session_store \
+              --cov=auth_utils --cov=dashboard \
+              --cov-report=xml --cov-report=term --tb=short
+          else
+            pytest tests/ --tb=short
+          fi
+        shell: bash
+
+      - name: Upload coverage to Codecov
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./coverage.xml
+          fail_ci_if_error: false
+        continue-on-error: true

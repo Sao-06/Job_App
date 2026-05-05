@@ -44,6 +44,10 @@ class SearchFilters:
     blacklist: Sequence[str] = field(default_factory=tuple)           # company names (case-insensitive)
     whitelist: Sequence[str] = field(default_factory=tuple)
     include_unknown_education: bool = True
+    # Coarse industry / job-family filter — values must match the labels emitted
+    # by ``pipeline.helpers.infer_job_category`` (e.g. 'engineering', 'sales',
+    # 'healthcare', 'general'). Multiple values OR together at the SQL layer.
+    job_categories: Sequence[str] = field(default_factory=tuple)
 
 
 @dataclass
@@ -155,14 +159,30 @@ def _freshness(posted_at: str | None) -> float:
 
 
 def _skill_overlap(profile_skills: Iterable[str], requirements: Iterable[str]) -> float:
-    a = {s.lower().strip() for s in profile_skills if s}
-    b: set[str] = set()
-    for r in requirements:
-        for tok in _tokenize(r):
-            b.add(tok)
-    if not a or not b:
-        return 0.0
-    return len(a & b) / max(1, len(a))
+    """Coverage of the JOB's requirements by the user's skills, in [0, 1].
+
+    Denominator is the count of distinct requirement strings — i.e. "what
+    fraction of this job's requirements does the user satisfy?". Using the
+    profile's skill count as the denominator (the previous behavior) penalized
+    users with broad skill sets: matching 3 of 3 reqs out of a 30-skill
+    profile produced 0.10, not 1.00, and crushed the entire scoring scale.
+
+    Empty requirements OR empty profile → 0.3 (neutral) so jobs whose source
+    didn't expose tags don't get pinned to zero on this signal.
+    """
+    skills = {s.lower().strip() for s in profile_skills if s and str(s).strip()}
+    reqs = [str(r).lower().strip() for r in requirements if r and str(r).strip()]
+    if not skills or not reqs:
+        return 0.3
+    matched = 0
+    for req in reqs:
+        if any(s in req or req in s for s in skills):
+            matched += 1
+            continue
+        req_tokens = {t for t in _tokenize(req) if len(t) >= 3}
+        if req_tokens and any(req_tokens & {t for t in _tokenize(s) if len(t) >= 3} for s in skills):
+            matched += 1
+    return matched / len(reqs)
 
 
 def _title_match(profile_titles: Iterable[str], title: str) -> float:
@@ -384,7 +404,12 @@ def search(*, conn: sqlite3.Connection,
 
     fts_q = _build_fts_query(filters, profile)
     where: list[str] = ["jp.deleted = 0"]
-    params: list[Any] = []
+    # Track FTS-MATCH bindings separately from WHERE-clause bindings. The
+    # COUNT-fallback query below has no JOIN, so it only needs WHERE params;
+    # passing the shared `params` list with fts_q baked in is what produced
+    # the "uses 8, supplies 9" sqlite3.ProgrammingError.
+    fts_params: list[Any] = []
+    where_params: list[Any] = []
     join_fts = ""
 
     if fts_q:
@@ -392,8 +417,7 @@ def search(*, conn: sqlite3.Connection,
             "JOIN job_postings_fts fts ON fts.rowid = jp.rowid "
             "AND fts.job_postings_fts MATCH ? "
         )
-        params.append(fts_q)
-        # bm25 column expr is the FTS table itself
+        fts_params.append(fts_q)
         bm25_select = "bm25(job_postings_fts) AS bm25_score"
         order_extra = "bm25_score ASC,"   # lower bm25 = better match
     else:
@@ -403,38 +427,57 @@ def search(*, conn: sqlite3.Connection,
     if filters.experience_levels:
         placeholders = ",".join("?" * len(filters.experience_levels))
         where.append(f"jp.experience_level IN ({placeholders})")
-        params.extend(filters.experience_levels)
+        where_params.extend(filters.experience_levels)
     if filters.education_levels:
-        placeholders = ",".join("?" * len(filters.education_levels))
-        # honor "include unknowns" = always add 'unknown' as a passthrough
         edus = list(filters.education_levels)
         if filters.include_unknown_education:
             edus = list(set(edus) | {"unknown"})
         placeholders = ",".join("?" * len(edus))
         where.append(f"jp.education_required IN ({placeholders})")
-        params.extend(edus)
+        where_params.extend(edus)
     if filters.remote_only:
         where.append("jp.remote = 1")
     if filters.posted_within_days:
         where.append(
             "(jp.posted_at IS NULL OR jp.posted_at >= date('now', ?))"
         )
-        params.append(f"-{int(filters.posted_within_days)} days")
+        where_params.append(f"-{int(filters.posted_within_days)} days")
     if filters.location:
         where.append("LOWER(jp.location) LIKE ?")
-        params.append(f"%{filters.location.strip().lower()}%")
+        where_params.append(f"%{filters.location.strip().lower()}%")
+    if filters.job_categories:
+        # De-dup + lowercase to match the labels written at ingest time. We do
+        # NOT auto-include "general" — if the caller wants the unbucketed
+        # remainder they pass it explicitly. That keeps "Engineering only" from
+        # silently surfacing 23k uncategorized rows.
+        cats_clean = sorted({(c or "").strip().lower() for c in filters.job_categories if c and str(c).strip()})
+        if cats_clean:
+            placeholders = ",".join("?" * len(cats_clean))
+            where.append(f"LOWER(COALESCE(jp.job_category, 'general')) IN ({placeholders})")
+            where_params.extend(cats_clean)
     if filters.citizenship_filter == "exclude_required":
         where.append("(jp.citizenship_required IS NULL OR jp.citizenship_required != 'yes')")
     elif filters.citizenship_filter == "only_required":
         where.append("jp.citizenship_required = 'yes'")
     if filters.blacklist:
-        placeholders = ",".join("?" * len(filters.blacklist))
-        where.append(f"LOWER(jp.company) NOT IN ({placeholders})")
-        params.extend(b.strip().lower() for b in filters.blacklist if b)
-    if filters.whitelist:
-        placeholders = ",".join("?" * len(filters.whitelist))
-        where.append(f"LOWER(jp.company) IN ({placeholders})")
-        params.extend(w.strip().lower() for w in filters.whitelist if w)
+        # _csv() in the caller already strips empties; defensive double-check
+        # here keeps placeholder count and binding count exactly aligned.
+        bl_clean = [b.strip().lower() for b in filters.blacklist if b and b.strip()]
+        if bl_clean:
+            placeholders = ",".join("?" * len(bl_clean))
+            where.append(f"LOWER(jp.company) NOT IN ({placeholders})")
+            where_params.extend(bl_clean)
+    # NOTE: whitelist is intentionally NOT applied as a SQL filter. Per the
+    # spec (Workflow/job-application-agent.md), whitelist companies are
+    # *priority targets* that should be surfaced first regardless of score —
+    # not a hard inclusion list that hides everyone else. It's applied as a
+    # ranking boost in the Python re-rank stage below.
+
+    # Grow the ranked pool with page depth so users can scroll indefinitely.
+    # Each subsequent page expands the SQL LIMIT proportionally — page 0 ranks
+    # the configured pool, page 5 ranks 6× that, etc. SQLite + FTS5 handle a
+    # 3000-row rank in well under a second, and we cap to keep memory bounded.
+    effective_pool = min(rank_pool * max(1, page_offset + 1), 8000)
 
     sql = f"""
         SELECT jp.id, jp.canonical_url, jp.source, jp.company, jp.title,
@@ -448,19 +491,21 @@ def search(*, conn: sqlite3.Connection,
          ORDER BY {order_extra} jp.posted_at DESC, jp.id ASC
          LIMIT ?
     """
-    params.append(rank_pool)
-    pool = conn.execute(sql, params).fetchall()
+    main_params = [*fts_params, *where_params, effective_pool]
+    pool = conn.execute(sql, main_params).fetchall()
     if not pool:
-        # Total estimate query — also indexed.
+        # Total estimate uses ONLY WHERE bindings — the COUNT(*) query has no
+        # FTS JOIN, so handing it fts_q would produce a binding-count mismatch.
         total = conn.execute(
             f"SELECT COUNT(*) FROM job_postings jp WHERE {' AND '.join(where)}",
-            params[:-1],            # drop the LIMIT
+            where_params,
         ).fetchone()[0]
         return SearchPage(jobs=[], next_cursor=None, total_estimate=int(total))
 
     bm25_scores = _normalize_bm25([row[-1] for row in pool])
     profile_titles = (profile or {}).get("target_titles") or []
     profile_skills = (profile or {}).get("top_hard_skills") or []
+    whitelist_lower = {w.strip().lower() for w in (filters.whitelist or ()) if w and w.strip()}
 
     ranked: list[tuple[float, tuple]] = []
     for row, bm in zip(pool, bm25_scores):
@@ -472,7 +517,16 @@ def search(*, conn: sqlite3.Connection,
             # No personalization signals at all — sort by recency only.
             final = fr
         else:
-            final = (0.55 * bm) + (0.20 * sk_ov) + (0.15 * fr) + (0.10 * tm)
+            final = (0.45 * bm) + (0.30 * sk_ov) + (0.15 * fr) + (0.10 * tm)
+        # Whitelist boost: priority companies surface first per spec. Substring
+        # match handles "Apple" vs "Apple Inc." and similar suffix drift.
+        if whitelist_lower:
+            company_lower = (row[3] or "").strip().lower()
+            if company_lower and any(
+                w == company_lower or w in company_lower or company_lower in w
+                for w in whitelist_lower
+            ):
+                final = min(1.0, final + 0.25)
         ranked.append((final, row))
 
     ranked.sort(key=lambda x: (-x[0], x[1][13] or "", x[1][0]))
@@ -499,36 +553,47 @@ def search(*, conn: sqlite3.Connection,
     if per_round and per_round > 0:
         ranked = _diversify_by_company(ranked, max_per_round=per_round)
 
-    # Apply cursor offset (seek to the row *after* the last id).
+    # Apply cursor offset (seek to the row *after* the last id). Falls back
+    # to a position-based start when the last id can't be located in the
+    # ranked pool (dedup may have dropped it, or ranking shifted between
+    # requests). Without this fallback, a cursor-id miss reset start=0 and
+    # the user got the same first page on every "load more" — appearing as
+    # a stuck infinite-scroll.
     start = 0
     if cur_state:
         last_score, last_id, _po = cur_state
+        found = False
         for i, (s, r) in enumerate(ranked):
             if r[0] == last_id and abs(s - last_score) < 1e-4:
                 start = i + 1
+                found = True
                 break
+        if not found:
+            start = min(page_offset * limit, len(ranked))
 
     window = ranked[start:start + limit]
     dtos = [_row_to_dto(row, score) for score, row in window]
 
+    # Emit a next_cursor whenever there *might* be more rows. The client
+    # treats a non-null cursor as "keep scrolling"; we'd rather over-emit
+    # and let the next call return [] than under-emit and stop scrolling
+    # prematurely. The total_estimate check below covers the case where
+    # the ranked pool was exhausted but the SQL universe still has rows
+    # we'd surface with a deeper rank_pool on the next call.
     next_cursor: str | None = None
-    if len(window) == limit and start + limit < len(ranked):
-        last = window[-1]
-        next_cursor = _encode_cursor(last[0], last[1][0], page_offset + 1)
-    elif len(window) == limit:
-        # We'd need to re-query with a higher LIMIT. For simplicity we just
-        # offer the next page by encoding the new offset and bumping LIMIT
-        # client-side via a re-call. The client always sees a non-null
-        # cursor as long as there might be more rows.
+    has_more_in_pool = (start + limit) < len(ranked)
+    pool_was_capped = len(pool) >= effective_pool
+    if len(window) == limit and (has_more_in_pool or pool_was_capped):
         last = window[-1]
         next_cursor = _encode_cursor(last[0], last[1][0], page_offset + 1)
 
-    # Lightweight total estimate (no FTS — that's expensive to count).
-    where_no_fts = [w for w in where if "fts" not in w.lower()]
-    if where_no_fts:
+    # Lightweight total estimate. COUNT has no FTS JOIN, so it only takes
+    # WHERE-clause bindings — never fts_q. `where` always includes the
+    # deleted=0 baseline; >1 means at least one filter clause was added.
+    if len(where) > 1:
         total = conn.execute(
-            f"SELECT COUNT(*) FROM job_postings jp WHERE {' AND '.join(where_no_fts)}",
-            [p for p in params[:-1] if not isinstance(p, str) or p != fts_q],
+            f"SELECT COUNT(*) FROM job_postings jp WHERE {' AND '.join(where)}",
+            where_params,
         ).fetchone()[0]
     else:
         total = conn.execute("SELECT COUNT(*) FROM job_postings WHERE deleted = 0").fetchone()[0]

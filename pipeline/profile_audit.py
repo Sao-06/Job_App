@@ -26,6 +26,8 @@ All helpers mutate + return the profile dict and append a short note to
 
 from __future__ import annotations
 
+import re
+
 # ── Domain whitelist (used by the LLM prompt AND the reranker) ─────────────
 
 DOMAIN_TITLE_FAMILIES = [
@@ -214,8 +216,17 @@ def quarantine_misplaced_skills(profile: dict) -> dict:
 
 def retention_audit(profile: dict, resume_text: str) -> dict:
     """Scan the raw resume for lexicon tokens missing from the extracted
-    hard skills and merge them in (case-preserving best effort)."""
-    text_l = (resume_text or "").lower()
+    hard skills and merge them in (case-preserving best effort).
+
+    Uses word-boundary matching so short acronyms can't false-positive
+    inside larger English words ('rie' must not match in 'experience',
+    'mbe' must not match in 'embedded', 'cad' must not match in 'cascade').
+    Multi-word tokens like 'thin film' work naturally because their embedded
+    spaces already enforce token edges.
+    """
+    if not resume_text:
+        return profile
+    text_l = resume_text.lower()
     extracted_l = {s.lower() for s in profile.get("top_hard_skills", [])}
 
     missed: list = []
@@ -223,7 +234,11 @@ def retention_audit(profile: dict, resume_text: str) -> dict:
         token_s = token.strip()
         if not token_s or len(token_s) < 2:
             continue
-        if token_s not in text_l:
+        if re.search(r"\W", token_s):
+            pattern = rf"(?<!\w){re.escape(token_s)}(?!\w)"
+        else:
+            pattern = rf"\b{re.escape(token_s)}\b"
+        if not re.search(pattern, text_l, re.IGNORECASE):
             continue
         if any(token_s in e or e in token_s for e in extracted_l):
             continue

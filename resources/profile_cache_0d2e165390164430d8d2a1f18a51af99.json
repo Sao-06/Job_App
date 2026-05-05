@@ -1,0 +1,195 @@
+{
+  "name": "Your Name",
+  "email": "your.email@university.edu",
+  "linkedin": "linkedin.com/in/your-profile",
+  "github": "",
+  "phone": "",
+  "location": "City, State",
+  "summary": "Your Name is a FPGA/Hardware Engineering Intern with hands-on experience across Verilog, FPGA, SPICE, PCB Design, Python, MATLAB and 1 structured resume role(s) extracted for job matching.",
+  "target_titles": [
+    "FPGA/Hardware Engineering Intern",
+    "IC Design Engineering Intern",
+    "Hardware Engineering Intern",
+    "Photonics Engineering Intern"
+  ],
+  "top_hard_skills": [
+    "Verilog",
+    "FPGA",
+    "SPICE",
+    "PCB Design",
+    "Python",
+    "MATLAB",
+    "Linux",
+    "Photolithography",
+    "Cleanroom Processes",
+    "SEM",
+    "SolidWorks",
+    "CAD",
+    "Fusion 360",
+    "PL",
+    "RIE"
+  ],
+  "top_soft_skills": [
+    "Teamwork",
+    "Problem-solving",
+    "Communication",
+    "Attention to detail",
+    "Time management"
+  ],
+  "education": [
+    {
+      "degree": "[University Name]",
+      "institution": "B.S. [Your Major]",
+      "year": "Expected [Graduation Year]",
+      "gpa": ""
+    },
+    {
+      "degree": "GPA: [X.XX] / 4.00",
+      "institution": "",
+      "year": "",
+      "gpa": ""
+    }
+  ],
+  "experience": [
+    {
+      "title": "[Job Title]",
+      "company": "[Company / Lab]",
+      "dates": "[Start Year]\u2013[End Year or Present]",
+      "bullets": [
+        "[What you did \u2014 use action verbs and quantify where possible.]",
+        "[Technology or skill applied.]"
+      ]
+    }
+  ],
+  "work_experience": [
+    {
+      "title": "[Job Title]",
+      "company": "[Company / Lab]",
+      "dates": "[Start Year]\u2013[End Year or Present]",
+      "bullets": [
+        "[What you did \u2014 use action verbs and quantify where possible.]",
+        "[Technology or skill applied.]"
+      ]
+    }
+  ],
+  "research": [],
+  "research_experience": [],
+  "projects": [
+    {
+      "name": "[Project Name 1]",
+      "description": "[Brief description of what you built or researched.] [Tools and techniques used.]",
+      "skills_used": []
+    },
+    {
+      "name": "[Project Name 2]",
+      "description": "[Brief description.] [Outcome or result.]",
+      "skills_used": []
+    }
+  ],
+  "resume_gaps": [
+    "Few quantified achievements \u2014 add metrics"
+  ],
+  "critical_analysis": "Impact: add numeric outcomes to the strongest bullets wherever possible. Skill density: the parser found the technical keywords listed in hard skills; add any missing tools, instruments, and methods explicitly. ATS structure: keep Education, Experience, Projects, and Skills as clear headings. Next actions: add LinkedIn, work authorization, target salary, and target titles to improve matching and autofill.",
+  "top_hard_skills_detailed": [
+    {
+      "skill": "Verilog",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "FPGA",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "SPICE",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "PCB Design",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Python",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "MATLAB",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Linux",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Photolithography",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Cleanroom Processes",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "SEM",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "SolidWorks",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "CAD",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "Fusion 360",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "PL",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "RIE",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    }
+  ],
+  "target_titles_detailed": [
+    {
+      "title": "FPGA/Hardware Engineering Intern",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "IC Design Engineering Intern",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "Hardware Engineering Intern",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "Photonics Engineering Intern",
+      "family": "",
+      "evidence": ""
+    }
+  ],
+  "_audit_log": [
+    "retention_audit recovered 3 missing skills: ['Fusion 360', 'PL', 'RIE']"
+  ]
+}

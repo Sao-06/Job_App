@@ -1,0 +1,92 @@
+{
+  "name": "Your Name",
+  "email": "",
+  "linkedin": "",
+  "github": "",
+  "phone": "",
+  "location": "",
+  "summary": "Your Name is a IC Design Engineering Intern with hands-on experience across C++.",
+  "target_titles": [
+    "IC Design Engineering Intern",
+    "Hardware Engineering Intern"
+  ],
+  "top_hard_skills": [
+    "C++",
+    "TEM",
+    "MBE",
+    "PL",
+    "ASIC",
+    "RIE",
+    "GO"
+  ],
+  "top_soft_skills": [
+    "Teamwork",
+    "Problem-solving",
+    "Communication",
+    "Attention to detail",
+    "Time management"
+  ],
+  "education": [],
+  "experience": [],
+  "work_experience": [],
+  "research": [],
+  "research_experience": [],
+  "projects": [],
+  "resume_gaps": [
+    "Missing professional summary/objective",
+    "Few quantified achievements \u2014 add metrics"
+  ],
+  "critical_analysis": "Impact: add numeric outcomes to the strongest bullets wherever possible. Skill density: the parser found the technical keywords listed in hard skills; add any missing tools, instruments, and methods explicitly. ATS structure: keep Education, Experience, Projects, and Skills as clear headings. Next actions: add LinkedIn, work authorization, target salary, and target titles to improve matching and autofill.",
+  "top_hard_skills_detailed": [
+    {
+      "skill": "C++",
+      "category": "unknown",
+      "evidence": ""
+    },
+    {
+      "skill": "TEM",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "MBE",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "PL",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "ASIC",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "RIE",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    },
+    {
+      "skill": "GO",
+      "category": "retention_audit_recovered",
+      "evidence": "(auto-recovered from resume text)"
+    }
+  ],
+  "target_titles_detailed": [
+    {
+      "title": "IC Design Engineering Intern",
+      "family": "",
+      "evidence": ""
+    },
+    {
+      "title": "Hardware Engineering Intern",
+      "family": "",
+      "evidence": ""
+    }
+  ],
+  "_audit_log": [
+    "retention_audit recovered 6 missing skills: ['TEM', 'MBE', 'PL', 'ASIC', 'RIE', 'GO']"
+  ]
+}

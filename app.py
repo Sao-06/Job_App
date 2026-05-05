@@ -1010,14 +1010,13 @@ def dev_session_detail(session_id: str, request: Request):
     if not _is_dev_request(request):
         raise HTTPException(403, "Developer access denied")
     state = _load_session_state(session_id)
-    return {
-        **(state.get("profile") or {}),
-        "resume_text": (state.get("resume_text") or "")[:2000],
-        "feedback": state.get("feedback") or [],
-        "user": state.get("user"),
-        "done": sorted(state.get("done") or []),
-        "error": state.get("error") or {},
-    }
+    detail = dict(state)
+    detail["resume_text"] = (state.get("resume_text") or "")[:2000]
+    detail["feedback"] = state.get("feedback") or []
+    detail["done"] = sorted(state.get("done") or [])
+    detail["liked_ids"] = sorted(state.get("liked_ids") or [])
+    detail["hidden_ids"] = sorted(state.get("hidden_ids") or [])
+    return detail
 
 @app.post("/api/dev/session/{session_id}/reset")
 def dev_session_reset(session_id: str, request: Request):
@@ -1056,6 +1055,8 @@ def dev_stop_impersonate(request: Request):
 
 @app.post("/api/dev/session/{session_id}/feedback/read")
 def dev_mark_feedback_read(session_id: str, request: Request):
+    if not _is_dev_request(request):
+        raise HTTPException(403, "Developer access denied")
     state = _load_session_state(session_id)
     for f in state.get("feedback") or []:
         f["read"] = True

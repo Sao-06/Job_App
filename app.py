@@ -535,7 +535,288 @@ def reset_state():
     _S["done"] = set()
     _S["error"] = {}
     _S["elapsed"] = {}
+    _S["liked_ids"] = set()
+    _S["hidden_ids"] = set()
     return {"ok": True}
+
+
+# ── Auth ──────────────────────────────────────────────────────────────────────
+
+@app.post("/api/auth/login")
+async def auth_login(req: Request):
+    body = await req.json()
+    email = (body.get("email") or "").strip().lower()
+    password = body.get("password") or ""
+    if not email or not password:
+        return JSONResponse({"ok": False, "error": "Email and password are required"})
+    if _user_store is None:
+        return JSONResponse({"ok": False, "error": "Auth store unavailable"})
+    user = _user_store.get_user_by_email(email)
+    if not user or not verify_password(password, user.get("password_hash") or ""):
+        return JSONResponse({"ok": False, "error": "Invalid email or password"})
+    _S["user"] = {"id": user["id"], "email": user["email"]}
+    return {"ok": True, "user": {"email": user["email"]}}
+
+@app.post("/api/auth/signup")
+async def auth_signup(req: Request):
+    body = await req.json()
+    email = (body.get("email") or "").strip().lower()
+    password = body.get("password") or ""
+    if not email or len(password) < 6:
+        return JSONResponse({"ok": False, "error": "Valid email and password (≥6 chars) required"})
+    if _user_store is None:
+        return JSONResponse({"ok": False, "error": "Auth store unavailable"})
+    if _user_store.get_user_by_email(email):
+        return JSONResponse({"ok": False, "error": "An account with this email already exists"})
+    pw_hash = hash_password(password)
+    user_id = _user_store.create_user(email, pw_hash)
+    _S["user"] = {"id": user_id, "email": email}
+    return {"ok": True, "user": {"email": email}}
+
+@app.post("/api/auth/logout")
+def auth_logout():
+    _S["user"] = None
+    return {"ok": True}
+
+@app.get("/api/auth/google")
+def auth_google():
+    return JSONResponse({"ok": False, "error": "Google OAuth not configured — use email/password login"}, status_code=200)
+
+@app.get("/api/auth/google/callback")
+def auth_google_callback():
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse("/app")
+
+
+# ── Profile ───────────────────────────────────────────────────────────────────
+
+@app.get("/api/profile")
+def get_profile():
+    return _S.get("profile") or {}
+
+@app.post("/api/profile")
+async def save_profile(req: Request):
+    body = await req.json()
+    if _S.get("profile"):
+        _S["profile"].update(body)
+    else:
+        _S["profile"] = body
+    return {"ok": True}
+
+@app.post("/api/profile/extract")
+async def extract_profile(req: Request):
+    body = await req.json()
+    if not _S.get("resume_text"):
+        raise HTTPException(400, "No resume loaded")
+    preferred = body.get("preferred_titles")
+    def _fn():
+        prov = _make_provider()
+        result = phase1_ingest_resume(_S["resume_text"], prov, preferred_titles=preferred or None)
+        _S["profile"] = result
+        _S["done"].add(1)
+        return result
+    import threading as _t
+    err = {}
+    def _run():
+        try: _fn()
+        except Exception as e: err["e"] = str(e)
+    th = _t.Thread(target=_run, daemon=True)
+    th.start(); th.join(timeout=120)
+    if err: raise HTTPException(500, err["e"])
+    return {"ok": True}
+
+
+# ── Resume extra endpoints ────────────────────────────────────────────────────
+
+@app.get("/api/resume/content")
+def resume_content():
+    return {"text": _S.get("resume_text") or ""}
+
+@app.post("/api/resume/text")
+async def resume_save_text(req: Request):
+    body = await req.json()
+    text = body.get("text", "")
+    _S["resume_text"] = text
+    _S["done"].discard(1)  # invalidate profile so it gets re-extracted
+    return {"ok": True}
+
+@app.delete("/api/resume/{resume_id}")
+def resume_delete(resume_id: str):
+    _S["resume_text"] = None
+    _S["latex_source"] = None
+    _S["resume_filename"] = None
+    _S["profile"] = None
+    _S["done"].discard(1)
+    return {"ok": True}
+
+@app.post("/api/resume/primary/{resume_id}")
+def resume_set_primary(resume_id: str):
+    return {"ok": True}
+
+@app.post("/api/resume/rename/{resume_id}")
+async def resume_rename(resume_id: str, req: Request):
+    body = await req.json()
+    _S["resume_filename"] = body.get("filename", _S.get("resume_filename"))
+    return {"ok": True}
+
+
+# ── Jobs actions ─────────────────────────────────────────────────────────────
+
+@app.post("/api/jobs/action")
+async def jobs_action(req: Request):
+    body = await req.json()
+    action = body.get("action", "")
+    job_id = body.get("job_id", "")
+    if action == "like":
+        _S["liked_ids"].add(job_id)
+    elif action == "unlike":
+        _S["liked_ids"].discard(job_id)
+    elif action == "hide":
+        _S["hidden_ids"].add(job_id)
+    elif action == "unhide":
+        _S["hidden_ids"].discard(job_id)
+    return {"ok": True}
+
+
+# ── Feedback ──────────────────────────────────────────────────────────────────
+
+@app.post("/api/feedback")
+async def submit_feedback(req: Request):
+    body = await req.json()
+    msg = (body.get("message") or "").strip()
+    if not msg:
+        raise HTTPException(400, "Message is required")
+    entry = {"id": str(time.time()), "message": msg, "read": False,
+             "created_at": datetime.now().isoformat()}
+    _S["feedback"].append(entry)
+    print(f"[Feedback] {msg[:120]}")
+    return {"ok": True}
+
+
+# ── Dev endpoints ─────────────────────────────────────────────────────────────
+
+def _is_dev_request(request: Request) -> bool:
+    host = getattr(request.client, "host", "") if request.client else ""
+    return host in ("127.0.0.1", "::1", "localhost") or bool(_S.get("force_dev_mode"))
+
+@app.get("/api/dev/overview")
+def dev_overview(request: Request):
+    if not _is_dev_request(request):
+        raise HTTPException(403, "Developer access denied")
+    import shutil, sys as _sys
+    disk = shutil.disk_usage(OUTPUT_DIR)
+    out_files = list(OUTPUT_DIR.glob("*")) if OUTPUT_DIR.exists() else []
+    sessions = [{
+        "id": "local",
+        "name": (_S.get("profile") or {}).get("name") or "Local User",
+        "email": (_S.get("user") or {}).get("email") or "",
+        "has_resume": bool(_S.get("resume_text")),
+        "resume_filename": _S.get("resume_filename") or "",
+        "mode": _S.get("mode", "demo"),
+        "done": sorted(_S["done"]),
+        "errors": _S.get("error") or {},
+        "job_count": len(_S.get("jobs") or []),
+        "scored_count": len(_S.get("scored") or []),
+        "application_count": len(_S.get("applications") or []),
+        "applied_count": sum(1 for a in (_S.get("applications") or []) if a.get("status") == "Applied"),
+        "manual_count": sum(1 for a in (_S.get("applications") or []) if a.get("status") == "Manual Required"),
+        "target": _S.get("job_titles") or "",
+        "location": _S.get("location") or "",
+        "feedback_count": len(_S.get("feedback") or []),
+        "unread_feedback_count": sum(1 for f in (_S.get("feedback") or []) if not f.get("read")),
+    }]
+    apps = _S.get("applications") or []
+    return {
+        "summary": {
+            "users": 1,
+            "with_resume": 1 if _S.get("resume_text") else 0,
+            "applications": len(apps),
+            "applied": sum(1 for a in apps if a.get("status") == "Applied"),
+            "manual": sum(1 for a in apps if a.get("status") == "Manual Required"),
+            "errors": len([v for v in (_S.get("error") or {}).values() if v]),
+        },
+        "status": {
+            "app": "running",
+            "python": _sys.version.split()[0],
+            "output_files": len(out_files),
+            "session_files": 1,
+            "session_db_mb": round(
+                (OUTPUT_DIR / "jobs_ai_sessions.sqlite3").stat().st_size / 1e6, 2
+            ) if (OUTPUT_DIR / "jobs_ai_sessions.sqlite3").exists() else 0,
+            "disk_free_gb": round(disk.free / 1e9, 1),
+            "tweaks": _S.get("dev_tweaks") or {},
+        },
+        "sessions": sessions,
+        "events": [],
+    }
+
+@app.get("/api/dev/session/{session_id}")
+def dev_session_detail(session_id: str, request: Request):
+    if not _is_dev_request(request):
+        raise HTTPException(403, "Developer access denied")
+    return {
+        **(_S.get("profile") or {}),
+        "resume_text": (_S.get("resume_text") or "")[:2000],
+        "feedback": _S.get("feedback") or [],
+    }
+
+@app.post("/api/dev/session/{session_id}/reset")
+def dev_session_reset(session_id: str, request: Request):
+    if not _is_dev_request(request):
+        raise HTTPException(403, "Developer access denied")
+    return reset_state()
+
+@app.delete("/api/dev/session/{session_id}")
+def dev_session_delete(session_id: str, request: Request):
+    if not _is_dev_request(request):
+        raise HTTPException(403, "Developer access denied")
+    return reset_state()
+
+@app.post("/api/dev/session/{session_id}/impersonate")
+def dev_impersonate(session_id: str, request: Request):
+    if not _is_dev_request(request):
+        raise HTTPException(403, "Developer access denied")
+    return {"ok": True}
+
+@app.post("/api/dev/session/stop-impersonating")
+def dev_stop_impersonate(request: Request):
+    return {"ok": True}
+
+@app.post("/api/dev/session/{session_id}/feedback/read")
+def dev_mark_feedback_read(session_id: str, request: Request):
+    for f in _S.get("feedback") or []:
+        f["read"] = True
+    return {"ok": True}
+
+@app.post("/api/dev/cli")
+async def dev_cli(request: Request):
+    if not _is_dev_request(request):
+        raise HTTPException(403, "Developer access denied")
+    body = await request.json()
+    command = body.get("command", "")
+    import subprocess
+    safe = {
+        "git_status":     ["git", "status", "--short"],
+        "recent_outputs": ["python", "-c", f"import os; files=sorted(os.listdir(r'{OUTPUT_DIR}'), key=lambda f: os.path.getmtime(os.path.join(r'{OUTPUT_DIR}',f)), reverse=True)[:20]; print('\\n'.join(files))"],
+        "session_db":     ["python", "-c", "import sqlite3,os; db='" + str(OUTPUT_DIR / 'jobs_ai_sessions.sqlite3') + "'; print(f'Size: {os.path.getsize(db)/1024:.1f} KB' if os.path.exists(db) else 'No DB yet')"],
+        "pip_freeze":     ["pip", "freeze"],
+    }
+    cmd = safe.get(command)
+    if not cmd:
+        return {"output": f"Unknown command: {command}"}
+    try:
+        out = subprocess.check_output(cmd, text=True, stderr=subprocess.STDOUT, timeout=10)
+        return {"output": out[:4000]}
+    except Exception as e:
+        return {"output": str(e)[:2000]}
+
+@app.post("/api/dev/tweaks")
+async def dev_tweaks(req: Request, request: Request):
+    if not _is_dev_request(request):
+        raise HTTPException(403, "Developer access denied")
+    body = await req.json()
+    _S["dev_tweaks"] = {**(_S.get("dev_tweaks") or {}), **body}
+    return {"tweaks": _S["dev_tweaks"]}
 
 def _clear_phases_after(phase: int):
     """Clear results and state from phase+1 onwards."""

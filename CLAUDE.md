@@ -38,16 +38,30 @@ This document provides an exhaustive, low-level map of the Jobs AI codebase.
 
 ## 2. Core Module Details (No Abstraction)
 
-### 2.1 Backend: `app.py`
-- **State Management**: Uses `_load_session(request)` to retrieve/create a unique `session_id` from cookies.
-- **SSE Streaming**: `_run_phase_sse` wraps pipeline functions in a thread, piping `console.print` and status updates to a `queue.Queue` which is yielded as a `ServerSentEvent`.
-- **API Endpoints**:
-  - `/api/state`: Returns the full `normalize_state` from SQLite.
-  - `/api/phase/{n}/run`: Triggers a specific phase in the background.
-  - `/api/resume/upload`: Handles multi-part file uploads and triggers `_read_resume`.
-  - `/api/ollama/status`: Checks if local Ollama is running and lists pulled models.
+## 2. Core Module Details (No Abstraction)
 
-### 2.2 Pipeline Phases: `pipeline/phases.py`
+### 2.1 Backend: `app.py`
+- **Session Management**: Uses `_load_session` to retrieve/create a unique `session_id`. Supports **Impersonation**: developers can override the session via `dev_session_id` cookie/param if authorized.
+- **Auth & Security**: Access to `/api/dev/*` is restricted by `_ensure_dev` (checks session `is_developer` flag). Developers can toggle their role via `POST /api/dev/toggle-role`.
+- **SSE Streaming**: `_run_phase_sse` wraps pipeline functions in a thread, utilizing thread-local storage (`threading.local`) to isolate logs per session.
+- **Feedback System**: `POST /api/feedback` stores user feedback in the `session_state` JSON. Devs can view and mark feedback read via Dev Ops endpoints.
+- **API Endpoints**:
+  - `/api/state`: Returns the full state including `is_dev` flag and feedback status.
+  - `/api/dev/*`: Diagnostic endpoints for user list, session inspection, and CLI tools.
+  - `/api/feedback`: Submit user feedback.
+
+### 2.2 Frontend: `frontend/app.jsx`
+- **React App**: SPA shell with main navigation rail and dynamic page rendering.
+- **Dev Console**: Integrated `DevPage` with:
+  - User management (inspecting, impersonating, resetting, deleting).
+  - Feedback review (read/unread badges).
+  - CLI diagnostic tools (git, session db, pip freeze).
+  - Site UI tweaks (colors, layout density).
+
+### 2.3 Session Store: `session_store.py`
+- **Persistence**: SQLite-backed session management.
+- **New Methods**: `delete_session` and `list_sessions` (now returns feedback metadata like `unread_feedback_count`).
+
 - **Phase 1 (Ingest)**: `_read_resume` → `provider.extract_profile` → `audit_profile`.
 - **Phase 2 (Discover)**: Calls `scrapers.scrape_all` based on `job_titles` and `location`.
 - **Phase 3 (Score)**: Two-step scoring. 1. Fast keyword match. 2. LLM `score_job` for top N candidates.

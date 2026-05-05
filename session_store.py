@@ -38,7 +38,11 @@ class SQLiteSessionStore:
 
     def _connect(self):
         conn = sqlite3.connect(self.db_path, timeout=30)
-        conn.execute("PRAGMA journal_mode=WAL")
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+        except sqlite3.OperationalError:
+            # Some Windows workspaces reject journal-mode changes; keep the DB usable.
+            pass
         conn.execute("PRAGMA foreign_keys=ON")
         return conn
 

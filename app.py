@@ -14,6 +14,7 @@ import io
 import json
 import os
 import queue
+import secrets
 import sys
 import threading
 import time
@@ -34,10 +35,21 @@ from pipeline.config import OUTPUT_DIR, RESOURCES_DIR
 
 # Auth helpers — imported lazily so missing bcrypt doesn't crash the server
 try:
-    from auth_utils import hash_password, verify_password
+    from auth_utils import (
+        get_google_auth_url,
+        hash_password,
+        verify_google_token,
+        verify_password,
+    )
 except ImportError:
-    def hash_password(pw): return pw
-    def verify_password(pw, h): return pw == h
+    def hash_password(_pw):
+        raise RuntimeError("bcrypt is required for password auth")
+    def verify_password(_pw, _h):
+        raise RuntimeError("bcrypt is required for password auth")
+    def get_google_auth_url(_redirect_uri):
+        raise RuntimeError("Google OAuth dependencies are not installed")
+    def verify_google_token(_code, _redirect_uri, _state):
+        raise RuntimeError("Google OAuth dependencies are not installed")
 
 # Simple user store backed by SQLite
 try:
@@ -54,12 +66,15 @@ from pipeline.phases import (
     phase3_score_jobs,
     phase4_tailor_resume,
     phase5_simulate_submission,
+    _load_existing_applications,
     phase6_update_tracker,
     phase7_run_report,
 )
 from pipeline.resume import _build_demo_resume, _read_resume, _save_tailored_resume
 
 app = FastAPI(title="Jobs AI")
+_AUTH_COOKIE = "jobs_ai_auth"
+_AUTH_SESSIONS: dict[str, dict] = {}
 
 # ── Serve frontend ─────────────────────────────────────────────────────────────
 
@@ -80,8 +95,11 @@ def frontend_static(filename: str):
 
 @app.get("/output/{path:path}")
 def serve_output_file(path: str):
-    p = OUTPUT_DIR / path
-    if not p.exists():
+    root = OUTPUT_DIR.resolve()
+    p = (root / path).resolve()
+    if root != p and root not in p.parents:
+        raise HTTPException(403, "File access denied")
+    if not p.exists() or not p.is_file():
         raise HTTPException(404, "File not found")
     return FileResponse(p)
 
@@ -89,7 +107,7 @@ def serve_output_file(path: str):
 
 _S: dict = {
     # LLM backend
-    "mode": "ollama",
+    "mode": "demo",
     "api_key": "",
     "ollama_model": "llama3.2",
     # Search / apply settings
@@ -371,6 +389,20 @@ def _guess_phase(name: str) -> int:
         return 7
     return 0
 
+def _dedupe_jobs_for_state(jobs: list) -> list:
+    seen = set()
+    out = []
+    for job in jobs:
+        key = (
+            job.get("application_url")
+            or f"{job.get('company', '').strip().lower()}|{job.get('title', '').strip().lower()}"
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(job)
+    return out
+
 # ── Resume endpoints ──────────────────────────────────────────────────────────
 
 @app.post("/api/resume/upload")
@@ -412,6 +444,7 @@ async def update_config(req: Request):
         "experience_levels", "education_filter",
         "include_unknown_education", "citizenship_filter",
         "use_simplify", "llm_score_limit",
+        "force_dev_mode", "force_customer_mode",
     ):
         if k in body:
             _S[k] = body[k]
@@ -425,7 +458,10 @@ def get_state(request: Request):
     # Localhost connections are always treated as developer sessions
     client_host = getattr(request.client, "host", "") if request.client else ""
     is_local = client_host in ("127.0.0.1", "::1", "localhost")
-    is_dev = is_local or bool(_S.get("force_dev_mode"))
+    is_dev = False if _S.get("force_customer_mode") else (
+        is_local or bool(_S.get("force_dev_mode"))
+    )
+    auth_user = _AUTH_SESSIONS.get(request.cookies.get(_AUTH_COOKIE, ""))
 
     profile = _S.get("profile") or {}
     scored  = _S.get("scored") or []
@@ -489,7 +525,9 @@ def get_state(request: Request):
                     "role":     j.get("title", ""),
                     "loc":      j.get("location", ""),
                     "score":    j.get("score", 0),
-                    "skills":   ", ".join(list(j.get("skills_matched") or [])[:4]),
+                    "id":       j.get("id") or f"{j.get('company', '')}|{j.get('title', '')}",
+                    "url":      j.get("application_url", ""),
+                    "skills":   ", ".join(list(j.get("matching_skills") or [])[:4]),
                     "status":   j.get("filter_status", ""),
                 }
                 for j in sorted(passed, key=lambda x: x.get("score", 0), reverse=True)[:20]
@@ -503,6 +541,8 @@ def get_state(request: Request):
                 "score":        a.get("score", 0),
                 "app_status":   a.get("status", ""),
                 "confirmation": a.get("confirmation", ""),
+                "id":           a.get("id") or f"{a.get('company', '')}|{a.get('title', '')}",
+                "url":          a.get("application_url", ""),
                 "date":         datetime.now().strftime("%Y-%m-%d"),
             }
             for a in (_S.get("applications") or [])
@@ -510,7 +550,7 @@ def get_state(request: Request):
         "output_files": files,
         # Auth / session
         "is_dev": is_dev,
-        "user": _S.get("user") or ({"email": "dev@localhost", "name": "Developer"} if is_dev else None),
+        "user": auth_user or ({"email": "dev@localhost", "name": "Developer"} if is_dev else None),
         # Resume list (synthesised from single-resume state)
         "resumes": (
             [{
@@ -554,8 +594,12 @@ async def auth_login(req: Request):
     user = _user_store.get_user_by_email(email)
     if not user or not verify_password(password, user.get("password_hash") or ""):
         return JSONResponse({"ok": False, "error": "Invalid email or password"})
-    _S["user"] = {"id": user["id"], "email": user["email"]}
-    return {"ok": True, "user": {"email": user["email"]}}
+    auth_user = {"id": user["id"], "email": user["email"]}
+    token = secrets.token_urlsafe(32)
+    _AUTH_SESSIONS[token] = auth_user
+    resp = JSONResponse({"ok": True, "user": {"email": user["email"]}})
+    resp.set_cookie(_AUTH_COOKIE, token, httponly=True, samesite="lax")
+    return resp
 
 @app.post("/api/auth/signup")
 async def auth_signup(req: Request):
@@ -570,22 +614,74 @@ async def auth_signup(req: Request):
         return JSONResponse({"ok": False, "error": "An account with this email already exists"})
     pw_hash = hash_password(password)
     user_id = _user_store.create_user(email, pw_hash)
-    _S["user"] = {"id": user_id, "email": email}
-    return {"ok": True, "user": {"email": email}}
+    auth_user = {"id": user_id, "email": email}
+    token = secrets.token_urlsafe(32)
+    _AUTH_SESSIONS[token] = auth_user
+    resp = JSONResponse({"ok": True, "user": {"email": email}})
+    resp.set_cookie(_AUTH_COOKIE, token, httponly=True, samesite="lax")
+    return resp
 
 @app.post("/api/auth/logout")
-def auth_logout():
-    _S["user"] = None
-    return {"ok": True}
+def auth_logout(request: Request):
+    token = request.cookies.get(_AUTH_COOKIE, "")
+    if token:
+        _AUTH_SESSIONS.pop(token, None)
+    resp = JSONResponse({"ok": True})
+    resp.delete_cookie(_AUTH_COOKIE)
+    return resp
 
 @app.get("/api/auth/google")
-def auth_google():
-    return JSONResponse({"ok": False, "error": "Google OAuth not configured — use email/password login"}, status_code=200)
+def auth_google(request: Request):
+    try:
+        redirect_uri = str(request.url_for("auth_google_callback"))
+        url, state = get_google_auth_url(redirect_uri)
+        _S["google_oauth_state"] = state
+        return {"ok": True, "url": url}
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
 
 @app.get("/api/auth/google/callback")
-def auth_google_callback():
+def auth_google_callback(request: Request, code: str = "", state: str = ""):
     from fastapi.responses import RedirectResponse
-    return RedirectResponse("/app")
+    if not code:
+        return RedirectResponse("/app#auth")
+    expected_state = _S.get("google_oauth_state")
+    if expected_state and state != expected_state:
+        return RedirectResponse("/app#auth")
+    try:
+        redirect_uri = str(request.url_for("auth_google_callback"))
+        info = verify_google_token(code, redirect_uri, state)
+        email = (info.get("email") or "").strip().lower()
+        google_id = info.get("sub") or info.get("id")
+        name = info.get("name") or email.split("@")[0]
+        if not email:
+            return RedirectResponse("/app#auth")
+
+        user = None
+        if _user_store is not None:
+            if google_id:
+                user = _user_store.get_user_by_google_id(google_id)
+            if user is None:
+                user = _user_store.get_user_by_email(email)
+            if user is None:
+                user_id = _user_store.create_user(
+                    email=email,
+                    password_hash=None,
+                    google_id=google_id,
+                )
+                user = {"id": user_id, "email": email, "google_id": google_id}
+            auth_user = {"id": user["id"], "email": user["email"], "name": name}
+        else:
+            auth_user = {"email": email, "name": name}
+
+        token = secrets.token_urlsafe(32)
+        _AUTH_SESSIONS[token] = auth_user
+        _S.pop("google_oauth_state", None)
+        resp = RedirectResponse("/app")
+        resp.set_cookie(_AUTH_COOKIE, token, httponly=True, samesite="lax")
+        return resp
+    except Exception:
+        return RedirectResponse("/app#auth")
 
 
 # ── Profile ───────────────────────────────────────────────────────────────────
@@ -622,6 +718,8 @@ async def extract_profile(req: Request):
         except Exception as e: err["e"] = str(e)
     th = _t.Thread(target=_run, daemon=True)
     th.start(); th.join(timeout=120)
+    if th.is_alive():
+        raise HTTPException(504, "Profile extraction timed out")
     if err: raise HTTPException(500, err["e"])
     return {"ok": True}
 
@@ -697,6 +795,8 @@ async def submit_feedback(req: Request):
 
 def _is_dev_request(request: Request) -> bool:
     host = getattr(request.client, "host", "") if request.client else ""
+    if _S.get("force_customer_mode"):
+        return False
     return host in ("127.0.0.1", "::1", "localhost") or bool(_S.get("force_dev_mode"))
 
 @app.get("/api/dev/overview")
@@ -874,7 +974,7 @@ def rerun_phase1():
 # ── Phase 2 ───────────────────────────────────────────────────────────────────
 
 @app.get("/api/phase/2/run")
-def run_phase2():
+def run_phase2(request: Request = None):
     if not _S.get("profile"):
         raise HTTPException(400, "Run Phase 1 first")
     titles = [
@@ -883,9 +983,14 @@ def run_phase2():
         if t.strip()
     ]
     loc = _S.get("location") or "United States"
+    params = request.query_params if request else {}
+    deep = str(params.get("deep", "")).lower() in ("1", "true", "yes")
+    append = str(params.get("append", "")).lower() in ("1", "true", "yes")
+    force_live = str(params.get("force", "")).lower() in ("1", "true", "yes") or append
 
     def _fn():
         prov = _make_provider()
+        offset = len(_S.get("jobs") or []) if append else 0
         result = phase2_discover_jobs(
             _S["profile"], titles, loc, prov,
             use_simplify=_S.get("use_simplify", True),
@@ -893,11 +998,16 @@ def run_phase2():
             days_old=_S.get("days_old", 30),
             education_filter=_S.get("education_filter") or None,
             include_unknown_education=_S.get("include_unknown_education", True),
+            deep_search=deep,
+            force_live=force_live,
+            offset=offset,
         )
         # Apply blacklist
         bl = {c.strip().lower() for c in (_S.get("blacklist") or "").split(",") if c.strip()}
         if bl:
             result = [j for j in result if j.get("company", "").lower() not in bl]
+        if append:
+            result = _dedupe_jobs_for_state((_S.get("jobs") or []) + result)
         _S["jobs"] = result
         return result
 
@@ -908,24 +1018,29 @@ def run_phase2():
     )
 
 @app.get("/api/phase/2/rerun")
-def rerun_phase2():
-    _clear_phases_after(2)
-    return run_phase2()
+def rerun_phase2(request: Request):
+    append = str(request.query_params.get("append", "")).lower() in ("1", "true", "yes")
+    if not append:
+        _clear_phases_after(2)
+    return run_phase2(request)
 
 # ── Phase 3 ───────────────────────────────────────────────────────────────────
 
 @app.get("/api/phase/3/run")
-def run_phase3():
+def run_phase3(request: Request = None):
     if _S.get("jobs") is None:
         raise HTTPException(400, "Run Phase 2 first")
 
     def _fn():
         prov = _make_provider()
+        params = request.query_params if request else {}
+        fast_only = str(params.get("fast", "")).lower() in ("1", "true", "yes")
         result = phase3_score_jobs(
             _S["jobs"], _S["profile"], prov, min_score=60,
             experience_levels=_S.get("experience_levels") or None,
             citizenship_filter=_S.get("citizenship_filter", "all"),
             llm_score_limit=_S.get("llm_score_limit", 10),
+            fast_only=fast_only,
         )
         _S["scored"] = result
         return result
@@ -937,9 +1052,9 @@ def run_phase3():
     )
 
 @app.get("/api/phase/3/rerun")
-def rerun_phase3():
+def rerun_phase3(request: Request):
     _clear_phases_after(3)
-    return run_phase3()
+    return run_phase3(request)
 
 # ── Phase 4 ───────────────────────────────────────────────────────────────────
 
@@ -998,17 +1113,15 @@ def run_phase5():
         apps      = _S["applications"] or []
         thr       = _S.get("threshold", 75)
         max_apps  = _S.get("max_apps", 10)
-        already   = set()
+        already   = _load_existing_applications()
         results   = []
         submitted = 0
         for job in apps:
             if job.get("score", 0) >= thr and submitted < max_apps:
                 res = phase5_simulate_submission(job, already_applied=already)
-                already.add((
-                    job.get("company", "").lower(),
-                    job.get("title", "").lower(),
-                ))
-                submitted += 1
+                if res.get("status") != "Skipped":
+                    submitted += 1
+                already.add((job.get("company", "").lower(), job.get("title", "").lower()))
                 results.append({**job, **res})
             else:
                 results.append({**job, "status": "Manual Required", "confirmation": "N/A"})
@@ -1075,28 +1188,29 @@ def run_phase7():
 @app.get("/api/phase/2/cache")
 def phase2_cache_status():
     import json as _json
-    cache = RESOURCES_DIR / "sample_jobs.json"
-    if not cache.exists():
+    caches = [RESOURCES_DIR / "sample_jobs_quick.json", RESOURCES_DIR / "sample_jobs_deep.json"]
+    existing = [p for p in caches if p.exists()]
+    if not existing:
         return {"exists": False}
     try:
-        data = _json.loads(cache.read_text(encoding="utf-8"))
-        first_url = (data[0].get("application_url", "") if data else "")
-        _demo_domains = [
-            "nvidia.com/careers", "intel.com/jobs", "microsoft.com/careers",
-            "apple.com/jobs", "lumentum.com/careers", "micron.com/careers",
-            "research.ibm.com", "samsung.com/us/careers",
-        ]
-        is_demo = any(d in first_url for d in _demo_domains)
-        age_h = int((time.time() - cache.stat().st_mtime) / 3600)
-        return {"exists": True, "count": len(data), "age_h": age_h, "is_demo": is_demo}
+        entries = []
+        total = 0
+        newest = max(p.stat().st_mtime for p in existing)
+        for cache in existing:
+            payload = _json.loads(cache.read_text(encoding="utf-8"))
+            jobs = payload.get("jobs", []) if isinstance(payload, dict) else payload
+            total += len(jobs or [])
+            entries.append({"name": cache.name, "count": len(jobs or [])})
+        age_h = int((time.time() - newest) / 3600)
+        return {"exists": True, "count": total, "age_h": age_h, "files": entries}
     except Exception as e:
-        return {"exists": True, "count": 0, "age_h": 0, "is_demo": False, "error": str(e)}
+        return {"exists": True, "count": 0, "age_h": 0, "files": [], "error": str(e)}
 
 
 @app.delete("/api/phase/2/cache")
 def phase2_cache_clear():
-    cache = RESOURCES_DIR / "sample_jobs.json"
-    cache.unlink(missing_ok=True)
+    for cache in (RESOURCES_DIR / "sample_jobs_quick.json", RESOURCES_DIR / "sample_jobs_deep.json"):
+        cache.unlink(missing_ok=True)
     for k in ("jobs", "scored", "applications", "tracker_path"):
         _S[k] = None
     _S["tailored_map"] = {}

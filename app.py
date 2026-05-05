@@ -18,6 +18,7 @@ import sys
 import threading
 import time
 import uuid
+from collections.abc import MutableMapping
 from datetime import datetime
 from pathlib import Path
 
@@ -40,15 +41,16 @@ except ImportError:
     def hash_password(pw): return pw
     def verify_password(pw, h): return pw == h
 
-# Simple user store backed by SQLite
+# Session and user store backed by SQLite
 try:
     from session_store import SQLiteSessionStore
-    _user_store = SQLiteSessionStore(
+    _session_store = SQLiteSessionStore(
         OUTPUT_DIR / "jobs_ai_sessions.sqlite3",
-        default_state_factory=dict,
+        default_state_factory=lambda: {},
     )
 except Exception:
-    _user_store = None
+    _session_store = None
+_user_store = _session_store
 from pipeline.phases import (
     phase1_ingest_resume,
     phase2_discover_jobs,
@@ -61,6 +63,8 @@ from pipeline.phases import (
 from pipeline.resume import _build_demo_resume, _read_resume, _save_tailored_resume
 
 app = FastAPI(title="Jobs AI")
+_STATE_COOKIE = "jobs_ai_session_id"
+_DEV_IMPERSONATE_COOKIE = "dev_impersonate_id"
 
 # ── Serve frontend ─────────────────────────────────────────────────────────────
 
@@ -86,9 +90,10 @@ def serve_output_file(path: str):
         raise HTTPException(404, "File not found")
     return FileResponse(p)
 
-# ── Single-user in-memory state ───────────────────────────────────────────────
+# ── Session state ─────────────────────────────────────────────────────────────
 
-_S: dict = {
+def _default_state() -> dict:
+    return {
     # LLM backend
     "mode": "ollama",
     "api_key": "",
@@ -138,6 +143,97 @@ _S: dict = {
     "dev_tweaks": {},
     "feedback": [],
 }
+
+
+class _SessionStateProxy(MutableMapping):
+    def __init__(self):
+        self._local = threading.local()
+        self._fallback = _default_state()
+
+    def bind(self, state: dict, session_id: str | None = None):
+        self._local.state = state
+        self._local.session_id = session_id
+
+    def current(self) -> dict:
+        return getattr(self._local, "state", self._fallback)
+
+    def session_id(self) -> str | None:
+        return getattr(self._local, "session_id", None)
+
+    def __getitem__(self, key):
+        return self.current()[key]
+
+    def __setitem__(self, key, value):
+        self.current()[key] = value
+
+    def __delitem__(self, key):
+        del self.current()[key]
+
+    def __iter__(self):
+        return iter(self.current())
+
+    def __len__(self):
+        return len(self.current())
+
+
+_S = _SessionStateProxy()
+
+if _session_store is not None:
+    _session_store.default_state_factory = _default_state
+
+
+def _is_local_request(request: Request) -> bool:
+    host = getattr(request.client, "host", "") if request.client else ""
+    return host in ("127.0.0.1", "::1", "localhost")
+
+
+def _is_dev_request(request: Request) -> bool:
+    return _is_local_request(request) or bool(_S.get("force_dev_mode"))
+
+
+def _bind_request_state(request: Request) -> tuple[str, dict, bool]:
+    impersonated = request.cookies.get(_DEV_IMPERSONATE_COOKIE)
+    session_id = impersonated if (_is_local_request(request) and impersonated) else request.cookies.get(_STATE_COOKIE)
+    is_new = not session_id
+    if not session_id:
+        session_id = uuid.uuid4().hex
+
+    if _session_store is None:
+        state = _default_state()
+    else:
+        state = _session_store.get_state(session_id)
+
+    _S.bind(state, session_id)
+    request.state.session_id = session_id
+    request.state.session_state = state
+    request.state.is_new_session = is_new
+    request.state.is_impersonating = bool(impersonated and impersonated == session_id and _is_local_request(request))
+    return session_id, state, is_new
+
+
+def _save_bound_state(state: dict | None = None, session_id: str | None = None) -> None:
+    sid = session_id or _S.session_id()
+    if not sid or _session_store is None:
+        return
+    _session_store.save_state(sid, state or _S.current())
+
+
+def _bind_thread_state(state: dict, session_id: str | None = None) -> None:
+    _S.bind(state, session_id)
+
+
+@app.middleware("http")
+async def session_state_middleware(request: Request, call_next):
+    session_id, state, is_new = _bind_request_state(request)
+    response = await call_next(request)
+
+    if is_new and not request.cookies.get(_DEV_IMPERSONATE_COOKIE):
+        response.set_cookie(_STATE_COOKIE, session_id, httponly=True, samesite="lax")
+
+    if not response.headers.get("content-type", "").startswith("text/event-stream"):
+        _save_bound_state(state, session_id)
+
+    return response
 
 # ── Resume helpers ────────────────────────────────────────────────────────────
 
@@ -206,8 +302,9 @@ def _serialize_resume(r: dict) -> dict:
     }
 
 
-def _run_extraction_bg(record: dict) -> None:
+def _run_extraction_bg(record: dict, state: dict, session_id: str | None) -> None:
     """Background-thread worker: run Phase 1 for a resume record."""
+    _bind_thread_state(state, session_id)
     rid = record["id"]
     _S["extracting_ids"].add(rid)
     try:
@@ -228,6 +325,7 @@ def _run_extraction_bg(record: dict) -> None:
         record["extract_error"] = str(e)
     finally:
         _S["extracting_ids"].discard(rid)
+        _save_bound_state(state, session_id)
 
 # ── Provider factory ──────────────────────────────────────────────────────────
 
@@ -275,7 +373,7 @@ class _LogCapture:
     def __getattr__(self, name):
         return getattr(self.original, name)
 
-def _run_phase_sse(phase: int, fn):
+def _run_phase_sse(phase: int, fn, state: dict | None = None, session_id: str | None = None):
     """Generator: run *fn* in a thread, stream SSE + console output."""
     result_q: "queue.Queue[tuple]" = queue.Queue()
     log_q: "queue.Queue[str]" = queue.Queue()
@@ -285,6 +383,8 @@ def _run_phase_sse(phase: int, fn):
         import sys
         old_stdout = sys.stdout
         try:
+            if state is not None:
+                _bind_thread_state(state, session_id)
             # Wrap stdout to capture while keeping normal output
             sys.stdout = _LogCapture(old_stdout, log_q)
             val = fn()
@@ -322,11 +422,13 @@ def _run_phase_sse(phase: int, fn):
 
     if status == "err":
         _S["error"][phase] = val
+        _save_bound_state(state, session_id)
         yield _sse({"type": "error", "phase": phase, "message": val})
     else:
         _S["done"].add(phase)
         _S["elapsed"][phase] = elapsed
         _S["error"].pop(phase, None)
+        _save_bound_state(state, session_id)
         yield _sse({
             "type": "done",
             "phase": phase,
@@ -496,7 +598,7 @@ async def upload_resume(file: UploadFile = File(...)):
         _sync_primary_scalars(record)
 
     # Auto-extract profile in a background thread for every upload
-    t = threading.Thread(target=_run_extraction_bg, args=(record,), daemon=True)
+    t = threading.Thread(target=_run_extraction_bg, args=(record, _S.current(), _S.session_id()), daemon=True)
     t.start()
 
     return {"ok": True, "filename": fname, "length": len(text), "id": record["id"], "extracting": True}
@@ -511,7 +613,7 @@ def load_demo_resume():
     resumes.append(record)
     if is_first:
         _sync_primary_scalars(record)
-    t = threading.Thread(target=_run_extraction_bg, args=(record,), daemon=True)
+    t = threading.Thread(target=_run_extraction_bg, args=(record, _S.current(), _S.session_id()), daemon=True)
     t.start()
     return {"ok": True, "filename": "demo_resume.txt", "id": record["id"], "extracting": True}
 
@@ -538,10 +640,7 @@ async def update_config(req: Request):
 
 @app.get("/api/state")
 def get_state(request: Request):
-    # Localhost connections are always treated as developer sessions
-    client_host = getattr(request.client, "host", "") if request.client else ""
-    is_local = client_host in ("127.0.0.1", "::1", "localhost")
-    is_dev = is_local or bool(_S.get("force_dev_mode"))
+    is_dev = _is_dev_request(request)
 
     profile = _S.get("profile") or {}
     scored  = _S.get("scored") or []
@@ -660,6 +759,9 @@ async def auth_login(req: Request):
     if not user or not verify_password(password, user.get("password_hash") or ""):
         return JSONResponse({"ok": False, "error": "Invalid email or password"})
     _S["user"] = {"id": user["id"], "email": user["email"]}
+    session_id = getattr(req.state, "session_id", None)
+    if session_id:
+        _user_store.associate_session_with_user(session_id, user["id"])
     return {"ok": True, "user": {"email": user["email"]}}
 
 @app.post("/api/auth/signup")
@@ -676,6 +778,9 @@ async def auth_signup(req: Request):
     pw_hash = hash_password(password)
     user_id = _user_store.create_user(email, pw_hash)
     _S["user"] = {"id": user_id, "email": email}
+    session_id = getattr(req.state, "session_id", None)
+    if session_id:
+        _user_store.associate_session_with_user(session_id, user_id)
     return {"ok": True, "user": {"email": email}}
 
 @app.post("/api/auth/logout")
@@ -729,6 +834,7 @@ async def extract_profile(req: Request):
     import threading as _t
     err = {}
     def _run():
+        _bind_thread_state(_S.current(), _S.session_id())
         try: _fn()
         except Exception as e: err["e"] = str(e)
     th = _t.Thread(target=_run, daemon=True)
@@ -849,9 +955,19 @@ async def submit_feedback(req: Request):
 
 # ── Dev endpoints ─────────────────────────────────────────────────────────────
 
-def _is_dev_request(request: Request) -> bool:
-    host = getattr(request.client, "host", "") if request.client else ""
-    return host in ("127.0.0.1", "::1", "localhost") or bool(_S.get("force_dev_mode"))
+def _list_tracked_sessions() -> list[dict]:
+    if _session_store is None:
+        return []
+    return _session_store.list_sessions(limit=500)
+
+
+def _load_session_state(session_id: str) -> dict:
+    if _session_store is None:
+        raise HTTPException(503, "Session store unavailable")
+    known = {session["id"] for session in _list_tracked_sessions()}
+    if session_id not in known:
+        raise HTTPException(404, "Session not found")
+    return _session_store.get_state(session_id)
 
 @app.get("/api/dev/overview")
 def dev_overview(request: Request):
@@ -860,40 +976,25 @@ def dev_overview(request: Request):
     import shutil, sys as _sys
     disk = shutil.disk_usage(OUTPUT_DIR)
     out_files = list(OUTPUT_DIR.glob("*")) if OUTPUT_DIR.exists() else []
-    sessions = [{
-        "id": "local",
-        "name": (_S.get("profile") or {}).get("name") or "Local User",
-        "email": (_S.get("user") or {}).get("email") or "",
-        "has_resume": bool(_S.get("resume_text")),
-        "resume_filename": _S.get("resume_filename") or "",
-        "mode": _S.get("mode", "demo"),
-        "done": sorted(_S["done"]),
-        "errors": _S.get("error") or {},
-        "job_count": len(_S.get("jobs") or []),
-        "scored_count": len(_S.get("scored") or []),
-        "application_count": len(_S.get("applications") or []),
-        "applied_count": sum(1 for a in (_S.get("applications") or []) if a.get("status") == "Applied"),
-        "manual_count": sum(1 for a in (_S.get("applications") or []) if a.get("status") == "Manual Required"),
-        "target": _S.get("job_titles") or "",
-        "location": _S.get("location") or "",
-        "feedback_count": len(_S.get("feedback") or []),
-        "unread_feedback_count": sum(1 for f in (_S.get("feedback") or []) if not f.get("read")),
-    }]
-    apps = _S.get("applications") or []
+    sessions = _list_tracked_sessions()
+    all_apps = sum(session.get("application_count", 0) for session in sessions)
+    all_applied = sum(session.get("applied_count", 0) for session in sessions)
+    all_manual = sum(session.get("manual_count", 0) for session in sessions)
+    all_errors = sum(1 for session in sessions for v in (session.get("errors") or {}).values() if v)
     return {
         "summary": {
-            "users": 1,
-            "with_resume": 1 if _S.get("resume_text") else 0,
-            "applications": len(apps),
-            "applied": sum(1 for a in apps if a.get("status") == "Applied"),
-            "manual": sum(1 for a in apps if a.get("status") == "Manual Required"),
-            "errors": len([v for v in (_S.get("error") or {}).values() if v]),
+            "users": len(sessions),
+            "with_resume": sum(1 for session in sessions if session.get("has_resume")),
+            "applications": all_apps,
+            "applied": all_applied,
+            "manual": all_manual,
+            "errors": all_errors,
         },
         "status": {
             "app": "running",
             "python": _sys.version.split()[0],
             "output_files": len(out_files),
-            "session_files": 1,
+            "session_files": len(sessions),
             "session_db_mb": round(
                 (OUTPUT_DIR / "jobs_ai_sessions.sqlite3").stat().st_size / 1e6, 2
             ) if (OUTPUT_DIR / "jobs_ai_sessions.sqlite3").exists() else 0,
@@ -908,38 +1009,57 @@ def dev_overview(request: Request):
 def dev_session_detail(session_id: str, request: Request):
     if not _is_dev_request(request):
         raise HTTPException(403, "Developer access denied")
+    state = _load_session_state(session_id)
     return {
-        **(_S.get("profile") or {}),
-        "resume_text": (_S.get("resume_text") or "")[:2000],
-        "feedback": _S.get("feedback") or [],
+        **(state.get("profile") or {}),
+        "resume_text": (state.get("resume_text") or "")[:2000],
+        "feedback": state.get("feedback") or [],
+        "user": state.get("user"),
+        "done": sorted(state.get("done") or []),
+        "error": state.get("error") or {},
     }
 
 @app.post("/api/dev/session/{session_id}/reset")
 def dev_session_reset(session_id: str, request: Request):
     if not _is_dev_request(request):
         raise HTTPException(403, "Developer access denied")
-    return reset_state()
+    if _session_store is None:
+        raise HTTPException(503, "Session store unavailable")
+    _load_session_state(session_id)
+    _session_store.reset_state(session_id)
+    return {"ok": True}
 
 @app.delete("/api/dev/session/{session_id}")
 def dev_session_delete(session_id: str, request: Request):
     if not _is_dev_request(request):
         raise HTTPException(403, "Developer access denied")
-    return reset_state()
+    if _session_store is None:
+        raise HTTPException(503, "Session store unavailable")
+    _load_session_state(session_id)
+    _session_store.delete_session(session_id)
+    return {"ok": True}
 
 @app.post("/api/dev/session/{session_id}/impersonate")
 def dev_impersonate(session_id: str, request: Request):
     if not _is_dev_request(request):
         raise HTTPException(403, "Developer access denied")
-    return {"ok": True}
+    _load_session_state(session_id)
+    response = JSONResponse({"ok": True})
+    response.set_cookie(_DEV_IMPERSONATE_COOKIE, session_id, httponly=True, samesite="lax")
+    return response
 
 @app.post("/api/dev/session/stop-impersonating")
 def dev_stop_impersonate(request: Request):
-    return {"ok": True}
+    response = JSONResponse({"ok": True})
+    response.delete_cookie(_DEV_IMPERSONATE_COOKIE)
+    return response
 
 @app.post("/api/dev/session/{session_id}/feedback/read")
 def dev_mark_feedback_read(session_id: str, request: Request):
-    for f in _S.get("feedback") or []:
+    state = _load_session_state(session_id)
+    for f in state.get("feedback") or []:
         f["read"] = True
+    _session_store.save_state(session_id, state)
     return {"ok": True}
 
 @app.post("/api/dev/cli")
@@ -1020,7 +1140,7 @@ def run_phase1():
         return result
 
     return StreamingResponse(
-        _run_phase_sse(1, _fn),
+        _run_phase_sse(1, _fn, _S.current(), _S.session_id()),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -1061,7 +1181,7 @@ def run_phase2():
         return result
 
     return StreamingResponse(
-        _run_phase_sse(2, _fn),
+        _run_phase_sse(2, _fn, _S.current(), _S.session_id()),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -1090,7 +1210,7 @@ def run_phase3():
         return result
 
     return StreamingResponse(
-        _run_phase_sse(3, _fn),
+        _run_phase_sse(3, _fn, _S.current(), _S.session_id()),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -1136,7 +1256,7 @@ def run_phase4():
         return apps
 
     return StreamingResponse(
-        _run_phase_sse(4, _fn),
+        _run_phase_sse(4, _fn, _S.current(), _S.session_id()),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -1175,7 +1295,7 @@ def run_phase5():
         return results
 
     return StreamingResponse(
-        _run_phase_sse(5, _fn),
+        _run_phase_sse(5, _fn, _S.current(), _S.session_id()),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -1199,7 +1319,7 @@ def run_phase6():
         return tracker_path
 
     return StreamingResponse(
-        _run_phase_sse(6, _fn),
+        _run_phase_sse(6, _fn, _S.current(), _S.session_id()),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -1224,7 +1344,7 @@ def run_phase7():
         return report
 
     return StreamingResponse(
-        _run_phase_sse(7, _fn),
+        _run_phase_sse(7, _fn, _S.current(), _S.session_id()),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

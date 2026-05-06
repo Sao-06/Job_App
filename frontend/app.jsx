@@ -7679,10 +7679,21 @@ function DevPage({ state: globalState, refresh: globalRefresh }) {
                 <DevSecHead title="System" hint="server process snapshot"/>
                 <div className="dop-keyval">
                   <div><span>App status</span><b className={'tag tag-' + (status.app === 'running' ? 'ok' : 'bad')}>{status.app || '—'}</b></div>
-                  <div title={(metrics?.server_started_at || status.server_started_at || '') + ' (since process boot)'}>
-                    <span>Uptime</span>
+                  <div title={(metrics?.server_started_at || status.server_started_at || '') + ' (uvicorn process boot — resets on systemctl restart)'}>
+                    <span>Process uptime</span>
                     <b>{_formatUptime(metrics?.server_uptime_s ?? status.server_uptime_s ?? 0)}</b>
                   </div>
+                  {(() => {
+                    const osUp = metrics?.os_uptime_s ?? status.os_uptime_s;
+                    if (osUp == null) return null;
+                    const osBoot = metrics?.os_boot_at || status.os_boot_at || '';
+                    return (
+                      <div title={osBoot ? `host booted ${osBoot}` : 'host kernel uptime'}>
+                        <span>Host uptime</span>
+                        <b>{_formatUptime(osUp)}</b>
+                      </div>
+                    );
+                  })()}
                   <div><span>Disk free</span><b>{status.disk_free_gb ?? 0} GB</b></div>
                 </div>
                 <div className="dop-sys-foot">

@@ -19,6 +19,12 @@ google-auth-oauthlib>=1.2.0
 python-dotenv>=1.0.0
 apscheduler>=3.10.0
 
+# Live system metrics on the Dev Ops page (htop CPU panel, top-processes,
+# CPU temperature, memory + load avg). Lazy-imported in app.py — without
+# this the panels fall back to "psutil not installed" placeholders on
+# fresh deploys (notably the Pi production box).
+psutil>=5.9.0
+
 # Stripe billing (Pro plan checkout + webhook)
 stripe>=8.0.0
 

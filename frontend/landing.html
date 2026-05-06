@@ -23,10 +23,15 @@
   --surface:   #1c1c2e;
   --bdr:       rgba(255,255,255,.06);
   --bdr2:      rgba(255,255,255,.13);
-  --t1:        #f1f1fa;
-  --t2:        #9999b6;
-  --t3:        #6a6a86;
-  --t4:        #3e3e58;
+  /* Text tones — brightened for readability.  Previous values had t2 at
+     #9999b6 (~67% L) and t3 at #6a6a86 (~45% L), which felt muted on the
+     near-black landing background.  The new ramp keeps the same relative
+     hierarchy but bumps each step closer to white so all secondary copy
+     passes WCAG AA. */
+  --t1:        #f6f7ff;
+  --t2:        #c8c8df;
+  --t3:        #9da0bd;
+  --t4:        #6e718e;
   --accent:    #7c5cff;
   --accent-h:  #a78bff;
   --accent-d:  rgba(124,92,255,.14);

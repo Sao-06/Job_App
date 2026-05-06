@@ -25,6 +25,11 @@ from .helpers import (infer_experience_level, infer_education_required,
                       filter_jobs_by_education, validate_job_urls)
 from .providers import BaseProvider, RUBRIC_WEIGHTS, compute_skill_coverage
 from .resume import _build_demo_resume, _save_tailored_resume
+from .heuristic_tailor import (
+    validate_tailoring,
+    heuristic_tailor_resume,
+    merge_with_heuristic,
+)
 
 
 # ── Phase 1 ────────────────────────────────────────────────────────────────────
@@ -642,42 +647,53 @@ def _tailoring_is_empty(tailored: dict) -> bool:
 def phase4_tailor_resume(job: dict, profile: dict, resume_text: str,
                           provider: BaseProvider, include_cover_letter: bool = False,
                           section_order: list = None) -> dict:
-    tailored = provider.tailor_resume(job, profile, resume_text) or {}
+    """Produce a tailoring dict for *job* against *profile*.
 
-    # Validator: if both skills_reordered and experience_bullets came back empty,
-    # the LLM silently failed.  Retry once, then fall back to profile-derived
-    # defaults so _save_tailored_resume always has something to render.
-    if _tailoring_is_empty(tailored):
+    Pipeline:
+      1. Ask the configured provider.
+      2. Structurally validate the response (low-end local LLMs frequently
+         return wrong shapes — wrong types, ``null`` fields, dicts where
+         strings were expected).  Validation downgrades malformed output
+         to ``None`` so we don't render garbage.
+      3. If validation rejects, retry once.
+      4. If still bad, fall back to the deterministic heuristic.  The
+         heuristic NEVER fabricates: it reorders existing skills and
+         bullets and surfaces missing JD keywords as ``ats_keywords_missing``.
+      5. If validation accepts but a field is empty, merge the LLM's good
+         fields with heuristic defaults for the empties (hybrid mode).
+    """
+    # Always compute the heuristic first — it's cheap and serves as the
+    # safety net for every code path below.
+    heuristic = heuristic_tailor_resume(job, profile, resume_text)
+
+    raw = None
+    try:
+        raw = provider.tailor_resume(job, profile, resume_text) or {}
+    except Exception as e:
+        console.print(f"  [yellow]Tailoring provider error: {e}[/yellow]")
+
+    validated = validate_tailoring(raw)
+
+    if validated is None:
         console.print(
-            "  [yellow][!] Tailoring returned empty - retrying once.[/yellow]"
+            "  [yellow][!] Tailoring response unusable — retrying once.[/yellow]"
         )
         try:
             retry = provider.tailor_resume(job, profile, resume_text) or {}
         except Exception as e:
             console.print(f"  [yellow]Retry failed: {e}[/yellow]")
             retry = {}
-        if not _tailoring_is_empty(retry):
-            tailored = retry
-        else:
-            console.print(
-                "  [yellow][!] Retry also empty - falling back to profile defaults.[/yellow]"
-            )
-            reqs = [str(r) for r in (job.get("requirements") or []) if r]
-            skills_fb = list(profile.get("top_hard_skills") or [])
-            # Ensure ATS "after" score can improve: surface any job requirements
-            # not already present in the profile's hard-skill list.
-            seen = {s.lower() for s in skills_fb}
-            for r in reqs:
-                if r.lower() not in seen:
-                    skills_fb.append(r)
-                    seen.add(r.lower())
-            tailored = {
-                "skills_reordered":     skills_fb,
-                "experience_bullets":   [],
-                "ats_keywords_missing": tailored.get("ats_keywords_missing") or reqs,
-                "section_order":        tailored.get("section_order")
-                                         or ["Skills", "Projects", "Experience", "Education"],
-            }
+        validated = validate_tailoring(retry)
+
+    if validated is None:
+        console.print(
+            "  [yellow][!] Falling back to heuristic tailoring "
+            "(skills + bullets reordered, no fabrication).[/yellow]"
+        )
+        tailored = heuristic
+    else:
+        # Hybrid: LLM filled some fields, heuristic backfills the rest.
+        tailored = merge_with_heuristic(validated, heuristic)
 
     if section_order:
         tailored["section_order"] = section_order

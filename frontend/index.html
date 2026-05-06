@@ -27,10 +27,15 @@
   --bdr2:     rgba(255,255,255,.22);
 
   /* high-contrast text ladder; t2/t3 no longer wash out */
-  --t1:       #f6f7ff;
-  --t2:       #b9bee0;
-  --t3:       #8186ad;
-  --t4:       #50547a;
+  /* Text tones — bumped lighter so secondary/tertiary copy reads cleanly
+     against the near-black background.  Old values (#b9bee0 / #8186ad /
+     #50547a) made t3 hints feel muted and t4 microcopy fail WCAG AA;
+     these brighten the ladder without losing the brand's lavender tint.
+     t1 stays near-white so the relative hierarchy is preserved. */
+  --t1:       #fafbff;
+  --t2:       #dadef0;
+  --t3:       #b1b6d4;
+  --t4:       #8084a8;
 
   /* primary: electric violet */
   --accent:   #7c5cff;
@@ -1198,6 +1203,138 @@ input, select, textarea { font-family:var(--sans) }
   font-size: 12.5px; line-height: 1.5; color: var(--t3);
   font-family: var(--sans);
 }
+
+/* ── Past runs & outputs panel ─────────────────────────────────────────
+   Lives at the top of the agent pipeline column so the user can grab
+   tracker / résumé / report files without re-running the pipeline. */
+.run-outputs {
+  background: var(--bg-2);
+  border: 1px solid var(--bdr);
+  border-radius: 12px;
+  margin-bottom: 14px;
+  overflow: hidden;
+}
+.run-outputs-empty {
+  border-style: dashed;
+  background: rgba(255,255,255,.015);
+}
+.run-outputs-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 12px 14px; cursor: pointer;
+  user-select: none;
+  transition: background .12s ease;
+}
+.run-outputs-head:hover { background: var(--bg-3) }
+.run-outputs-collapsed .run-outputs-head:hover { background: var(--bg-3) }
+.run-outputs-head-l { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1 }
+.run-outputs-head-l > svg { color: var(--accent-h); flex-shrink: 0 }
+.run-outputs-h {
+  font-size: 14px; font-weight: 600; color: var(--t1); letter-spacing: -.01em;
+}
+.run-outputs-count {
+  font-family: var(--mono); font-size: 11px;
+  background: var(--bg-3); border: 1px solid var(--bdr);
+  color: var(--t3); padding: 1px 7px; border-radius: 4px;
+}
+.run-outputs-head-r { display: flex; align-items: center; gap: 6px; flex-shrink: 0 }
+.run-outputs-quick {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 5px 10px; border-radius: 7px;
+  font-size: 12px; font-weight: 500; color: var(--cyan);
+  background: rgba(34,229,255,.10); border: 1px solid rgba(34,229,255,.35);
+  text-decoration: none; transition: all .12s;
+}
+.run-outputs-quick:hover { background: rgba(34,229,255,.18); border-color: rgba(34,229,255,.55); text-decoration: none }
+.run-outputs-quick > svg { color: var(--cyan) }
+.run-outputs-refresh {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; border-radius: 6px;
+  background: transparent; border: 1px solid var(--bdr);
+  color: var(--t3); cursor: pointer; transition: all .12s;
+}
+.run-outputs-refresh:hover { background: var(--bg-3); color: var(--t1); border-color: var(--bdr2) }
+.run-outputs-chev { display: inline-flex; color: var(--t3) }
+
+.run-outputs-empty-body {
+  display: flex; align-items: flex-start; gap: 14px;
+  padding: 18px 18px 22px;
+}
+.run-outputs-empty-h { font-size: 13.5px; color: var(--t1); font-weight: 600; margin-bottom: 3px }
+.run-outputs-empty-sub { font-size: 12.5px; color: var(--t3); line-height: 1.55 }
+
+.run-outputs-body {
+  border-top: 1px solid var(--bdr);
+  display: flex; flex-direction: column;
+}
+.run-bucket { border-bottom: 1px solid var(--bdr) }
+.run-bucket:last-child { border-bottom: none }
+.run-bucket-h {
+  display: grid;
+  grid-template-columns: auto auto auto 1fr auto;
+  align-items: center; gap: 9px;
+  width: 100%; padding: 10px 14px;
+  background: none; border: none; cursor: pointer; text-align: left;
+  color: var(--t2); transition: background .12s ease;
+}
+.run-bucket-h:hover { background: var(--bg-3) }
+.run-bucket-h > svg:first-child { color: var(--t3) }
+.run-bucket-t { font-size: 13px; font-weight: 600; color: var(--t1) }
+.run-bucket-n {
+  font-family: var(--mono); font-size: 10.5px; font-weight: 600;
+  color: var(--accent-h); background: var(--accent-d);
+  border: 1px solid var(--accent-b);
+  padding: 1px 6px; border-radius: 4px;
+}
+.run-bucket-d {
+  font-size: 12px; color: var(--t3);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.run-bucket-chev { color: var(--t3); justify-self: end }
+
+.run-files {
+  list-style: none; margin: 0; padding: 0 0 6px 0;
+  background: rgba(255,255,255,.012);
+}
+.run-file {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  align-items: center; gap: 10px;
+  padding: 7px 14px 7px 28px;
+  border-top: 1px solid rgba(255,255,255,.025);
+  font-size: 12.5px;
+}
+.run-file:first-child { border-top: 1px solid var(--bdr) }
+.run-file-icon { color: var(--t3); display: inline-flex }
+.run-file-name {
+  color: var(--t1); font-family: var(--mono); font-size: 12px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.run-file-size {
+  font-family: var(--mono); font-size: 11px; color: var(--t4);
+  flex-shrink: 0;
+}
+.run-file-actions { display: flex; gap: 4px; flex-shrink: 0 }
+.run-file-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; border-radius: 6px;
+  background: transparent; border: 1px solid var(--bdr);
+  color: var(--t3); cursor: pointer; transition: all .12s;
+  text-decoration: none;
+}
+.run-file-btn:hover { background: var(--bg-3); color: var(--t1); border-color: var(--bdr2); text-decoration: none }
+.run-file-btn-primary {
+  background: var(--accent-d); border-color: var(--accent-b); color: var(--accent-h);
+}
+.run-file-btn-primary:hover { background: rgba(124,92,255,.22); border-color: var(--accent-h); color: var(--t1) }
+
+.run-files-more {
+  padding: 6px 14px 4px 28px;
+}
+.run-files-more-btn {
+  background: none; border: none; cursor: pointer;
+  font-size: 12px; color: var(--accent-h); padding: 2px 0;
+}
+.run-files-more-btn:hover { color: var(--t1); text-decoration: underline }
 
 /* Phase list */
 .agent-phases { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px }
@@ -2412,26 +2549,26 @@ input, select, textarea { font-family:var(--sans) }
 .dev-card { background: var(--surface); border: 1px solid var(--bdr); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 10px }
 .dev-card.dev-span { grid-column: 1 / -1 }
 .dev-card.dev-users { grid-column: 4 / 5; grid-row: 2 / 4 }
-.dev-card-h { display: flex; align-items: center; gap: 7px; font-size: 14px; font-weight: 600; color: var(--t3); text-transform: uppercase; letter-spacing: .07em }
+.dev-card-h { display: flex; align-items: center; gap: 7px; font-size: 14.5px; font-weight: 600; color: var(--t3); text-transform: uppercase; letter-spacing: .07em }
 .dev-kpis { display: flex; gap: 14px; flex-wrap: wrap }
 .dev-kpi { display: flex; flex-direction: column; align-items: center; gap: 5px; padding: 14px 20px; border-radius: 10px; background: var(--bg-2); border: 1px solid var(--bdr); flex: 1; min-width: 80px }
-.dev-kpi b { font-family: var(--mono); font-size: 25px; font-weight: 700; color: var(--t1) }
-.dev-kpi span { font-size: 13px; color: var(--t3); text-transform: uppercase; letter-spacing: .05em }
+.dev-kpi b { font-family: var(--mono); font-size: 26px; font-weight: 700; color: var(--t1) }
+.dev-kpi span { font-size: 14px; color: var(--t3); text-transform: uppercase; letter-spacing: .05em }
 .dev-kpi.warn b { color: var(--bad) }
 .dev-status { display: flex; flex-direction: column; gap: 6px }
-.dev-status > div { display: flex; justify-content: space-between; font-size: 14.5px; align-items: center }
+.dev-status > div { display: flex; justify-content: space-between; font-size: 15.5px; align-items: center }
 .dev-status span { color: var(--t3) }
 .dev-status b { color: var(--t1); font-family: var(--mono) }
 .dev-status b.ok { color: var(--good) }
 .dev-events { display: flex; flex-direction: column; gap: 4px; max-height: 300px; overflow-y: auto }
-.dev-event { display: grid; grid-template-columns: 70px 100px 1fr; gap: 10px; font-size: 14px; padding: 5px 0; border-bottom: 1px solid var(--bdr) }
+.dev-event { display: grid; grid-template-columns: 76px 110px 1fr; gap: 10px; font-size: 15px; padding: 6px 0; border-bottom: 1px solid var(--bdr) }
 .dev-event:last-child { border: none }
 .dev-event span { color: var(--t3); font-family: var(--mono) }
 .dev-event b { color: var(--accent-h); font-weight: 600 }
 .dev-event p { color: var(--t2) }
 .dev-terminal {
   flex: 1; background: var(--bg); border: 1px solid var(--bdr); border-radius: 8px;
-  padding: 12px 14px; font-family: var(--mono); font-size: 14px; line-height: 1.7;
+  padding: 12px 14px; font-family: var(--mono); font-size: 14.5px; line-height: 1.7;
   color: var(--t2); white-space: pre-wrap; overflow-y: auto; min-height: 80px;
 }
 .dev-cli-actions { display: flex; gap: 6px; flex-wrap: wrap }
@@ -2449,12 +2586,12 @@ input, select, textarea { font-family:var(--sans) }
 }
 .dev-user:hover { background: var(--bg-3) }
 .dev-user.active { background: var(--accent-d); border-color: var(--accent-b) }
-.dev-user b { display: block; font-size: 15.5px; color: var(--t1); font-weight: 600 }
-.dev-user small { display: block; font-size: 13px; color: var(--t3); font-family: var(--mono); margin-top: 1px }
-.dev-user em { font-size: 13px; color: var(--t3); font-style: normal; font-family: var(--mono) }
+.dev-user b { display: block; font-size: 16.5px; color: var(--t1); font-weight: 600 }
+.dev-user small { display: block; font-size: 14px; color: var(--t3); font-family: var(--mono); margin-top: 1px }
+.dev-user em { font-size: 14px; color: var(--t3); font-style: normal; font-family: var(--mono) }
 .dev-inspect-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; grid-template-rows: auto; gap: 14px; margin-top: 10px }
 .inspect-sec { display: flex; flex-direction: column; gap: 8px }
-.inspect-sec h4 { font-size: 14px; font-weight: 600; color: var(--t3); text-transform: uppercase; letter-spacing: .07em }
+.inspect-sec h4 { font-size: 14.5px; font-weight: 600; color: var(--t3); text-transform: uppercase; letter-spacing: .07em }
 .dev-tweak-row { display: flex; gap: 8px; flex-wrap: wrap }
 .dev-swatch { width: 24px; height: 24px; border-radius: 6px; border: 2px solid transparent; cursor: pointer; transition: transform .12s, border-color .12s; padding: 0 }
 .dev-swatch:hover { transform: scale(1.2); border-color: rgba(255,255,255,.3) }
@@ -2488,7 +2625,7 @@ input, select, textarea { font-family:var(--sans) }
   padding: 11px 22px;
   background: linear-gradient(180deg, var(--bg-1), var(--bg-2));
   border-bottom: 1px solid var(--bdr);
-  font-family: var(--sans); font-size: 12.5px;
+  font-family: var(--sans); font-size: 13.5px;
 }
 .dop-opsbar-left,
 .dop-opsbar-right { display: inline-flex; align-items: center; gap: 12px; flex-wrap: wrap }
@@ -2503,18 +2640,18 @@ input, select, textarea { font-family:var(--sans) }
 .dop-opsbar-meta i {
   font-style: normal;
   font-family: var(--sans);
-  font-size: 11.5px; font-weight: 500;
+  font-size: 12.5px; font-weight: 500;
   letter-spacing: -.005em;
   color: var(--t4);
 }
 .dop-opsbar-meta b {
   font-weight: 600; color: var(--t1);
-  font-family: var(--mono); font-size: 11.5px;
+  font-family: var(--mono); font-size: 12.5px;
 }
 
 .dop-brand {
   font-family: var(--serif); font-weight: 600;
-  letter-spacing: -.005em; font-size: 14.5px;
+  letter-spacing: -.005em; font-size: 15.5px;
   color: var(--accent-h);
   padding: 4px 12px; border-radius: 6px;
   background: var(--accent-d); border: 1px solid var(--accent-b);
@@ -2525,7 +2662,7 @@ input, select, textarea { font-family:var(--sans) }
    so a glance reads as plain English. */
 .dop-pulse {
   display: inline-flex; align-items: center; gap: 7px;
-  font-family: var(--sans); font-size: 12px;
+  font-family: var(--sans); font-size: 13px;
   font-weight: 500; letter-spacing: -.005em;
   padding: 4px 11px; border-radius: 999px;
   border: 1px solid;
@@ -2550,10 +2687,10 @@ input, select, textarea { font-family:var(--sans) }
    a control surface. */
 .dop-btn {
   display: inline-flex; align-items: center; gap: 6px;
-  padding: 6px 12px; border-radius: 7px;
+  padding: 7px 13px; border-radius: 7px;
   background: var(--bg-3); border: 1px solid var(--bdr);
   color: var(--t2);
-  font-family: var(--sans); font-size: 12.5px;
+  font-family: var(--sans); font-size: 13.5px;
   font-weight: 500; letter-spacing: -.005em;
   cursor: pointer;
   transition: color .12s, background .12s, border-color .12s, transform .12s;
@@ -2570,7 +2707,7 @@ input, select, textarea { font-family:var(--sans) }
 .dop-btn-link {
   background: transparent; border-color: transparent; padding: 4px 6px;
   color: var(--accent-h);
-  font-family: var(--sans); font-size: 13px; font-weight: 500;
+  font-family: var(--sans); font-size: 14px; font-weight: 500;
 }
 .dop-btn-link:hover { background: transparent; color: var(--t1); text-decoration: underline; text-underline-offset: 3px }
 
@@ -2584,9 +2721,9 @@ input, select, textarea { font-family:var(--sans) }
 }
 .dop-tab {
   display: inline-flex; align-items: center; gap: 8px;
-  padding: 12px 16px; border: none; background: transparent;
+  padding: 13px 18px; border: none; background: transparent;
   color: var(--t3);
-  font-family: var(--sans); font-size: 14.5px;
+  font-family: var(--sans); font-size: 15.5px;
   font-weight: 500; letter-spacing: -.005em;
   cursor: pointer; white-space: nowrap;
   position: relative;
@@ -2610,7 +2747,7 @@ input, select, textarea { font-family:var(--sans) }
 .dop-tabs-hint {
   margin-left: auto; padding: 0 12px;
   align-self: center;
-  font-family: var(--sans); font-size: 12.5px;
+  font-family: var(--sans); font-size: 13.5px;
   color: var(--t3); font-style: italic;
   white-space: nowrap;
   overflow: hidden; text-overflow: ellipsis;
@@ -2649,11 +2786,11 @@ input, select, textarea { font-family:var(--sans) }
   flex-shrink: 0;
 }
 .dop-sec-title {
-  font-family: var(--sans); font-size: 15.5px; font-weight: 600;
+  font-family: var(--sans); font-size: 16.5px; font-weight: 600;
   color: var(--t1); letter-spacing: -.005em;
 }
 .dop-sec-hint {
-  font-family: var(--sans); font-size: 13px; font-weight: 400;
+  font-family: var(--sans); font-size: 14px; font-weight: 400;
   color: var(--t3); font-style: italic;
   letter-spacing: -.005em;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -2664,13 +2801,13 @@ input, select, textarea { font-family:var(--sans) }
   flex-shrink: 0;
 }
 .dop-sec-meta {
-  font-family: var(--mono); font-size: 11.5px;
+  font-family: var(--mono); font-size: 12.5px;
   color: var(--t4);
 }
 .dop-pill-mini {
-  margin-left: 6px; padding: 2px 8px; border-radius: 999px;
+  margin-left: 6px; padding: 2px 9px; border-radius: 999px;
   background: var(--bg-3); color: var(--t3);
-  font-family: var(--mono); font-size: 11px; font-weight: 500;
+  font-family: var(--mono); font-size: 12px; font-weight: 500;
 }
 .dop-pill-mini.dop-pill-dev {
   color: var(--accent-h);
@@ -2703,13 +2840,13 @@ input, select, textarea { font-family:var(--sans) }
 }
 .dop-kpis .dev-kpi span {
   flex: 1; text-align: left;
-  font-family: var(--sans); font-size: 13px;
+  font-family: var(--sans); font-size: 14px;
   font-weight: 500; letter-spacing: -.005em;
   color: var(--t3);
   text-transform: none;
 }
 .dop-kpis .dev-kpi b {
-  font-size: 24px; font-family: var(--mono); color: var(--t1);
+  font-size: 26px; font-family: var(--mono); color: var(--t1);
   font-weight: 700;
 }
 .dop-kpis .dev-kpi.warn b { color: var(--bad) }
@@ -2740,22 +2877,369 @@ input, select, textarea { font-family:var(--sans) }
 .dop-keyval > div:last-child { border-bottom: none }
 .dop-keyval span {
   color: var(--t3);
-  font-family: var(--sans); font-size: 13px;
+  font-family: var(--sans); font-size: 14px;
   font-weight: 500; letter-spacing: -.005em;
 }
 .dop-keyval b {
   color: var(--t1); font-weight: 600;
-  font-family: var(--mono); font-size: 12.5px;
+  font-family: var(--mono); font-size: 13.5px;
   text-align: right;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   max-width: 60%;
 }
 
+/* ── htop-style CPU + memory panel ───────────────────────────────────────
+   Mirrors the Debian htop palette so anyone who's used a terminal knows
+   exactly what each color means: green = user (incl. nice), red = system
+   (incl. IRQ + steal), blue = iowait. The track itself is dark so any
+   load reads as "filling up" against the empty idle background. */
+.htop-cpu {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 12px 14px 8px;
+  font-family: var(--mono);
+}
+.htop-row {
+  display: grid;
+  grid-template-columns: 24px 1fr 56px;
+  align-items: center; gap: 9px;
+  font-size: 11.5px;
+}
+.htop-lbl { color: var(--t3); text-align: right; font-weight: 600; letter-spacing: .04em }
+.htop-track {
+  position: relative;
+  display: flex; align-items: stretch;
+  height: 12px; border-radius: 2px; overflow: hidden;
+  background: rgba(255, 255, 255, .04);
+  border: 1px solid var(--bdr);
+  box-shadow: inset 0 1px 0 rgba(0, 0, 0, .35);
+}
+.htop-seg { transition: width .35s cubic-bezier(.16, 1, .3, 1) }
+.htop-user   { background: linear-gradient(180deg, #58e07a 0%, #2da14a 100%); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .12) }
+.htop-system { background: linear-gradient(180deg, #ff5d6d 0%, #c8333f 100%); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .12) }
+.htop-iowait { background: linear-gradient(180deg, #5aa9ff 0%, #2563eb 100%); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .12) }
+.htop-pct {
+  text-align: right; font-weight: 600; font-size: 11px;
+  letter-spacing: .02em; font-variant-numeric: tabular-nums;
+}
+.htop-pct i { font-size: 9px; font-style: normal; color: var(--t4); margin-left: 1px }
+.htop-pct-ok   { color: var(--t2) }
+.htop-pct-warn { color: #fbbf24 }
+.htop-pct-crit { color: #ff5d6d }
+
+.htop-mem {
+  display: grid;
+  grid-template-columns: 36px 1fr auto;
+  align-items: center; gap: 9px;
+  padding: 10px 14px 4px;
+  font-family: var(--mono); font-size: 11.5px;
+  border-top: 1px dashed var(--bdr);
+  margin-top: 4px;
+}
+.htop-mem-lbl { color: var(--t3); font-weight: 600; letter-spacing: .04em }
+.htop-mem-num { color: var(--t1); font-weight: 600; font-variant-numeric: tabular-nums }
+.htop-mem-num i { font-size: 9px; font-style: normal; color: var(--t3); margin-left: 1px }
+.htop-mem-num em { font-style: normal; color: var(--t4); margin: 0 4px }
+
+.htop-load {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 14px 8px;
+  font-family: var(--mono); font-size: 11px; color: var(--t3);
+}
+.htop-load > b { color: var(--t1); font-weight: 600; font-variant-numeric: tabular-nums }
+.htop-load > i { color: var(--t4); font-style: normal }
+.htop-load-hint { color: var(--t4); margin-left: auto; font-size: 10px }
+
+.htop-legend {
+  display: flex; gap: 14px;
+  padding: 6px 14px 12px;
+  font-family: var(--mono); font-size: 10.5px;
+  color: var(--t3); letter-spacing: .04em;
+  border-top: 1px solid var(--bdr);
+  margin-top: 2px;
+}
+.htop-legend > span { display: inline-flex; align-items: center; gap: 5px }
+.htop-dot {
+  display: inline-block; width: 9px; height: 9px; border-radius: 2px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .15);
+}
+
+/* CPU temperature row — single inline row that lives between load avg
+   and the legend. Tone follows the same ok/warn/crit ladder used for
+   per-core utilization so a hot CPU stands out visually. */
+.htop-temp {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 14px;
+  font-family: var(--mono); font-size: 11.5px;
+  color: var(--t2);
+  border-top: 1px solid var(--bdr);
+}
+.htop-temp > span:first-of-type {
+  text-transform: uppercase; letter-spacing: .12em;
+  color: var(--t3); font-size: 10px;
+}
+.htop-temp > b {
+  font-weight: 700; font-variant-numeric: tabular-nums;
+  font-size: 14px;
+}
+.htop-temp > b > i {
+  font-size: 10px; font-style: normal;
+  color: var(--t3); margin-left: 1px;
+}
+.htop-temp-meta { color: var(--t4); margin-left: auto; font-size: 10.5px }
+.htop-temp-ok   > b { color: var(--good) }
+.htop-temp-warn > b { color: var(--warn) }
+.htop-temp-crit > b { color: var(--bad); animation: htop-pulse 1.4s ease-in-out infinite }
+.htop-temp-ok   .ic { color: var(--good) }
+.htop-temp-warn .ic { color: var(--warn) }
+.htop-temp-crit .ic { color: var(--bad) }
+@keyframes htop-pulse {
+  0%, 100% { opacity: 1 }
+  50%      { opacity: .55 }
+}
+
+/* ── Live system resources grid (Server tab) ──────────────────────────
+   2-column layout: htop CPU/memory on the left, top-processes on the
+   right. Falls back to a single column on narrow viewports. */
+.dop-resources-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 14px;
+  margin-bottom: 8px;
+}
+@media (max-width: 1100px) {
+  .dop-resources-grid { grid-template-columns: 1fr }
+}
+
+/* ── Compact System-panel footer (Overview tab) ───────────────────────
+   The longer System list (Python / Output files / Session DB) was moved
+   to a horizontal foot strip so the panel can fit alongside Environment +
+   Recent Users in one row. The "Live resources →" link punches through
+   to the Server tab where the htop bars now live. */
+.dop-sys-foot {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 14px;
+  margin-top: 2px;
+  padding-top: 12px;
+  border-top: 1px solid var(--bdr);
+  font-size: 12px; color: var(--t3);
+}
+.dop-sys-foot > span {
+  display: inline-flex; align-items: baseline; gap: 5px;
+}
+.dop-sys-foot > span > i {
+  font-style: normal; font-family: var(--mono);
+  font-size: 10px; text-transform: uppercase; letter-spacing: .12em;
+  color: var(--t4);
+}
+.dop-sys-foot > span > b {
+  color: var(--t1); font-weight: 600;
+  font-family: var(--mono); font-size: 12px;
+}
+.dop-sys-link {
+  margin-left: auto; padding: 2px 4px;
+  display: inline-flex; align-items: center; gap: 5px;
+}
+
+/* ── Top-processes panel (Server tab) ─────────────────────────────────
+   Two columns side-by-side — CPU on the left, Memory on the right. Each
+   row is a single line where the progress fill lives in the row
+   BACKGROUND (a subtle horizontal gradient stop at --fill%) and the rank
+   / name / pid / value all read on top. Single-line rows are dense,
+   the bar reads at a glance, and the row hover lifts the fill so live
+   values stand out without a separate progress track. */
+.proc-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+}
+@media (max-width: 720px) {
+  .proc-grid { grid-template-columns: 1fr }
+}
+.proc-col {
+  display: flex; flex-direction: column;
+  gap: 4px; min-width: 0;
+}
+.proc-col-h {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 2px 8px;
+  font-family: var(--mono); font-size: 10.5px; font-weight: 600;
+  color: var(--t3); letter-spacing: .14em; text-transform: uppercase;
+  border-bottom: 1px solid var(--bdr);
+  margin-bottom: 4px;
+}
+.proc-col-h .ic { color: var(--accent-h) }
+.proc-list {
+  list-style: none; padding: 0; margin: 0;
+  display: flex; flex-direction: column; gap: 2px;
+}
+
+/* Single-line row. The fill lives as a CSS gradient using the per-row
+   `--fill` custom property so React only sets one inline var (no
+   nested fill-track elements). The text floats on top with a
+   subtle ::after gradient that fades the right edge so very-long
+   process names don't visually collide with the value. */
+.proc-row {
+  --fill: 0%;
+  position: relative;
+  display: grid;
+  grid-template-columns: 22px 1fr auto auto;
+  align-items: center; gap: 10px;
+  padding: 8px 12px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  background:
+    linear-gradient(90deg,
+      var(--proc-fill, rgba(124,92,255,.16)) 0%,
+      var(--proc-fill, rgba(124,92,255,.16)) var(--fill),
+      transparent var(--fill),
+      transparent 100%
+    );
+  transition: border-color .12s, transform .12s;
+  overflow: hidden;
+  min-width: 0;
+  animation: proc-row-in .35s cubic-bezier(.22,1,.36,1) both;
+  cursor: default;
+}
+.proc-row:hover {
+  border-color: var(--bdr);
+  transform: translateX(2px);
+}
+@keyframes proc-row-in {
+  from { opacity: 0; transform: translateX(-6px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* Per-tone fill colors — the tonality matches the htop CPU bars
+   (green / amber / red) so a glance across the panel reads as
+   one consistent palette. The crit tone gets a soft pulse to
+   draw the eye to a runaway process. */
+.proc-tone-ok   { --proc-fill: rgba( 61, 255, 154, .14) }
+.proc-tone-warn { --proc-fill: rgba(255, 210,  61, .18) }
+.proc-tone-crit { --proc-fill: rgba(255,  77, 109, .22); animation: proc-row-in .35s cubic-bezier(.22,1,.36,1) both, htop-pulse 1.6s ease-in-out 0.4s infinite }
+
+.proc-rank {
+  font-family: var(--mono); font-size: 10.5px;
+  color: var(--t4); font-weight: 600;
+  letter-spacing: .04em;
+  text-align: center;
+}
+.proc-name {
+  font-family: var(--mono); font-size: 12.5px;
+  color: var(--t1); font-weight: 500;
+  letter-spacing: -.005em;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  min-width: 0;
+}
+.proc-pid {
+  font-family: var(--mono); font-size: 10.5px;
+  color: var(--t4);
+  font-variant-numeric: tabular-nums;
+  padding: 1px 7px; border-radius: 999px;
+  background: rgba(255, 255, 255, .035);
+}
+:root[data-theme="light"] .proc-pid { background: rgba(20,20,40,.05) }
+.proc-num {
+  font-family: var(--mono); font-size: 12.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  min-width: 56px; text-align: right;
+}
+.proc-tone-ok   .proc-num { color: var(--good) }
+.proc-tone-warn .proc-num { color: var(--warn) }
+.proc-tone-crit .proc-num { color: var(--bad) }
+
+/* Skeleton state — five shimmer rows while psutil's first sample primes.
+   Same height as the real row so layout doesn't jump on first paint. */
+.proc-skel {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 4px 0;
+}
+.proc-skel-row {
+  height: 32px; border-radius: 7px;
+  background: linear-gradient(90deg,
+    rgba(255,255,255,.025) 0%,
+    rgba(124,92,255,.08) 50%,
+    rgba(255,255,255,.025) 100%);
+  background-size: 200% 100%;
+  animation: news-shimmer 1.6s ease-in-out infinite;
+}
+
+/* ── Server log mirror ─────────────────────────────────────────────────
+   Terminal-style live tail of the running app.py stdout / stderr / logger
+   output, driven by /api/dev/logs/stream. Grid spans the full overview
+   row because raw log lines are wide and benefit from horizontal space. */
+.dev-log-panel { grid-column: 1 / -1 }
+.dev-log-toolbar {
+  display: flex; align-items: center; gap: 6px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--bdr);
+  border-bottom: 1px solid var(--bdr);
+  background: rgba(255,255,255,.015);
+  flex-wrap: wrap;
+}
+.dev-log-filter {
+  flex: 1; min-width: 140px;
+  background: var(--bg-1, #0f0f17); color: var(--t1);
+  border: 1px solid var(--bdr); border-radius: 6px;
+  padding: 5px 9px; font-size: 12px; font-family: var(--mono);
+  outline: none; transition: border-color .12s, box-shadow .12s;
+}
+.dev-log-filter:focus { border-color: var(--accent-h); box-shadow: 0 0 0 2px rgba(124,92,255,.18) }
+.dev-log-filter::placeholder { color: var(--t4) }
+.dev-log-btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 5px 9px; border-radius: 6px;
+  background: var(--bg-2); border: 1px solid var(--bdr);
+  color: var(--t2); font-size: 11.5px; font-family: var(--mono);
+  cursor: pointer; transition: all .12s;
+}
+.dev-log-btn:hover { background: var(--bg-3); color: var(--t1); border-color: var(--bdr2) }
+.dev-log-btn.active {
+  background: var(--accent-d); color: var(--accent-h); border-color: var(--accent-b);
+}
+.dev-log-body {
+  height: 360px; max-height: 50vh;
+  overflow-y: auto; overflow-x: auto;
+  background: #07070d;
+  padding: 10px 0;
+  font-family: var(--mono);
+  font-size: 12px; line-height: 1.55;
+  scroll-behavior: auto;
+}
+.dev-log-body::-webkit-scrollbar { width: 8px; height: 8px }
+.dev-log-body::-webkit-scrollbar-thumb { background: var(--bdr2); border-radius: 4px }
+.dev-log-empty {
+  padding: 14px 16px; color: var(--t4);
+  font-family: var(--mono); font-size: 12px;
+}
+.dev-log-line {
+  display: grid;
+  grid-template-columns: 70px 60px 1fr;
+  gap: 10px;
+  padding: 1px 14px;
+  white-space: nowrap;
+}
+.dev-log-line:hover { background: rgba(255,255,255,.025) }
+.dev-log-ts {
+  color: var(--t4); letter-spacing: .04em;
+  font-variant-numeric: tabular-nums;
+}
+.dev-log-stream {
+  color: var(--t3); text-transform: uppercase; letter-spacing: .08em;
+  font-size: 10.5px; font-weight: 600; padding-top: 1px;
+  overflow: hidden; text-overflow: ellipsis;
+}
+.dev-log-text {
+  color: var(--t1);
+  white-space: pre-wrap; word-break: break-word; min-width: 0;
+}
+.dev-log-line.stream-stderr  .dev-log-stream { color: #ff5d6d }
+.dev-log-line.stream-stderr  .dev-log-text   { color: #ffd0d4 }
+.dev-log-line.stream-logger  .dev-log-stream { color: #5aa9ff }
+.dev-log-line.stream-logger  .dev-log-text   { color: var(--t2) }
+.dev-log-line.stream-stdout  .dev-log-stream { color: #58e07a }
+
 .tag {
   display: inline-flex; align-items: center; gap: 6px;
-  font-family: var(--sans); font-size: 12px;
+  font-family: var(--sans); font-size: 13px;
   font-weight: 500; letter-spacing: -.005em;
-  padding: 2px 10px; border-radius: 999px;
+  padding: 3px 11px; border-radius: 999px;
   border: 1px solid;
 }
 .tag::before {
@@ -2779,17 +3263,17 @@ input, select, textarea { font-family:var(--sans) }
   transition: border-color .12s, transform .12s, background .12s;
 }
 .dop-recent-row:hover { border-color: var(--accent-b); transform: translateX(2px); color: var(--t1) }
-.dop-recent-id { color: var(--t4); font-family: var(--mono); font-size: 11px; letter-spacing: .02em }
-.dop-recent-name { color: var(--t1); font-family: var(--sans); font-size: 13.5px; font-weight: 500 }
+.dop-recent-id { color: var(--t4); font-family: var(--mono); font-size: 12px; letter-spacing: .02em }
+.dop-recent-name { color: var(--t1); font-family: var(--sans); font-size: 14.5px; font-weight: 500 }
 .dop-recent-phase {
-  font-family: var(--mono); font-size: 11px; color: var(--t3);
-  background: var(--bg-3); padding: 2px 8px; border-radius: 999px;
+  font-family: var(--mono); font-size: 12px; color: var(--t3);
+  background: var(--bg-3); padding: 2px 9px; border-radius: 999px;
 }
 .dop-recent-fb {
   display: inline-flex; align-items: center; gap: 4px;
   background: var(--warn-d); color: var(--warn);
-  padding: 2px 8px; border-radius: 999px;
-  font-family: var(--sans); font-size: 11.5px; font-weight: 600;
+  padding: 2px 9px; border-radius: 999px;
+  font-family: var(--sans); font-size: 12.5px; font-weight: 600;
 }
 
 /* Events list */
@@ -2802,20 +3286,20 @@ input, select, textarea { font-family:var(--sans) }
 }
 .dop-event:last-child { border-bottom: none }
 .dop-event:hover { background: var(--bg-2) }
-.dop-event span { color: var(--t4); font-family: var(--mono); font-size: 11px }
-.dop-event b { color: var(--accent-h); font-family: var(--sans); font-size: 12.5px; font-weight: 600 }
-.dop-event p { color: var(--t2); font-family: var(--sans); font-size: 13px }
+.dop-event span { color: var(--t4); font-family: var(--mono); font-size: 12px }
+.dop-event b { color: var(--accent-h); font-family: var(--sans); font-size: 13.5px; font-weight: 600 }
+.dop-event p { color: var(--t2); font-family: var(--sans); font-size: 14px }
 
 /* Empty states */
 .dop-empty {
-  font-family: var(--mono); font-size: 11.5px; color: var(--t4);
+  font-family: var(--mono); font-size: 12.5px; color: var(--t4);
   padding: 14px 0;
 }
 .dop-empty-card {
   display: flex; flex-direction: column; align-items: center; gap: 12px;
   padding: 56px 32px; text-align: center;
   border: 1px dashed var(--bdr2); border-radius: 12px;
-  color: var(--t3); font-size: 13px;
+  color: var(--t3); font-size: 14px;
 }
 
 /* ── [02] Sessions: split layout ─────────────────────────── */
@@ -2838,13 +3322,13 @@ input, select, textarea { font-family:var(--sans) }
   border-bottom: 1px solid var(--bdr);
 }
 .dop-userlist-title {
-  font-family: var(--sans); font-size: 14px; font-weight: 600;
+  font-family: var(--sans); font-size: 15px; font-weight: 600;
   color: var(--t1); letter-spacing: -.005em;
 }
 .dop-userlist-count {
-  font-family: var(--mono); font-size: 11px; font-weight: 500;
+  font-family: var(--mono); font-size: 12px; font-weight: 500;
   color: var(--t3);
-  padding: 2px 8px; border-radius: 999px;
+  padding: 2px 9px; border-radius: 999px;
   background: var(--bg-3);
 }
 .dop-userlist-scroll {
@@ -2863,20 +3347,20 @@ input, select, textarea { font-family:var(--sans) }
 .dop-user:hover { background: var(--bg-2) }
 .dop-user.on { background: var(--accent-d); border-color: var(--accent-b) }
 .dop-user-av {
-  width: 28px; height: 28px; border-radius: 7px;
+  width: 30px; height: 30px; border-radius: 7px;
   background: var(--bg-3); color: var(--t1);
-  font-family: var(--mono); font-size: 12px; font-weight: 700;
+  font-family: var(--mono); font-size: 13px; font-weight: 700;
   display: inline-flex; align-items: center; justify-content: center;
 }
 .dop-user.on .dop-user-av { background: var(--accent); color: #fff }
 .dop-user-meta { display: flex; flex-direction: column; gap: 2px; min-width: 0 }
 .dop-user-meta b {
-  font-family: var(--sans); font-size: 13px; font-weight: 600;
+  font-family: var(--sans); font-size: 14px; font-weight: 600;
   color: var(--t1);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .dop-user-meta small {
-  font-family: var(--mono); font-size: 10.5px; color: var(--t4);
+  font-family: var(--mono); font-size: 11.5px; color: var(--t4);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .dop-user-tail {
@@ -2885,14 +3369,14 @@ input, select, textarea { font-family:var(--sans) }
   max-width: 100px;
 }
 .dop-user-tail em {
-  font-family: var(--mono); font-size: 11px; font-style: normal;
-  color: var(--t3); padding: 2px 7px; background: var(--bg-3); border-radius: 999px;
+  font-family: var(--mono); font-size: 12px; font-style: normal;
+  color: var(--t3); padding: 2px 8px; background: var(--bg-3); border-radius: 999px;
 }
 .dop-user-fb {
   display: inline-flex; align-items: center; gap: 3px;
   background: var(--warn-d); color: var(--warn);
-  padding: 1px 7px; border-radius: 999px;
-  font-family: var(--sans); font-size: 11px; font-weight: 600;
+  padding: 2px 8px; border-radius: 999px;
+  font-family: var(--sans); font-size: 12px; font-weight: 600;
 }
 
 .dop-inspect { display: flex; flex-direction: column; gap: 14px }
@@ -2911,21 +3395,21 @@ input, select, textarea { font-family:var(--sans) }
 }
 .dop-inspect-id { display: flex; flex-direction: column; gap: 6px; z-index: 1; min-width: 0 }
 .dop-inspect-name {
-  font-family: var(--serif); font-size: 24px; line-height: 1.1;
+  font-family: var(--serif); font-size: 26px; line-height: 1.1;
   letter-spacing: -.01em; color: var(--t1); font-weight: 600;
 }
 .dop-inspect-meta-row {
   display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap;
 }
 .dop-inspect-sid {
-  font-family: var(--mono); font-size: 11px; color: var(--t4);
+  font-family: var(--mono); font-size: 12px; color: var(--t4);
   letter-spacing: .02em;
-  background: var(--bg-3); padding: 2px 8px; border-radius: 5px;
+  background: var(--bg-3); padding: 3px 9px; border-radius: 5px;
   border: 1px solid var(--bdr);
   width: fit-content;
 }
 .dop-inspect-email {
-  font-family: var(--sans); font-size: 13px; color: var(--t2);
+  font-family: var(--sans); font-size: 14px; color: var(--t2);
 }
 .dop-inspect-actions { display: inline-flex; gap: 6px; z-index: 1; flex-wrap: wrap }
 
@@ -2942,10 +3426,10 @@ input, select, textarea { font-family:var(--sans) }
   border-top: 1px solid var(--bdr);
 }
 .dop-phases span {
-  width: 32px; height: 32px; border-radius: 8px;
+  width: 34px; height: 34px; border-radius: 8px;
   display: inline-flex; align-items: center; justify-content: center;
   background: var(--bg-3); border: 1px solid var(--bdr);
-  font-family: var(--mono); font-size: 12.5px; font-weight: 600;
+  font-family: var(--mono); font-size: 13.5px; font-weight: 600;
   color: var(--t4);
   cursor: help;
   transition: transform .12s, border-color .12s;
@@ -2961,7 +3445,7 @@ input, select, textarea { font-family:var(--sans) }
   margin: 0; padding: 14px;
   background: #08080d; border: 1px solid var(--bdr);
   border-radius: 8px;
-  font-family: var(--mono); font-size: 11.5px; line-height: 1.6;
+  font-family: var(--mono); font-size: 12.5px; line-height: 1.65;
   color: #cfd0d8;
   white-space: pre-wrap; word-break: break-word;
   overflow: auto;
@@ -2994,15 +3478,15 @@ input, select, textarea { font-family:var(--sans) }
 }
 .dop-fb-meta {
   display: flex; align-items: center; justify-content: space-between;
-  font-family: var(--mono); font-size: 10.5px; color: var(--t4);
+  font-family: var(--mono); font-size: 11.5px; color: var(--t4);
 }
 .dop-fb-new {
   background: var(--warn); color: #1a1100;
-  padding: 2px 9px; border-radius: 999px;
-  font-family: var(--sans); font-size: 11px; font-weight: 700;
+  padding: 2px 10px; border-radius: 999px;
+  font-family: var(--sans); font-size: 12px; font-weight: 700;
   letter-spacing: -.005em;
 }
-.dop-fb-msg { color: var(--t1); white-space: pre-wrap; line-height: 1.55; font-size: 13px }
+.dop-fb-msg { color: var(--t1); white-space: pre-wrap; line-height: 1.6; font-size: 14.5px }
 
 /* ── [04] Console layout ─────────────────────────────────── */
 .dop-console {
@@ -3014,10 +3498,10 @@ input, select, textarea { font-family:var(--sans) }
 .dop-cli-actions { display: flex; gap: 6px; flex-wrap: wrap }
 .dop-cli-cmd {
   display: inline-flex; align-items: center; gap: 6px;
-  padding: 6px 12px; border-radius: 6px;
+  padding: 7px 13px; border-radius: 6px;
   background: var(--bg-2); border: 1px solid var(--bdr);
   color: var(--t2);
-  font-family: var(--mono); font-size: 11.5px;
+  font-family: var(--mono); font-size: 12.5px;
   cursor: pointer;
   transition: color .12s, background .12s, border-color .12s;
 }
@@ -3145,6 +3629,28 @@ code { font-family: var(--mono); font-size: 14px; background: var(--bg-3); paddi
   cursor: pointer; transition: all .15s;
 }
 .hero-cta-g:hover { background: rgba(255,255,255,.08); border-color: rgba(255,255,255,.2) }
+/* Hero Re-scan CTA — same shape as ghost buttons but with an accent ring
+   so the action is findable at a glance from the top of the overview. */
+.hero-cta-rescan {
+  background: rgba(34,229,255,.08);
+  border-color: rgba(34,229,255,.32);
+  color: var(--t1);
+}
+.hero-cta-rescan:hover:not(:disabled) {
+  background: rgba(34,229,255,.14);
+  border-color: rgba(34,229,255,.55);
+  box-shadow: 0 0 0 3px rgba(34,229,255,.10);
+}
+.hero-cta-rescan svg { color: var(--cyan, #22e5ff) }
+.hero-cta-rescan:disabled { cursor: progress; opacity: .85 }
+.hero-cta-rescan.busy {
+  border-color: rgba(34,229,255,.55);
+  animation: hero-rescan-pulse 1.4s ease-in-out infinite;
+}
+@keyframes hero-rescan-pulse {
+  0%,100% { box-shadow: 0 0 0 0 rgba(34,229,255,.0) }
+  50%     { box-shadow: 0 0 0 5px rgba(34,229,255,.16) }
+}
 
 .hero-pipeline {
   display: flex; align-items: center; gap: 0; flex-wrap: wrap;
@@ -3662,6 +4168,54 @@ code { font-family: var(--mono); font-size: 14px; background: var(--bg-3); paddi
   background: #ff6b00;
   box-shadow: 0 0 8px rgba(255,107,0,.7);
   animation: pulse-soft 1.6s ease-in-out infinite;
+}
+.news-wrap {
+  display: flex; flex-direction: column; gap: 10px;
+}
+/* Industry topic chips above the news list. Horizontal scroll if the
+   row overflows the card width — keeps every category reachable on
+   narrow screens without wrapping into a multi-row block. */
+.news-topics {
+  display: flex; gap: 6px;
+  overflow-x: auto;
+  padding: 2px 1px 6px 1px;
+  margin-bottom: 2px;
+  border-bottom: 1px solid var(--bdr);
+  scrollbar-width: thin;
+}
+.news-topics::-webkit-scrollbar { height: 4px }
+.news-topics::-webkit-scrollbar-thumb { background: var(--bdr2); border-radius: 4px }
+.news-topic {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 5px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--bdr);
+  background: var(--bg-2);
+  color: var(--t3);
+  font-family: var(--sans); font-size: 12.5px; font-weight: 500;
+  letter-spacing: -.005em;
+  white-space: nowrap; cursor: pointer; flex-shrink: 0;
+  transition: color .12s, background .12s, border-color .12s, transform .12s;
+}
+.news-topic:hover { color: var(--t1); border-color: var(--bdr2) }
+.news-topic.on {
+  color: var(--accent-h);
+  background: var(--accent-d);
+  border-color: var(--accent-b);
+  font-weight: 600;
+}
+.news-topic .ic { color: currentColor }
+/* Inline notice when the auto-widening fallback kicked in — tells the
+   user "this isn't broken, your industry just had a quiet week". */
+.news-window-hint {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: var(--sans); font-size: 12px; color: var(--t3);
+  font-style: italic;
+  padding: 6px 10px;
+  background: var(--accent-d);
+  border: 1px solid var(--accent-b);
+  border-radius: 999px;
+  align-self: flex-start;
 }
 .news-list {
   list-style: none; padding: 0; margin: 0;
@@ -4681,17 +5235,81 @@ code { font-family: var(--mono); font-size: 14px; background: var(--bg-3); paddi
 .tailor-result { display: flex; flex-direction: column; gap: 14px }
 .tailor-result .tr-card { border-color: var(--bdr2) }
 
+/* Three contrasting CTA buttons (Plans / Atlas / Tailor): distinct gold,
+   magenta-violet, cyan-mint gradients ~120 degrees apart for visibility. */
 .btn-tailor {
-  border-color: var(--accent-b);
-  color: var(--accent2);
-  background: var(--accent-d);
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 9px 15px; border-radius: 9px;
+  font-size: 15.5px; font-weight: 600; letter-spacing: -.005em;
+  cursor: pointer; transition: transform .15s ease, box-shadow .2s ease, filter .2s ease;
+  white-space: nowrap; border: 1px solid rgba(34,229,255,.55); color: #03161a;
+  background: linear-gradient(125deg, #22e5ff 0%, #34d399 100%);
+  box-shadow: 0 0 0 1px rgba(34,229,255,.25), 0 6px 18px -8px rgba(34,229,255,.55), inset 0 1px 0 rgba(255,255,255,.35);
 }
-.btn-tailor:hover {
-  background: var(--accent2-d);
-  color: var(--t1);
-  border-color: var(--accent2-b);
+.btn-tailor:hover { transform: translateY(-1px); filter: brightness(1.05) saturate(1.1); box-shadow: 0 0 0 1px rgba(34,229,255,.50), 0 14px 28px -10px rgba(34,229,255,.75), inset 0 1px 0 rgba(255,255,255,.45) }
+.btn-tailor:active { transform: translateY(0); filter: brightness(.96) }
+.btn-tailor:disabled { opacity: .55; cursor: not-allowed; transform: none; filter: grayscale(.4) }
+.btn-tailor svg { color: #03161a }
+
+.btn-atlas {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 9px 15px; border-radius: 9px;
+  font-size: 15.5px; font-weight: 600; letter-spacing: -.005em;
+  cursor: pointer; transition: transform .15s ease, box-shadow .2s ease, filter .2s ease;
+  white-space: nowrap; border: 1px solid rgba(255,61,154,.55); color: #fff;
+  background: linear-gradient(125deg, #ff3d9a 0%, #a855f7 55%, #7c5cff 100%);
+  box-shadow: 0 0 0 1px rgba(168,85,247,.30), 0 6px 18px -8px rgba(255,61,154,.55), inset 0 1px 0 rgba(255,255,255,.25);
 }
-.btn-tailor svg { color: var(--accent2) }
+.btn-atlas:hover { transform: translateY(-1px); filter: brightness(1.07) saturate(1.05); box-shadow: 0 0 0 1px rgba(255,61,154,.50), 0 14px 28px -10px rgba(168,85,247,.75), inset 0 1px 0 rgba(255,255,255,.35) }
+.btn-atlas:active { transform: translateY(0); filter: brightness(.96) }
+.btn-atlas:disabled { opacity: .55; cursor: not-allowed; transform: none; filter: grayscale(.4) }
+.btn-atlas svg { color: #fff; filter: drop-shadow(0 0 4px rgba(255,255,255,.35)) }
+
+.rail-item-plans {
+  position: relative; overflow: hidden;
+  background: linear-gradient(110deg, rgba(251,191,36,.10) 0%, rgba(251,191,36,.02) 60%, transparent 100%);
+  border-left: 2px solid rgba(251,191,36,.55);
+  padding-left: 10px !important;
+}
+.rail-item-plans .lbl {
+  background: linear-gradient(95deg, #ffd778 0%, #fbbf24 45%, #f59e0b 100%);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+  font-weight: 600; letter-spacing: -.005em;
+}
+.rail-item-plans .rail-icon { color: #fbbf24 }
+.rail-item-plans .rail-icon svg {
+  filter: drop-shadow(0 0 6px rgba(251,191,36,.55));
+  animation: rail-plans-pulse 3.2s ease-in-out infinite;
+}
+@keyframes rail-plans-pulse {
+  0%, 100% { transform: scale(1);    filter: drop-shadow(0 0 4px rgba(251,191,36,.35)) }
+  50%      { transform: scale(1.10); filter: drop-shadow(0 0 10px rgba(251,191,36,.75)) }
+}
+.rail-plans-glint {
+  position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(105deg, transparent 0%, transparent 38%, rgba(255,215,120,.18) 48%, rgba(255,255,255,.28) 50%, rgba(255,215,120,.18) 52%, transparent 62%, transparent 100%);
+  background-size: 220% 100%; background-position: 120% 0;
+  animation: rail-plans-shimmer 5.2s ease-in-out infinite;
+  mix-blend-mode: screen;
+}
+@keyframes rail-plans-shimmer {
+  0%   { background-position: 120% 0 }
+  60%  { background-position: -40% 0 }
+  100% { background-position: -40% 0 }
+}
+.rail-item-plans:hover {
+  background: linear-gradient(110deg, rgba(251,191,36,.18) 0%, rgba(251,191,36,.06) 60%, transparent 100%);
+  border-left-color: rgba(251,191,36,.85);
+}
+.rail-item-plans.active {
+  background: linear-gradient(110deg, rgba(251,191,36,.25) 0%, rgba(251,191,36,.10) 60%, transparent 100%);
+  border-left-color: #fbbf24;
+}
+.rail-item-plans.active .lbl { color: transparent }
+.rail-item-plans.active .rail-plans-glint { animation-play-state: paused; opacity: .35 }
+@media (prefers-reduced-motion: reduce) {
+  .rail-plans-glint, .rail-item-plans .rail-icon svg { animation: none }
+}
 
 /* RESPONSIVE */
 @media (max-width: 1180px) {

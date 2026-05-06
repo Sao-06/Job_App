@@ -27,15 +27,18 @@ class TestLexicons:
         assert "spice" in HARD_SKILL_LEXICON
         assert "fpga" in HARD_SKILL_LEXICON
 
-    def test_domain_title_families_present(self):
-        assert any("IC Design" in f for f in DOMAIN_TITLE_FAMILIES)
-        assert any("Photonics" in f for f in DOMAIN_TITLE_FAMILIES)
+    def test_domain_title_families_cover_multiple_domains(self):
+        # The list should hint at every major professional domain — software,
+        # hardware, sales, healthcare — not just EE/semiconductor.
+        joined = " ".join(DOMAIN_TITLE_FAMILIES).lower()
+        for needle in ("software", "ic design", "marketing", "clinical",
+                       "finance", "design"):
+            assert needle in joined, f"expected '{needle}' in title families"
 
-    def test_forbidden_generic_titles(self):
-        # The forbidden set contains common "soft tech" titles.
-        assert "software engineer" in FORBIDDEN_GENERIC_TITLES
-        assert "data scientist" in FORBIDDEN_GENERIC_TITLES
-        assert "product manager" in FORBIDDEN_GENERIC_TITLES
+    def test_forbidden_generic_titles_back_compat_alias(self):
+        # Retained as an empty back-compat alias; any imports outside this
+        # module keep resolving without rejecting cross-domain titles.
+        assert FORBIDDEN_GENERIC_TITLES == set()
 
     def test_soft_skills_allow_list(self):
         # Lab techniques must NOT be in the soft list.
@@ -195,38 +198,63 @@ class TestVerifyEvidence:
 
 
 class TestRerankTitles:
-    def test_drops_forbidden_for_hardware_candidate(self):
+    def test_keeps_grounded_titles(self):
+        # Every domain-signal token in the kept titles ("fpga", "verilog",
+        # "software", "react") appears in the candidate's resume content,
+        # so all three pass the grounding check.
         p = {
             "education": [{"degree": "B.S. Electrical Engineering"}],
             "research_experience": [{"title": "FPGA design",
                                       "company": "Lab", "bullets": ["Verilog work"]}],
             "projects": [{"name": "ALU", "skills_used": ["Verilog"]}],
+            "top_hard_skills": ["Verilog"],
             "target_titles_detailed": [
                 {"title": "FPGA Intern", "family": "FPGA",
                  "evidence": "Designed an FPGA"},
-                {"title": "Software Engineer", "family": "Software",
-                 "evidence": "Wrote some code"},
             ],
         }
         out = rerank_titles(p)
-        kept = [t["title"] for t in out["target_titles_detailed"]]
-        assert "FPGA Intern" in kept
-        assert "Software Engineer" not in kept
+        assert [t["title"] for t in out["target_titles_detailed"]] == ["FPGA Intern"]
 
-    def test_keeps_software_when_no_hardware_footprint(self):
-        # CS-only candidate — software titles ARE allowed.
+    def test_drops_ungrounded_title(self):
+        # A title whose domain signal does NOT appear anywhere in the resume
+        # corpus gets dropped, regardless of which domain it came from. The
+        # corpus here has "software" (in the degree) and "engineer"/"react"
+        # in the work history, which grounds the kept title.
         p = {
-            "education": [{"degree": "B.S. Computer Science"}],
-            "research_experience": [],
+            "education": [{"degree": "B.S. Software Engineering"}],
+            "work_experience": [
+                {"title": "Software Engineer", "company": "Acme",
+                 "bullets": ["Built React components", "Shipped Node.js services"]},
+            ],
             "projects": [{"name": "Web app", "skills_used": ["React", "Node.js"]}],
+            "top_hard_skills": ["React", "Node.js"],
             "target_titles_detailed": [
                 {"title": "Software Engineer", "family": "Software",
-                 "evidence": "Built a web app"},
+                 "evidence": "Built a web app with React"},
+                {"title": "Photonics Intern", "family": "Photonics",
+                 "evidence": "Worked on optical waveguides"},
             ],
         }
         out = rerank_titles(p)
         kept = [t["title"] for t in out["target_titles_detailed"]]
         assert "Software Engineer" in kept
+        assert "Photonics Intern" not in kept
+
+    def test_keeps_marketing_title_when_grounded(self):
+        # No hardware bias — a marketing candidate's marketing title is kept.
+        p = {
+            "top_hard_skills": ["SEO", "HubSpot"],
+            "work_experience": [{"title": "Marketing Lead", "company": "Acme",
+                                  "bullets": ["Ran SEO campaigns"]}],
+            "target_titles_detailed": [
+                {"title": "Marketing Manager", "family": "Marketing",
+                 "evidence": "Ran SEO campaigns"},
+            ],
+        }
+        out = rerank_titles(p)
+        kept = [t["title"] for t in out["target_titles_detailed"]]
+        assert "Marketing Manager" in kept
 
 
 # ── audit_profile (full chain) ──────────────────────────────────────────────

@@ -220,21 +220,65 @@ def _extract_pdf_text(path: Path) -> tuple[str, str]:
 
 # ── Resume reader ──────────────────────────────────────────────────────────────
 
+def _read_docx(path: Path) -> str:
+    """Extract text from a .docx, including paragraphs AND table cells.
+
+    Many resumes use tables (sidebar layouts, two-column templates) where
+    the candidate's name, contact info, or experience lives entirely inside
+    table cells — paragraph-only extraction misses everything.
+    """
+    from docx import Document
+    doc = Document(str(path))
+    chunks: list[str] = []
+    for p in doc.paragraphs:
+        if p.text.strip():
+            chunks.append(p.text)
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                cell_text = "\n".join(
+                    p.text for p in cell.paragraphs if p.text.strip()
+                ).strip()
+                if cell_text:
+                    chunks.append(cell_text)
+    return "\n".join(chunks)
+
+
+def _read_rtf(path: Path) -> str:
+    """Best-effort RTF extraction. Tries striprtf if installed, otherwise
+    falls back to a minimal regex strip — good enough for plain RTF resumes.
+    """
+    raw = path.read_text(encoding="utf-8", errors="replace")
+    try:
+        from striprtf.striprtf import rtf_to_text  # type: ignore
+        return rtf_to_text(raw)
+    except ImportError:
+        # Minimal RTF strip: drop control words, control symbols, and braces.
+        # Not perfect for complex documents but recovers the body of a
+        # straightforward résumé without a new dependency.
+        text = re.sub(r"\\[a-zA-Z]+-?\d* ?", " ", raw)
+        text = re.sub(r"\\[^a-zA-Z]", "", text)
+        text = re.sub(r"[{}]", "", text)
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        return text.strip()
+
+
 def _read_resume(path: Path) -> tuple[str, str | None]:
     """Read *path* and return ``(plaintext, latex_source_or_None)``.
 
     If the file is LaTeX (or contains LaTeX markup), *latex_source* holds the
     original source so callers can later produce a compiled PDF output.
-    Falls back to the built-in demo resume on any read failure.
+    Returns ("", None) if the file isn't a supported format or if extraction
+    yields no text — the caller decides how to surface that to the user.
     """
     if not path.exists():
-        console.print(f"  [yellow]File not found: {path} — using demo resume.[/yellow]")
-        return _build_demo_resume(), None
+        console.print(f"  [yellow]File not found: {path}[/yellow]")
+        return "", None
 
     suffix = path.suffix.lower()
 
     if suffix == ".tex":
-        raw = path.read_text(encoding="utf-8")
+        raw = path.read_text(encoding="utf-8", errors="replace")
         console.print("  [cyan]LaTeX resume detected — converting to plain text for parsing.[/cyan]")
         return latex_to_plaintext(raw), raw
 
@@ -243,7 +287,6 @@ def _read_resume(path: Path) -> tuple[str, str | None]:
             raw = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
             raw = path.read_text(encoding="utf-8", errors="replace")
-        
         if detect_latex(raw):
             console.print(
                 "  [cyan]LaTeX content detected — converting to plain text for parsing.[/cyan]"
@@ -257,26 +300,73 @@ def _read_resume(path: Path) -> tuple[str, str | None]:
             console.print(f"  [dim]PDF extracted via {method}[/dim]")
             return text, None
         console.print(
-            "  [yellow]PDF: no text extracted by any library — "
-            "the file may be a scanned/image-only PDF.[/yellow]"
+            "  [yellow]PDF returned no text via any library. The file is likely "
+            "a scanned/image-only PDF — install an OCR pipeline or upload the "
+            "source .docx / .tex / .txt instead.[/yellow]"
         )
-        return _build_demo_resume(), None
+        return "", None
 
     if suffix == ".docx":
         try:
-            from docx import Document
-            text = "\n".join(p.text for p in Document(str(path)).paragraphs if p.text.strip())
-            return text, None
+            text = _read_docx(path)
+            if text.strip():
+                return text, None
+            console.print(
+                "  [yellow]DOCX parsed but produced no text — the document may "
+                "be empty or all content may live inside images.[/yellow]"
+            )
+            return "", None
         except ImportError:
             console.print("  [yellow]python-docx missing — pip install python-docx[/yellow]")
-            return _build_demo_resume(), None
+            return "", None
+        except Exception as exc:
+            console.print(f"  [yellow]DOCX read failed: {exc}[/yellow]")
+            return "", None
 
-    # Generic text fallback
+    if suffix == ".doc":
+        # Legacy Word .doc isn't natively supported by python-docx. Try a
+        # binary-safe text extract; if that yields nothing, ask the user
+        # to convert.
+        try:
+            raw = path.read_bytes()
+            text = re.sub(rb"[^\x09\x0a\x0d\x20-\x7e]+", b" ", raw)
+            decoded = text.decode("utf-8", errors="replace").strip()
+            decoded = re.sub(r"\s{3,}", "\n", decoded)
+            if len(decoded) > 200:
+                return decoded, None
+        except Exception:
+            pass
+        console.print(
+            "  [yellow]Legacy .doc not natively supported — please save as "
+            ".docx, .pdf, or .txt and re-upload.[/yellow]"
+        )
+        return "", None
+
+    if suffix == ".rtf":
+        try:
+            text = _read_rtf(path)
+            return text, None
+        except Exception as exc:
+            console.print(f"  [yellow]RTF read failed: {exc}[/yellow]")
+            return "", None
+
+    # Generic text fallback (unknown extensions that happen to be UTF-8).
     try:
-        return path.read_text(encoding="utf-8"), None
+        raw = path.read_text(encoding="utf-8")
+        return raw, None
+    except UnicodeDecodeError:
+        try:
+            raw = path.read_text(encoding="utf-8", errors="replace")
+            return raw, None
+        except Exception:
+            pass
     except Exception:
-        console.print(f"  [yellow]Cannot read {path} — using demo resume.[/yellow]")
-        return _build_demo_resume(), None
+        pass
+    console.print(
+        f"  [yellow]Cannot read {path.name} ({suffix}) — supported formats: "
+        ".pdf, .docx, .doc, .txt, .md, .tex, .rtf[/yellow]"
+    )
+    return "", None
 
 
 # ── Tailored resume output ─────────────────────────────────────────────────────
@@ -449,11 +539,22 @@ def _render_resume_latex(profile: dict, tailored: dict, job: dict,
 
 def _render_resume_pdf_reportlab(pdf_path: Path, profile: dict,
                                  tailored: dict, job: dict,
-                                 resume_text: str = "") -> bool:
+                                 resume_text: str = "",
+                                 format_profile: dict | None = None) -> bool:
     """Render the same structured resume to a PDF via reportlab.
 
     Returns True on success, False if reportlab is unavailable or rendering
     fails for any reason.
+
+    *format_profile*, when supplied, lets the caller mirror the source
+    PDF's visual aesthetic.  Recognised keys (all optional):
+
+      body_font_size:    int   — drives body / role / contact size
+      header_font_size:  int   — drives section heading size
+      accent_color:      str   — "#rrggbb" used for headings + rules
+
+    The defaults below match the previous hard-coded values, so PDF
+    output is stable when no fingerprint is available (demo / .txt).
     """
     try:
         from reportlab.lib.pagesizes import LETTER
@@ -482,17 +583,34 @@ def _render_resume_pdf_reportlab(pdf_path: Path, profile: dict,
     projects  = profile.get("projects")  or []
     education = profile.get("education") or []
 
+    # ── Style overrides from the source PDF's format fingerprint ─────────
+    fp = format_profile or {}
+    body_size   = float(fp.get("body_font_size")   or 10)
+    header_size = float(fp.get("header_font_size") or 11)
+    # Sanity-clamp: a malformed fingerprint from a corrupt PDF could
+    # produce 1pt or 200pt headers — cap to ranges that print sanely.
+    body_size   = max(8.5, min(12.5, body_size))
+    header_size = max(body_size + 0.5, min(14, header_size))
+    name_size   = round(min(22, header_size + 6.5))
+    accent      = fp.get("accent_color") or "#1F4E79"
+    if not (isinstance(accent, str) and len(accent) == 7 and accent.startswith("#")):
+        accent = "#1F4E79"
+
     styles = getSampleStyleSheet()
-    h_name    = ParagraphStyle("h_name", parent=styles["Title"], fontSize=18,
+    h_name    = ParagraphStyle("h_name", parent=styles["Title"],
+                               fontSize=name_size,
                                spaceAfter=2, alignment=1)
-    h_contact = ParagraphStyle("h_contact", parent=styles["Normal"], fontSize=9,
+    h_contact = ParagraphStyle("h_contact", parent=styles["Normal"],
+                               fontSize=max(8, body_size - 1.5),
                                alignment=1, spaceAfter=8)
-    h_section = ParagraphStyle("h_section", parent=styles["Heading2"], fontSize=11,
-                               textColor="#1F4E79", spaceBefore=8, spaceAfter=2)
-    h_role    = ParagraphStyle("h_role", parent=styles["Normal"], fontSize=10,
-                               leading=12, spaceAfter=2)
-    h_body    = ParagraphStyle("h_body", parent=styles["Normal"], fontSize=10,
-                               leading=12)
+    h_section = ParagraphStyle("h_section", parent=styles["Heading2"],
+                               fontSize=header_size,
+                               textColor=accent, spaceBefore=8, spaceAfter=2)
+    h_role    = ParagraphStyle("h_role", parent=styles["Normal"],
+                               fontSize=body_size, leading=body_size + 2,
+                               spaceAfter=2)
+    h_body    = ParagraphStyle("h_body", parent=styles["Normal"],
+                               fontSize=body_size, leading=body_size + 2)
 
     def _esc(s):
         return (str(s or "")
@@ -508,7 +626,7 @@ def _render_resume_pdf_reportlab(pdf_path: Path, profile: dict,
 
     def _add_section(title: str):
         story.append(Paragraph(_esc(title.upper()), h_section))
-        story.append(HRFlowable(width="100%", thickness=0.5, color="#1F4E79",
+        story.append(HRFlowable(width="100%", thickness=0.5, color=accent,
                                 spaceBefore=0, spaceAfter=4))
 
     order = (
@@ -598,7 +716,8 @@ def _save_tailored_resume(job: dict, tailored: dict, profile: dict = None,
                           latex_source: str = None,
                           resume_text: str = "",
                           output_dir: Path = None,
-                          owner_name: str = None) -> dict:
+                          owner_name: str = None,
+                          format_profile: dict | None = None) -> dict:
     """Write the tailored resume to OUTPUT_DIR and return file metadata.
 
     Always produces BOTH a .tex source and a .pdf (when a PDF backend is
@@ -638,7 +757,8 @@ def _save_tailored_resume(job: dict, tailored: dict, profile: dict = None,
     if compile_latex_to_pdf(tailored_latex, pdf_path):
         pdf_filename = pdf_path.name
         console.print(f"  [green]PDF saved -> {pdf_path.name}[/green]")
-    elif _render_resume_pdf_reportlab(pdf_path, profile, tailored, job, resume_text):
+    elif _render_resume_pdf_reportlab(pdf_path, profile, tailored, job,
+                                       resume_text, format_profile=format_profile):
         pdf_filename = pdf_path.name
         console.print(f"  [green]PDF saved (reportlab) -> {pdf_path.name}[/green]")
     else:

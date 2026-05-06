@@ -131,8 +131,15 @@ def scan_profile(resume_text: str) -> dict:
     hard_skills = _scan_hard_skills(text)
     soft_skills = _scan_soft_skills(text)
 
-    # ── Target titles inferred from skill footprint ─────────────────────────
-    target_titles = _scan_target_titles(text, hard_skills)
+    # ── Target titles inferred from skill footprint + recent role ──────────
+    target_titles = _scan_target_titles(
+        text, hard_skills,
+        parsed_profile={
+            "work_experience": experience,
+            "experience": experience,
+            "research_experience": research,
+        },
+    )
 
     # ── Summary — first paragraph of an explicit summary section ───────────
     summary = _condense_summary(grab("summary", "objective"))
@@ -473,41 +480,175 @@ def _scan_soft_skills(text: str) -> list[str]:
     return out[:8]
 
 
-# Title-inference rules: each rule is (set_of_keywords, suggested_title).
-# Match if *any* keyword appears in the resume's hard-skill set OR raw text.
+# Cross-domain title-inference rules.
+#
+# Each rule is (set_of_keywords, suggested_title). A rule fires when ANY
+# keyword appears in the resume's hard-skill set OR raw text. Tokens are
+# matched as substrings of the lowercased haystack — multi-word tokens like
+# "machine learning" rely on the natural word boundary in source text.
+#
+# Order matters: rules earlier in the list win when there's overlap.
+# General professional families come last as catch-alls.
 _TITLE_RULES: list[tuple[tuple[str, ...], str]] = [
-    (("verilog", "systemverilog", "spice", "cadence virtuoso", "synopsys", "vlsi", "asic"),
-        "IC Design / VLSI Engineering Intern"),
-    (("fpga", "vivado", "quartus", "xilinx", "altera", "rtl"),
-        "FPGA / Digital Design Engineering Intern"),
-    (("photolithography", "cleanroom", "thin film", "lumerical", "photonics", "optoelectronics"),
-        "Photonics / Optoelectronics Engineering Intern"),
-    (("pcb design", "altium", "kicad", "schematic", "circuit"),
-        "Hardware Engineering Intern"),
-    (("microcontroller", "arduino", "stm32", "embedded", "rtos"),
-        "Embedded Systems / Firmware Intern"),
-    (("comsol", "ansys", "hfss", "device simulation"),
-        "Semiconductor Process / Device Engineering Intern"),
-    (("rf ", "vector network analyzer", "antenna"),
-        "RF Engineering Intern"),
-    (("pytorch", "tensorflow", "machine learning", "deep learning"),
-        "Machine Learning Engineering Intern"),
-    (("react", "typescript", "next.js", "node.js"),
-        "Software Engineering Intern"),
+    # ── Software / data ─────────────────────────────────────────────────
+    (("react", "typescript", "next.js", "vue", "svelte", "tailwind", "redux"),
+        "Frontend Engineer"),
+    (("django", "flask", "fastapi", "node.js", "express", "rails", "spring boot",
+      "graphql", "postgres", "mongodb", "redis"),
+        "Backend Engineer"),
+    (("ios", "swift", "swiftui", "objective-c", "android", "kotlin", "jetpack"),
+        "Mobile Engineer"),
+    (("kubernetes", "docker", "terraform", "ansible", "jenkins", "prometheus",
+      "grafana", "ci/cd", "site reliability", "sre", "devops"),
+        "DevOps / SRE Engineer"),
+    (("penetration test", "burp suite", "owasp", "appsec", "infosec", "soc",
+      "siem", "incident response"),
+        "Security Engineer"),
+    (("pytorch", "tensorflow", "scikit-learn", "huggingface", "transformer",
+      "machine learning", "deep learning", "llm"),
+        "Machine Learning Engineer"),
+    (("tableau", "power bi", "looker", "sql", "data analysis", "statistics",
+      "regression", "a/b test"),
+        "Data Analyst / Data Scientist"),
+    (("spark", "airflow", "dbt", "snowflake", "redshift", "bigquery",
+      "data pipeline", "etl"),
+        "Data Engineer"),
+    # ── Hardware / EE / mechanical ──────────────────────────────────────
+    (("verilog", "systemverilog", "spice", "cadence virtuoso", "synopsys",
+      "vlsi", "asic", "innovus", "primetime"),
+        "IC Design / VLSI Engineer"),
+    (("fpga", "vivado", "quartus", "xilinx", "altera", "rtl", "uvm"),
+        "FPGA / Digital Design Engineer"),
+    (("photolithography", "cleanroom", "thin film", "lumerical", "photonics",
+      "optoelectronics", "waveguide"),
+        "Photonics / Optoelectronics Engineer"),
+    (("pcb design", "altium", "kicad", "schematic capture", "eagle cad"),
+        "Hardware Engineer"),
+    (("microcontroller", "arduino", "stm32", "embedded", "rtos", "freertos",
+      "bare metal", "firmware"),
+        "Embedded Systems / Firmware Engineer"),
+    (("comsol", "ansys", "hfss", "device simulation", "tcad", "sentaurus"),
+        "Semiconductor Device / Process Engineer"),
+    (("vector network analyzer", "antenna design", "rf circuit", "millimeter-wave"),
+        "RF Engineer"),
+    (("ros", "ros2", "gazebo", "slam", "lidar", "robotics"),
+        "Robotics Engineer"),
+    (("solidworks", "fusion 360", "catia", "creo", "mechanical design", "fea"),
+        "Mechanical Engineer"),
+    # ── Product / design / business ─────────────────────────────────────
+    (("product roadmap", "user research", "product manager", "go-to-market",
+      "okrs"),
+        "Product Manager"),
+    (("project management", "scrum master", "agile", "pmp", "stakeholder",
+      "program manager"),
+        "Program / Project Manager"),
+    (("figma", "sketch", "adobe xd", "wireframe", "prototyping", "user testing",
+      "ux research", "ui design"),
+        "UX / UI Designer"),
+    (("photoshop", "illustrator", "indesign", "branding", "logo design",
+      "typography"),
+        "Graphic / Brand Designer"),
+    (("seo", "sem", "google ads", "facebook ads", "content marketing",
+      "growth marketing", "marketing automation", "hubspot", "marketo"),
+        "Marketing / Growth"),
+    (("salesforce", "hubspot crm", "outbound prospecting", "quota", "pipeline",
+      "account executive", "business development"),
+        "Sales / Business Development"),
+    (("zendesk", "intercom", "customer success", "csm", "onboarding"),
+        "Customer Success / Support"),
+    # ── Operations / finance / HR / legal ───────────────────────────────
+    (("supply chain", "logistics", "inventory", "warehouse management",
+      "procurement", "fulfillment"),
+        "Operations / Supply Chain"),
+    (("financial modeling", "fp&a", "valuation", "dcf", "lbo", "accounting",
+      "audit", "controller", "cpa"),
+        "Finance / Accounting"),
+    (("equity research", "investment banking", "trading", "portfolio",
+      "bloomberg terminal"),
+        "Finance / Investment"),
+    (("recruiter", "talent acquisition", "hr ", "onboarding", "people ops",
+      "compensation"),
+        "Human Resources / Talent"),
+    (("paralegal", "litigation", "contract review", "compliance officer",
+      "regulatory"),
+        "Legal / Compliance"),
+    # ── Healthcare / sciences ───────────────────────────────────────────
+    (("registered nurse", "rn ", "lpn ", "patient care", "clinical", "ekg",
+      "phlebotomy"),
+        "Clinical / Nursing"),
+    (("pharmacology", "biology", "biochemistry", "western blot", "pcr", "elisa",
+      "wet lab"),
+        "Lab Research / Life Sciences"),
+    # ── Education / public sector / trades / media ──────────────────────
+    (("classroom management", "lesson plan", "curriculum design", "tutor",
+      "teaching assistant"),
+        "Teaching / Education"),
+    (("public policy", "policy analyst", "government", "civic", "nonprofit"),
+        "Public Policy / Government"),
+    (("journalism", "newsroom", "copywriting", "video editing", "premiere pro",
+      "final cut"),
+        "Media / Journalism"),
+    (("electrician", "machinist", "welding", "hvac", "plumbing"),
+        "Skilled Trades / Technician"),
 ]
 
 
-def _scan_target_titles(text: str, hard_skills: list[str]) -> list[str]:
+def _title_from_recent_role(profile_or_chunks) -> str | None:
+    """If a role-style title appears verbatim in the candidate's most recent
+    work/research entry, that's by far the strongest signal of what the
+    candidate actually does. Pull that out as a target title.
+    """
+    if isinstance(profile_or_chunks, dict):
+        candidates = []
+        for bucket in ("work_experience", "experience", "research_experience"):
+            for r in profile_or_chunks.get(bucket) or []:
+                t = (r.get("title") or "").strip()
+                if t:
+                    candidates.append(t)
+        for t in candidates:
+            if 3 <= len(t.split()) <= 6:
+                return t
+        if candidates:
+            return candidates[0]
+    return None
+
+
+def _scan_target_titles(text: str, hard_skills: list[str],
+                          parsed_profile: dict | None = None) -> list[str]:
+    """Infer 5–8 cross-domain target titles from the resume.
+
+    Strategy (in order):
+      1. Pull the candidate's most recent work title verbatim if it looks
+         like a role label (3–6 words). That's the strongest signal of
+         what the candidate is currently doing.
+      2. Apply the cross-domain skill-keyword rules — each rule fires when
+         any of its tokens appears in the resume's skills or raw text.
+      3. Cap at 8 distinct entries; preserve insertion order.
+
+    No EE/semiconductor bias — a marketing candidate gets marketing
+    titles, an SRE gets DevOps titles, a nurse gets nursing titles.
+    """
     if not text:
         return []
     skills_l = {s.lower() for s in (hard_skills or [])}
     text_l = text.lower()
+
     inferred: list[str] = []
+    seen: set[str] = set()
+
+    if parsed_profile:
+        recent = _title_from_recent_role(parsed_profile)
+        if recent and recent.lower() not in seen:
+            inferred.append(recent)
+            seen.add(recent.lower())
+
     for keywords, title in _TITLE_RULES:
         if any(k in skills_l or k in text_l for k in keywords):
-            if title not in inferred:
+            key = title.lower()
+            if key not in seen:
                 inferred.append(title)
-    return inferred[:5]
+                seen.add(key)
+    return inferred[:8]
 
 
 def _condense_summary(lines: list[str]) -> str:

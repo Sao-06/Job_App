@@ -105,11 +105,43 @@ class TestReadResume:
         text, latex = _read_resume(p)
         assert latex == src
 
-    def test_missing_file_returns_demo_resume(self, tmp_path):
+    def test_missing_file_returns_empty(self, tmp_path):
+        # Reader no longer hides missing-file failures behind the demo
+        # resume — empty plaintext signals the caller to surface a real
+        # error to the user instead of silently extracting "Your Name".
         text, latex = _read_resume(tmp_path / "nonexistent.txt")
+        assert text == ""
         assert latex is None
-        # Falls back to the built-in demo.
-        assert "OBJECTIVE" in text or "Your Full Name" in text
+
+    def test_docx_table_text_extracted(self, tmp_path):
+        # Many resumes use tables for sidebar layouts; paragraph-only
+        # extraction misses everything inside cells.
+        try:
+            from docx import Document
+        except ImportError:
+            import pytest
+            pytest.skip("python-docx not installed")
+        doc = Document()
+        doc.add_paragraph("Resume Body Paragraph")
+        table = doc.add_table(rows=1, cols=2)
+        table.cell(0, 0).text = "Jane Tester"
+        table.cell(0, 1).text = "jane@example.com"
+        path = tmp_path / "tabular.docx"
+        doc.save(str(path))
+        text, _ = _read_resume(path)
+        assert "Resume Body Paragraph" in text
+        assert "Jane Tester" in text
+        assert "jane@example.com" in text
+
+    def test_unsupported_extension_returns_empty(self, tmp_path):
+        p = tmp_path / "r.weird"
+        p.write_bytes(b"\x00\x01\x02not text")
+        text, latex = _read_resume(p)
+        # Non-decodable binary input → empty plaintext, no LaTeX source.
+        assert latex is None
+        # Either UTF-8 decoded (best-effort) or empty — never the demo
+        # resume placeholder which would have said "Your Full Name".
+        assert "Your Full Name" not in text
 
     def test_fixtures_resume_text(self, fixtures_dir):
         text, latex = _read_resume(fixtures_dir / "resumes" / "sample_text.txt")

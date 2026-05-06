@@ -2263,21 +2263,89 @@ function JobsPage({ state, refresh, setPage }) {
       fLocation, fExp, fModel, fDateMax]);
 
   // Curated quick-pick locations shown above the live DB facets in the chip
-  // popover. Pinned to common US/global hubs + Remote/Anywhere because those
-  // are the search intents we want to land in one click. The DB-facet list
-  // below it surfaces everything else (London, Bangalore, hybrid clusters,
-  // single-city listings, …) sorted by inventory count.
+  // popover. Aligned with the global ingestion's coverage: every country we
+  // now pull jobs from gets a country-level entry, plus the 1-3 highest-
+  // density employer cities for that country. The DB-facet list below this
+  // surfaces everything else (smaller cities, hybrid clusters, single-city
+  // listings) sorted by inventory count. The dropdown is searchable so
+  // volume here is fine — users type "berlin" or "tokyo" rather than
+  // scanning. Regionally grouped for those who do scan.
   const locationDefaults = useMemo(() => [
-    { value: 'Remote',         label: 'Remote',         icon: 'globe' },
-    { value: 'United States',  label: 'United States',  icon: 'flag' },
-    { value: 'San Francisco',  label: 'San Francisco',  icon: 'map-pin' },
-    { value: 'New York',       label: 'New York',       icon: 'map-pin' },
-    { value: 'Seattle',        label: 'Seattle',        icon: 'map-pin' },
-    { value: 'Austin',         label: 'Austin',         icon: 'map-pin' },
-    { value: 'Boston',         label: 'Boston',         icon: 'map-pin' },
-    { value: 'Los Angeles',    label: 'Los Angeles',    icon: 'map-pin' },
-    { value: 'Chicago',        label: 'Chicago',        icon: 'map-pin' },
-    { value: 'London',         label: 'London',         icon: 'map-pin' },
+    // Special intent
+    { value: 'Remote',               label: 'Remote',          icon: 'globe' },
+    { value: 'Anywhere',             label: 'Anywhere',        icon: 'globe' },
+
+    // North America
+    { value: 'United States',        label: 'United States',   icon: 'flag' },
+    { value: 'San Francisco',        label: 'San Francisco',   icon: 'map-pin' },
+    { value: 'New York',             label: 'New York',        icon: 'map-pin' },
+    { value: 'Seattle',              label: 'Seattle',         icon: 'map-pin' },
+    { value: 'Austin',               label: 'Austin',          icon: 'map-pin' },
+    { value: 'Boston',               label: 'Boston',          icon: 'map-pin' },
+    { value: 'Los Angeles',          label: 'Los Angeles',     icon: 'map-pin' },
+    { value: 'Chicago',              label: 'Chicago',         icon: 'map-pin' },
+    { value: 'Canada',               label: 'Canada',          icon: 'flag' },
+    { value: 'Toronto',              label: 'Toronto',         icon: 'map-pin' },
+    { value: 'Vancouver',            label: 'Vancouver',       icon: 'map-pin' },
+
+    // UK & Western Europe
+    { value: 'United Kingdom',       label: 'United Kingdom',  icon: 'flag' },
+    { value: 'London',               label: 'London',          icon: 'map-pin' },
+    { value: 'Edinburgh',            label: 'Edinburgh',       icon: 'map-pin' },
+    { value: 'Ireland',              label: 'Ireland',         icon: 'flag' },
+    { value: 'Dublin',               label: 'Dublin',          icon: 'map-pin' },
+    { value: 'Germany',              label: 'Germany',         icon: 'flag' },
+    { value: 'Berlin',               label: 'Berlin',          icon: 'map-pin' },
+    { value: 'Munich',               label: 'Munich',          icon: 'map-pin' },
+    { value: 'France',               label: 'France',          icon: 'flag' },
+    { value: 'Paris',                label: 'Paris',           icon: 'map-pin' },
+    { value: 'Netherlands',          label: 'Netherlands',     icon: 'flag' },
+    { value: 'Amsterdam',            label: 'Amsterdam',       icon: 'map-pin' },
+    { value: 'Spain',                label: 'Spain',           icon: 'flag' },
+    { value: 'Madrid',               label: 'Madrid',          icon: 'map-pin' },
+    { value: 'Barcelona',            label: 'Barcelona',       icon: 'map-pin' },
+    { value: 'Italy',                label: 'Italy',           icon: 'flag' },
+    { value: 'Milan',                label: 'Milan',           icon: 'map-pin' },
+    { value: 'Sweden',               label: 'Sweden',          icon: 'flag' },
+    { value: 'Stockholm',            label: 'Stockholm',       icon: 'map-pin' },
+    { value: 'Switzerland',          label: 'Switzerland',     icon: 'flag' },
+    { value: 'Zurich',               label: 'Zurich',          icon: 'map-pin' },
+    { value: 'Poland',               label: 'Poland',          icon: 'flag' },
+    { value: 'Warsaw',               label: 'Warsaw',          icon: 'map-pin' },
+
+    // Asia-Pacific
+    { value: 'Singapore',            label: 'Singapore',       icon: 'flag' },
+    { value: 'Hong Kong',            label: 'Hong Kong',       icon: 'flag' },
+    { value: 'Japan',                label: 'Japan',           icon: 'flag' },
+    { value: 'Tokyo',                label: 'Tokyo',           icon: 'map-pin' },
+    { value: 'South Korea',          label: 'South Korea',     icon: 'flag' },
+    { value: 'Seoul',                label: 'Seoul',           icon: 'map-pin' },
+    { value: 'Taiwan',               label: 'Taiwan',          icon: 'flag' },
+    { value: 'India',                label: 'India',           icon: 'flag' },
+    { value: 'Bangalore',            label: 'Bangalore',       icon: 'map-pin' },
+    { value: 'Mumbai',               label: 'Mumbai',          icon: 'map-pin' },
+    { value: 'Delhi',                label: 'Delhi',           icon: 'map-pin' },
+    { value: 'Hyderabad',            label: 'Hyderabad',       icon: 'map-pin' },
+    { value: 'Australia',            label: 'Australia',       icon: 'flag' },
+    { value: 'Sydney',               label: 'Sydney',          icon: 'map-pin' },
+    { value: 'Melbourne',            label: 'Melbourne',       icon: 'map-pin' },
+    { value: 'New Zealand',          label: 'New Zealand',     icon: 'flag' },
+
+    // Middle East & Africa
+    { value: 'United Arab Emirates', label: 'UAE',             icon: 'flag' },
+    { value: 'Dubai',                label: 'Dubai',           icon: 'map-pin' },
+    { value: 'Israel',               label: 'Israel',          icon: 'flag' },
+    { value: 'Tel Aviv',             label: 'Tel Aviv',        icon: 'map-pin' },
+    { value: 'South Africa',         label: 'South Africa',    icon: 'flag' },
+    { value: 'Cape Town',            label: 'Cape Town',       icon: 'map-pin' },
+
+    // Latin America
+    { value: 'Brazil',               label: 'Brazil',          icon: 'flag' },
+    { value: 'São Paulo',            label: 'São Paulo',       icon: 'map-pin' },
+    { value: 'Mexico',               label: 'Mexico',          icon: 'flag' },
+    { value: 'Mexico City',          label: 'Mexico City',     icon: 'map-pin' },
+    { value: 'Argentina',            label: 'Argentina',       icon: 'flag' },
+    { value: 'Colombia',             label: 'Colombia',        icon: 'flag' },
   ], []);
 
   const expOptions = [

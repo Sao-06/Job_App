@@ -93,18 +93,54 @@ greenhouse:
   - outschool
   # Consulting
   - thoughtworks
+  # ── INTERNATIONAL — added in the global expansion ─────────────────
+  # Europe (UK / DE / SE / FR / NL / EE / IL)
+  - klarna             # SE — fintech
+  - wise               # UK — fintech (formerly TransferWise)
+  - revolut            # UK — fintech, ~1500 active
+  - monzo              # UK — neobank
+  - gitlab             # global remote, headquartered everywhere
+  - huggingface        # FR / global — AI/ML
+  - contentful         # DE — headless CMS
+  - celonis            # DE — process mining
+  - personio           # DE — HR SaaS
+  - n26                # DE — neobank
+  - gocardless         # UK — payments
+  - sumup              # DE/UK — fintech POS
+  - wayve              # UK — autonomy / robotics
+  - synthesia          # UK — generative video
+  - wix                # IL — web platform
+  - monday             # IL — work management
+  - lemonade           # IL/US — insurtech
+  - jfrog              # IL — devtools
+  # Asia / Oceania
+  - canva              # AU — design
+  - airwallex          # AU/HK — fintech
+  - shopify            # CA — global, also already in Tech
+  # India
+  - razorpay           # IN — payments (also on Lever)
+  # LatAm + Africa  (nubank already listed in Finance section)
+  - rappi              # CO/MX — delivery
+  - klook              # HK/SG — travel
 
 lever:
-  - mistral          # ~158 active postings
+  - mistral          # FR — ~158 active postings
   - palantir         # ~238
-  - spotify          # ~193
+  - spotify          # SE — ~193
   - highspot
   - benchsci
   - clari
+  # ── INTERNATIONAL ────────────────────────────────────────────────
+  - razorpay         # IN — fintech, ~200+ engineering postings
+  - pleo             # DK — corporate cards
+  - bolt             # EE — ride-hail (the Estonian one)
+  - klook            # HK — travel
+  - cresta           # US/global — AI for contact centers
+  - hugging-face     # FR/global — note hyphen vs greenhouse slug
 
 ashby:
   - linear
-  - posthog
+  - posthog          # UK — analytics
   - ramp             # ~115
   - openai           # ~670
   - perplexity
@@ -119,6 +155,23 @@ ashby:
   - decagon          # ~97
   - pika
   - hightouch
+  # ── INTERNATIONAL ────────────────────────────────────────────────
+  - cohere           # CA/global — LLM platform
+  - granola          # UK — note-taking
+  - browserstack     # IN — testing infra
+  - aporia           # IL — ML observability
 
 workable:
-  - lyst
+  # Workable is dominant in Europe + emerging markets, so this
+  # provider's slug list is where the most international diversity
+  # comes through. Each slug is the company's `apply.workable.com/{slug}`
+  # tail.
+  - lyst             # UK — fashion marketplace
+  - typeform         # ES — forms
+  - glovo            # ES — delivery (LatAm + Europe coverage)
+  - automattic       # global remote — WordPress.com
+  - blinkist         # DE — book summaries
+  - bunq             # NL — neobank
+  - elements         # global — eng services
+  - jobandtalent     # ES — staffing
+  - workmotion       # DE — global hiring

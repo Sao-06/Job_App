@@ -33,8 +33,13 @@ class JobicySource:
     def fetch(self, since: datetime | None) -> Iterator[RawJob]:
         seen: set[str] = set()
         for cat in self.CATEGORIES:
+            # Dropped the `geo: "usa"` filter — Jobicy is explicitly a
+            # remote-jobs board and the geo filter was artificially pinning
+            # the feed to US-only postings even though the upstream catalog
+            # spans every continent. Without it we get genuinely global
+            # remote inventory (Europe, LatAm, APAC, anywhere).
             data = http_get_json(_BASE, params={
-                "count": 50, "geo": "usa", "industry": cat,
+                "count": 50, "industry": cat,
             }, timeout=self.timeout_seconds)
             jobs = (data or {}).get("jobs") or []
             for r in jobs:

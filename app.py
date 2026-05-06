@@ -545,6 +545,33 @@ def _server_uptime_seconds() -> float:
     return max(0.0, (datetime.now() - _SERVER_STARTED_AT).total_seconds())
 
 
+def _os_boot_time() -> float | None:
+    """Wall-clock epoch seconds at OS boot — for the system-uptime read.
+
+    Distinct from `_SERVER_STARTED_AT`, which is only the uvicorn process
+    boot. After every `systemctl restart jobapp` on the Pi the process
+    timer resets to ~0 even though the box has been up for weeks; the SPA
+    surfaces both so the dev can tell which one they're looking at.
+    Returns None when psutil isn't available.
+    """
+    try:
+        import psutil
+    except ImportError:
+        return None
+    try:
+        return float(psutil.boot_time())
+    except Exception:
+        return None
+
+
+def _os_uptime_seconds() -> float | None:
+    """Seconds since the host kernel booted, or None if unavailable."""
+    boot = _os_boot_time()
+    if boot is None:
+        return None
+    return max(0.0, time.time() - boot)
+
+
 # Per-core CPU sampling.  psutil's first call to cpu_percent() returns 0 on
 # every call without an interval, so we keep a primed sampler and read its
 # delta on each request.  ``cpu_times_percent`` decomposes the load into
@@ -552,6 +579,39 @@ def _server_uptime_seconds() -> float:
 # bars (green = user, red = system, blue = iowait).
 _CPU_SAMPLE_LOCK = threading.Lock()
 _CPU_LAST_SAMPLE = {"ts": 0.0, "data": None}
+
+
+def _prime_psutil_samplers() -> None:
+    """Warm psutil's per-core / per-process counters at module import.
+
+    psutil's ``interval=None`` mode returns 0 on the very first call
+    because there's no prior sample to delta against. Without this prime,
+    the first ``/api/dev/metrics`` poll on a freshly-restarted server
+    paints empty htop bars and a blank top-processes table (looks
+    "broken" to the dev). Runs in a daemon thread so a slow first sweep
+    of /proc on a Pi never blocks the uvicorn boot.
+    """
+    def _warm() -> None:
+        try:
+            import psutil
+        except ImportError:
+            return
+        try:
+            psutil.cpu_times_percent(interval=None, percpu=True)
+        except Exception:
+            pass
+        try:
+            for p in psutil.process_iter():
+                try:
+                    p.cpu_percent(interval=None)
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+        except Exception:
+            pass
+    threading.Thread(target=_warm, daemon=True, name="psutil-prime").start()
+
+
+_prime_psutil_samplers()
 
 
 def _cpu_snapshot() -> dict:
@@ -691,7 +751,11 @@ def _top_processes(limit: int = 5) -> dict:
                     procs.append(p)
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
                     continue
-            time.sleep(0.20)  # short delta — keeps the request under 250 ms
+            # 0.5 s delta — long enough that even on a Pi (where iterating
+            # /proc takes a few hundred ms) every process gets a usable
+            # cpu_percent reading. Shorter windows produced "everything
+            # at 0 %" tables on the production box.
+            time.sleep(0.5)
             rows: list[dict] = []
             for p in procs:
                 try:
@@ -3875,9 +3939,16 @@ def dev_metrics(request: Request, with_processes: int = 0):
     """
     if not _is_dev_request(request):
         raise HTTPException(403, "Developer access denied")
+    os_uptime = _os_uptime_seconds()
+    os_boot   = _os_boot_time()
     payload = {
         "server_started_at": _SERVER_STARTED_AT.isoformat(timespec="seconds"),
         "server_uptime_s":   round(_server_uptime_seconds(), 1),
+        # OS-level boot time / uptime — distinct from the process timer
+        # above. Surfaced so the SPA can show the host's true uptime
+        # (the process timer resets every `systemctl restart`).
+        "os_uptime_s":       round(os_uptime, 1) if os_uptime is not None else None,
+        "os_boot_at":        datetime.fromtimestamp(os_boot).isoformat(timespec="seconds") if os_boot else None,
         "cpu":               _cpu_snapshot(),
         "memory":            _memory_snapshot(),
         "cpu_temp":          _cpu_temperature(),
@@ -3923,6 +3994,8 @@ def dev_overview(request: Request):
             # and an ISO timestamp (for absolute reference).
             "server_started_at": _SERVER_STARTED_AT.isoformat(timespec="seconds"),
             "server_uptime_s":   round(_server_uptime_seconds(), 1),
+            "os_uptime_s":       (lambda u: round(u, 1) if u is not None else None)(_os_uptime_seconds()),
+            "os_boot_at":        (lambda b: datetime.fromtimestamp(b).isoformat(timespec="seconds") if b else None)(_os_boot_time()),
             # Live system metrics — htop-style per-core breakdown plus a
             # quick memory headline.  Cheap; cached server-side for 800ms.
             "cpu":      _cpu_snapshot(),

@@ -546,14 +546,7 @@ def _server_uptime_seconds() -> float:
 
 
 def _os_boot_time() -> float | None:
-    """Wall-clock epoch seconds at OS boot — for the system-uptime read.
-
-    Distinct from `_SERVER_STARTED_AT`, which is only the uvicorn process
-    boot. After every `systemctl restart jobapp` on the Pi the process
-    timer resets to ~0 even though the box has been up for weeks; the SPA
-    surfaces both so the dev can tell which one they're looking at.
-    Returns None when psutil isn't available.
-    """
+    """Epoch seconds at host OS boot, or None if psutil is unavailable."""
     try:
         import psutil
     except ImportError:
@@ -564,12 +557,20 @@ def _os_boot_time() -> float | None:
         return None
 
 
-def _os_uptime_seconds() -> float | None:
-    """Seconds since the host kernel booted, or None if unavailable."""
+def _os_uptime_payload() -> dict:
+    """Serialized host-uptime fields shared by /api/dev/metrics and overview.
+
+    Single source of truth so both endpoints stay in sync and we only
+    call `psutil.boot_time()` once per request.
+    """
     boot = _os_boot_time()
     if boot is None:
-        return None
-    return max(0.0, time.time() - boot)
+        return {"os_uptime_s": None, "os_boot_at": None}
+    uptime = max(0.0, time.time() - boot)
+    return {
+        "os_uptime_s": round(uptime, 1),
+        "os_boot_at":  datetime.fromtimestamp(boot).isoformat(timespec="seconds"),
+    }
 
 
 # Per-core CPU sampling.  psutil's first call to cpu_percent() returns 0 on
@@ -579,39 +580,6 @@ def _os_uptime_seconds() -> float | None:
 # bars (green = user, red = system, blue = iowait).
 _CPU_SAMPLE_LOCK = threading.Lock()
 _CPU_LAST_SAMPLE = {"ts": 0.0, "data": None}
-
-
-def _prime_psutil_samplers() -> None:
-    """Warm psutil's per-core / per-process counters at module import.
-
-    psutil's ``interval=None`` mode returns 0 on the very first call
-    because there's no prior sample to delta against. Without this prime,
-    the first ``/api/dev/metrics`` poll on a freshly-restarted server
-    paints empty htop bars and a blank top-processes table (looks
-    "broken" to the dev). Runs in a daemon thread so a slow first sweep
-    of /proc on a Pi never blocks the uvicorn boot.
-    """
-    def _warm() -> None:
-        try:
-            import psutil
-        except ImportError:
-            return
-        try:
-            psutil.cpu_times_percent(interval=None, percpu=True)
-        except Exception:
-            pass
-        try:
-            for p in psutil.process_iter():
-                try:
-                    p.cpu_percent(interval=None)
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    continue
-        except Exception:
-            pass
-    threading.Thread(target=_warm, daemon=True, name="psutil-prime").start()
-
-
-_prime_psutil_samplers()
 
 
 def _cpu_snapshot() -> dict:
@@ -739,7 +707,10 @@ def _top_processes(limit: int = 5) -> dict:
     now = time.time()
     with _PROC_SAMPLE_LOCK:
         cached = _PROC_LAST_SAMPLE
-        if cached["data"] is not None and (now - cached["ts"]) < 1.5:
+        # 2.5 s TTL — strictly longer than the SPA's 2 s poll cadence so
+        # consecutive Server-tab polls coalesce on the cached snapshot
+        # instead of each paying the 0.5 s sleep below.
+        if cached["data"] is not None and (now - cached["ts"]) < 2.5:
             return cached["data"]
         try:
             ncpu = psutil.cpu_count() or 1
@@ -842,13 +813,20 @@ def _cpu_temperature() -> dict | None:
     return None
 
 
-# Prime the psutil sampler so the first dev-overview request returns real
-# data instead of 0% on every core.
-try:
-    import psutil as _psutil_init
-    _psutil_init.cpu_times_percent(interval=None, percpu=True)
-except ImportError:
-    pass
+# Prime psutil's per-core CPU sampler at uvicorn startup so the first
+# /api/dev/metrics poll returns real numbers instead of all-zero bars.
+# We deliberately don't prime per-process counters here — `_top_processes`
+# does its own sweep on each request and module-load priming would expire
+# before the first dev-page poll arrives anyway.
+@app.on_event("startup")
+def _prime_psutil_sampler() -> None:
+    try:
+        import psutil
+        psutil.cpu_times_percent(interval=None, percpu=True)
+    except ImportError:
+        pass
+    except Exception:
+        pass
 
 # Per-session locks for state mutations done from worker threads. Multiple
 # concurrent SSE phases for the same session would otherwise interleave
@@ -3939,16 +3917,13 @@ def dev_metrics(request: Request, with_processes: int = 0):
     """
     if not _is_dev_request(request):
         raise HTTPException(403, "Developer access denied")
-    os_uptime = _os_uptime_seconds()
-    os_boot   = _os_boot_time()
     payload = {
         "server_started_at": _SERVER_STARTED_AT.isoformat(timespec="seconds"),
         "server_uptime_s":   round(_server_uptime_seconds(), 1),
-        # OS-level boot time / uptime — distinct from the process timer
-        # above. Surfaced so the SPA can show the host's true uptime
-        # (the process timer resets every `systemctl restart`).
-        "os_uptime_s":       round(os_uptime, 1) if os_uptime is not None else None,
-        "os_boot_at":        datetime.fromtimestamp(os_boot).isoformat(timespec="seconds") if os_boot else None,
+        # Host-level uptime distinguishes "uvicorn just restarted" from
+        # "the box has been up for weeks" — the process timer resets on
+        # every `systemctl restart`, the host one doesn't.
+        **_os_uptime_payload(),
         "cpu":               _cpu_snapshot(),
         "memory":            _memory_snapshot(),
         "cpu_temp":          _cpu_temperature(),
@@ -3994,8 +3969,7 @@ def dev_overview(request: Request):
             # and an ISO timestamp (for absolute reference).
             "server_started_at": _SERVER_STARTED_AT.isoformat(timespec="seconds"),
             "server_uptime_s":   round(_server_uptime_seconds(), 1),
-            "os_uptime_s":       (lambda u: round(u, 1) if u is not None else None)(_os_uptime_seconds()),
-            "os_boot_at":        (lambda b: datetime.fromtimestamp(b).isoformat(timespec="seconds") if b else None)(_os_boot_time()),
+            **_os_uptime_payload(),
             # Live system metrics — htop-style per-core breakdown plus a
             # quick memory headline.  Cheap; cached server-side for 800ms.
             "cpu":      _cpu_snapshot(),

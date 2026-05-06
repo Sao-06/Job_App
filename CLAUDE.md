@@ -193,6 +193,13 @@ Each phase is a function that mutates `_S` (via the proxy) and emits log lines t
 ### Touch the Auth gate
 - Don't loosen it without checking the *Onboarding gate* — they cooperate. See `feedback_auth_before_upload.md` in the agent memory directory.
 
+### Add a new column to a SQLite table (so existing prod DBs auto-migrate)
+1. Add the column to the `CREATE TABLE` in either `session_store._init_db` (for `users` / `sessions` / `auth_tokens` / `session_state`) or `pipeline/job_repo._SCHEMA_SQL` (for `job_postings` / `source_runs`). This handles fresh DBs.
+2. **Add a matching `ensure_column(...)` call to `pipeline/migrations.py:apply_all_migrations`.** This handles existing prod DBs (the Pi).
+3. If the column needs an INDEX, add `ensure_index(...)` AFTER the `ensure_column` in the same function. NEVER put the CREATE INDEX in `_SCHEMA_SQL` if it references a not-yet-migrated column — it'll crash on stale DBs (`CREATE INDEX IF NOT EXISTS` still validates referenced columns).
+4. Deploy: `git pull && sudo systemctl restart jobapp`. The startup hook `_ensure_schema_migrations` in `app.py` runs migrations on boot and logs each step to journalctl. NEVER manually `sqlite3 ... "ALTER TABLE…"` on the Pi after the first time — the migration framework owns this now.
+5. To verify post-deploy: `python scripts/migrate_db.py --check` shows the live schema; without `--check` it runs migrations and reports steps.
+
 ---
 
 ## 7. Operational Mandates

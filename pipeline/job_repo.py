@@ -118,7 +118,10 @@ _SCHEMA_SQL = [
     "CREATE INDEX IF NOT EXISTS ix_jobs_filter   ON job_postings(deleted, experience_level, education_required, remote)",
     "CREATE INDEX IF NOT EXISTS ix_jobs_company  ON job_postings(company_norm)",
     "CREATE INDEX IF NOT EXISTS ix_jobs_source   ON job_postings(source)",
-    "CREATE INDEX IF NOT EXISTS ix_jobs_category ON job_postings(deleted, job_category)",
+    # NOTE: ix_jobs_category is created in pipeline/migrations.py AFTER the
+    # job_category column has been ensured. Putting it here breaks `init_schema`
+    # on older DBs that have job_postings but no job_category column —
+    # CREATE INDEX IF NOT EXISTS still validates the referenced column.
     # Standalone FTS5 (no content= link) so the triggers fully own the body.
     # Indexed columns are: title, company, requirements (joined bullets).
     """
@@ -163,15 +166,17 @@ _SCHEMA_SQL = [
 
 
 def init_schema(conn: sqlite3.Connection) -> None:
-    """Idempotent — safe to call on every server boot."""
+    """Idempotent — safe to call on every server boot.
+
+    CREATE TABLE statements run unconditionally (no-op on existing tables),
+    then `apply_all_migrations` brings any pre-existing DB up to current
+    column/index expectations. Migration failures are logged and re-raised
+    so they're visible in journalctl — never silently swallowed.
+    """
+    from .migrations import apply_all_migrations
     for stmt in _SCHEMA_SQL:
         conn.execute(stmt)
-    # Idempotent column additions for existing DBs that predate the field.
-    try:
-        conn.execute("ALTER TABLE job_postings ADD COLUMN job_category TEXT")
-    except sqlite3.OperationalError:
-        pass
-    conn.commit()
+    apply_all_migrations(conn)
 
 
 # ── Upsert ────────────────────────────────────────────────────────────────────

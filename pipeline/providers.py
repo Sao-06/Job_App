@@ -1708,14 +1708,22 @@ class DemoProvider(BaseProvider):
             "Next actions: add LinkedIn, work authorization, target salary, and target titles to improve matching and autofill."
         )
 
+        # Soft skills are extracted from the resume text itself (same lexicon
+        # the heuristic uses upstream). NEVER hand back a hardcoded list — a
+        # marketing resume that doesn't say "Teamwork" anywhere should not
+        # come out the other side claiming Teamwork is one of the
+        # candidate's top soft skills. Empty list is the right answer when
+        # the lexicon doesn't see any of these tokens.
+        from .profile_extractor import _scan_soft_skills
+        soft_skills = _scan_soft_skills(resume_text)
+
         return {
             "name": name, "email": email, "linkedin": linkedin, "github": github, "phone": phone,
             "location": location,
             "summary": summary,
             "target_titles": target_titles,
             "top_hard_skills": hard_skills,
-            "top_soft_skills": ["Teamwork", "Problem-solving", "Communication",
-                                 "Attention to detail", "Time management"],
+            "top_soft_skills": soft_skills,
             "education":  education_parsed,
             "experience": experience,
             "work_experience": experience,

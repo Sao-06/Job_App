@@ -8,7 +8,7 @@
 
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
-<link href="https://fonts.googleapis.com/css2?family=Literata:ital,opsz,wght@0,7..72,400;0,7..72,500;0,7..72,600;0,7..72,700;0,7..72,800;1,7..72,400;1,7..72,500;1,7..72,600;1,7..72,700&family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet"/>
 
 <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
@@ -41,8 +41,12 @@
   --bad:       #f87171;
   --bad-d:     rgba(248,113,113,.12);
   --mono:  'JetBrains Mono', ui-monospace, monospace;
-  --sans:  'Manrope', system-ui, sans-serif;
-  --serif: 'Literata', 'Iowan Old Style', Georgia, serif;
+  --sans:  'Inter', system-ui, -apple-system, sans-serif;
+  /* Headlines were Literata italic; user found that hard to read, so the
+     "serif" token now resolves to Inter and italic styling is normalised
+     globally below. The variable name is kept so existing selectors don't
+     need to be rewired. */
+  --serif: 'Inter', system-ui, -apple-system, sans-serif;
 }
 *,*::before,*::after { box-sizing: border-box; margin: 0; padding: 0 }
 html { scroll-behavior: smooth; font-size: 16px; font-optical-sizing: auto }
@@ -52,6 +56,10 @@ body {
   text-rendering: optimizeLegibility;
   letter-spacing: -.005em; overflow-x: hidden;
 }
+/* Solid letters, never cursive — neutralise the browser-default italic on
+   <em>/<i>/<cite>/<var>/<address>/<dfn> so unstyled or markdown-inserted
+   tags can't sneak a slant in. */
+em, i, cite, var, address, dfn { font-style: normal }
 ::-webkit-scrollbar { width: 6px; height: 6px }
 ::-webkit-scrollbar-track { background: transparent }
 ::-webkit-scrollbar-thumb { background: rgba(255,255,255,.10); border-radius: 3px }
@@ -85,7 +93,7 @@ body {
   color: var(--t1);
 }
 .brand-name em {
-  font-style: italic;
+  font-style: normal;
   background: linear-gradient(105deg, #ffffff 0%, #a78bff 50%, #22e5ff 100%);
   background-clip: text; -webkit-background-clip: text; color: transparent;
 }
@@ -153,7 +161,7 @@ body {
   margin-bottom: 28px;
 }
 .hero-eyebrow-num {
-  font-family: var(--serif); font-size: 17px; font-style: italic;
+  font-family: var(--serif); font-size: 17px; font-style: normal;
   background: linear-gradient(105deg, #a78bff 0%, #22e5ff 110%);
   background-clip: text; -webkit-background-clip: text; color: transparent;
   letter-spacing: -.02em; text-transform: none;
@@ -171,7 +179,7 @@ body {
   letter-spacing: -.045em; color: var(--t1); margin-bottom: 22px;
 }
 .hero-h1 em {
-  font-style: italic;
+  font-style: normal;
   background: linear-gradient(105deg, #ffffff 0%, #a78bff 35%, #ff3d9a 70%, #22e5ff 100%);
   background-clip: text; -webkit-background-clip: text; color: transparent;
 }
@@ -279,7 +287,7 @@ body {
   text-transform: uppercase; letter-spacing: .08em; font-weight: 600;
 }
 .dp-num {
-  font-family: var(--serif); font-size: 18px; font-style: italic;
+  font-family: var(--serif); font-size: 18px; font-style: normal;
   background: linear-gradient(105deg, #a78bff 0%, #ff3d9a 60%, #22e5ff 110%);
   background-clip: text; -webkit-background-clip: text; color: transparent;
 }
@@ -387,7 +395,7 @@ body {
   to   { transform: translateX(-50%) }
 }
 .ticker-item {
-  font-family: var(--serif); font-size: 22px; font-style: italic;
+  font-family: var(--serif); font-size: 22px; font-style: normal;
   color: var(--t2); letter-spacing: -.015em;
 }
 .ticker-dot {
@@ -444,7 +452,7 @@ body {
   margin-bottom: 18px;
 }
 .eyebrow-num {
-  font-family: var(--serif); font-size: 22px; font-style: italic;
+  font-family: var(--serif); font-size: 22px; font-style: normal;
   background: linear-gradient(105deg, #a78bff 0%, #ff3d9a 60%, #22e5ff 110%);
   background-clip: text; -webkit-background-clip: text; color: transparent;
   letter-spacing: -.02em; text-transform: none;
@@ -458,7 +466,7 @@ body {
   max-width: 740px;
 }
 .section-h em {
-  font-style: italic;
+  font-style: normal;
   background: linear-gradient(105deg, #ffffff 0%, #a78bff 35%, #ff3d9a 70%, #22e5ff 100%);
   background-clip: text; -webkit-background-clip: text; color: transparent;
 }
@@ -501,7 +509,7 @@ body {
   background: linear-gradient(135deg, var(--good) 0%, var(--cyan) 100%);
   background-clip: text; -webkit-background-clip: text; color: transparent;
 }
-.fv-r-verdict { font-family: var(--serif); font-size: 26px; font-style: italic; color: var(--good) }
+.fv-r-verdict { font-family: var(--serif); font-size: 26px; font-style: normal; color: var(--good) }
 .fv-r-meta { font-family: var(--mono); font-size: 11px; color: var(--t3); letter-spacing: .08em; text-transform: uppercase }
 .fv-r-tiles { display: flex; flex-direction: column; gap: 6px }
 .fv-r-tile {
@@ -595,7 +603,7 @@ body {
   color: var(--t1); letter-spacing: -.025em; margin-bottom: 8px;
   position: relative; z-index: 1;
 }
-.prov-name em { font-style: italic; color: var(--prov-c, var(--accent-h)) }
+.prov-name em { font-style: normal; color: var(--prov-c, var(--accent-h)) }
 .prov-tag {
   font-family: var(--mono); font-size: 11.5px; color: var(--t3);
   letter-spacing: .04em; margin-bottom: 18px;
@@ -636,7 +644,7 @@ body {
   counter-increment: phase;
   content: counter(phase, decimal-leading-zero);
   display: block;
-  font-family: var(--serif); font-size: 38px; line-height: 1; font-style: italic;
+  font-family: var(--serif); font-size: 38px; line-height: 1; font-style: normal;
   background: linear-gradient(135deg, var(--accent-h) 0%, var(--cyan) 100%);
   background-clip: text; -webkit-background-clip: text; color: transparent;
   letter-spacing: -.04em; margin-bottom: 14px;
@@ -715,7 +723,7 @@ body {
   color: var(--t1); margin-bottom: 18px;
 }
 .cta-h em {
-  font-style: italic;
+  font-style: normal;
   background: linear-gradient(105deg, #ffffff 0%, #a78bff 35%, #ff3d9a 70%, #22e5ff 100%);
   background-clip: text; -webkit-background-clip: text; color: transparent;
 }
@@ -748,7 +756,7 @@ body {
   letter-spacing: .04em;
 }
 .footer em {
-  font-style: italic; color: var(--accent-h);
+  font-style: normal; color: var(--accent-h);
 }
 
 /* ── RESPONSIVE ─────────────────────────────────────────────────────── */

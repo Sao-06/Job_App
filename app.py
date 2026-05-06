@@ -14,6 +14,7 @@ import io
 import json
 import os
 import queue
+import re
 import secrets
 import sys
 import threading
@@ -43,11 +44,10 @@ if hasattr(sys.stdout, "buffer") and "utf" not in (sys.stdout.encoding or "").lo
 if hasattr(sys.stderr, "buffer") and "utf" not in (sys.stderr.encoding or "").lower():
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
-# ── Server log mirror ─────────────────────────────────────────────────────
-# Tee stdout/stderr into a bounded ring so the Dev Ops page can echo the
-# terminal output without scraping process pipes from outside.  Writes
-# still pass through to the original streams so the real terminal keeps
-# its native output — the ring is the second consumer.
+# Server log mirror: tee stdout/stderr (and Python `logging`) into a
+# bounded ring so the Dev Ops page can echo the terminal without
+# scraping process pipes from outside.  Writes still pass through
+# to the originals, so the real terminal keeps its native output.
 import collections as _collections
 import queue as _queue
 import threading as _threading
@@ -58,14 +58,11 @@ _LOG_RING_MAX = 3000
 _LOG_RING_LOCK = _threading.Lock()
 _LOG_RING = _collections.deque(maxlen=_LOG_RING_MAX)
 _LOG_SEQ = 0
-_LOG_SUBSCRIBERS: list = []     # queues populated by SSE listeners
+_LOG_SUBSCRIBERS = []
 
-
-def _log_ring_push(stream: str, line: str) -> None:
-    """Append one line to the ring and fan-out to live SSE subscribers.
-    Empty-after-strip lines are dropped to keep the panel readable."""
-    line = line.rstrip("
-")
+def _log_ring_push(stream, line):
+    """Append one line to the ring and fan-out to live SSE subscribers."""
+    line = line.rstrip("\r\n")
     if not line:
         return
     global _LOG_SEQ
@@ -84,66 +81,49 @@ def _log_ring_push(stream: str, line: str) -> None:
             except Exception:
                 pass
 
-
 class _StreamTee:
-    """File-like wrapper that mirrors writes to the original stream AND
-    the ring.  Buffers partial lines so a multi-line print() becomes one
-    record per logical line, not one per chunk."""
-    def __init__(self, original, stream_name: str):
+    """File-like wrapper mirroring writes to original AND the ring."""
+    def __init__(self, original, stream_name):
         self._orig = original
         self._name = stream_name
         self._buf  = ""
         self._lock = _threading.Lock()
-
     def write(self, data):
         if data:
-            try:
-                self._orig.write(data)
-            except Exception:
-                pass
+            try: self._orig.write(data)
+            except Exception: pass
             with self._lock:
                 self._buf += data
-                while "
-" in self._buf:
-                    line, self._buf = self._buf.split("
-", 1)
+                while "\n" in self._buf:
+                    line, self._buf = self._buf.split("\n", 1)
                     _log_ring_push(self._name, line)
         return len(data) if data else 0
-
     def flush(self):
         try: self._orig.flush()
         except Exception: pass
-
     def isatty(self):
         try: return bool(self._orig.isatty())
         except Exception: return False
-
     def fileno(self):
         return self._orig.fileno()
-
     def __getattr__(self, name):
         return getattr(self._orig, name)
 
-
 # Skip the tee under pytest — it captures stdout itself and re-wrapping
-# breaks its session-end teardown. Same guard the UTF-8 block uses.
+# breaks its session-end teardown.
 if "pytest" not in (sys.modules or {}) and not getattr(sys.stdout, "_log_tee_installed", False):
     sys.stdout = _StreamTee(sys.stdout, "stdout")
     sys.stderr = _StreamTee(sys.stderr, "stderr")
     setattr(sys.stdout, "_log_tee_installed", True)
 
-
-# Mirror Python `logging` into the same ring.  uvicorn pushes access +
-# error logs through the `uvicorn` / `uvicorn.access` loggers (NOT plain
-# print) so without this handler the SPA panel misses HTTP request lines.
+# Mirror Python `logging` into the same ring so uvicorn access logs
+# (which go through the `uvicorn` / `uvicorn.access` loggers, NOT plain
+# print) also surface in the Dev Ops panel.
 class _RingLogHandler(_logging.Handler):
     def emit(self, record):
-        try:
-            msg = self.format(record)
-        except Exception:
-            msg = record.getMessage()
-        _log_ring_push(f"logger:{record.name}", msg)
-
+        try: msg = self.format(record)
+        except Exception: msg = record.getMessage()
+        _log_ring_push("logger:" + record.name, msg)
 
 _RING_LOG_HANDLER = _RingLogHandler(level=_logging.DEBUG)
 _RING_LOG_HANDLER.setFormatter(_logging.Formatter(
@@ -151,13 +131,10 @@ _RING_LOG_HANDLER.setFormatter(_logging.Formatter(
     datefmt="%H:%M:%S",
 ))
 _logging.getLogger().addHandler(_RING_LOG_HANDLER)
-# uvicorn's access logger is silent by default — flip to INFO so HTTP
-# request lines surface in the panel.
 for _ln in ("uvicorn", "uvicorn.error", "uvicorn.access"):
     _lg = _logging.getLogger(_ln)
     if _lg.level == _logging.NOTSET or _lg.level > _logging.INFO:
         _lg.setLevel(_logging.INFO)
-
 
 import uvicorn
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
@@ -206,7 +183,11 @@ from pipeline.phases import (
     phase6_update_tracker,
     phase7_run_report,
 )
-from pipeline.resume import _build_demo_resume, _read_resume, _save_tailored_resume
+from pipeline.resume import (
+    _build_demo_resume, _read_resume, _save_tailored_resume,
+    _render_resume_pdf_reportlab,
+)
+from pipeline.helpers import EDUCATION_RANK as _EDU_RANK
 
 app = FastAPI(title="Jobs AI")
 _DEV_IMPERSONATE_COOKIE = "dev_impersonate_id"
@@ -553,6 +534,258 @@ _RUNTIME: dict = {
     "verbose_logs": False,   # echo SSE log lines to stderr in addition to the queue
 }
 
+# Wall-clock timestamp captured the first time this module is imported.
+# Surfaced via /api/dev/overview as "server uptime for this session" — i.e.
+# how long since the uvicorn process bound, NOT the OS boot.
+_SERVER_STARTED_AT = datetime.now()
+
+
+def _server_uptime_seconds() -> float:
+    """Seconds since this Python process started, as a float."""
+    return max(0.0, (datetime.now() - _SERVER_STARTED_AT).total_seconds())
+
+
+# Per-core CPU sampling.  psutil's first call to cpu_percent() returns 0 on
+# every call without an interval, so we keep a primed sampler and read its
+# delta on each request.  ``cpu_times_percent`` decomposes the load into
+# user / system / iowait / idle so the SPA can render htop-style segmented
+# bars (green = user, red = system, blue = iowait).
+_CPU_SAMPLE_LOCK = threading.Lock()
+_CPU_LAST_SAMPLE = {"ts": 0.0, "data": None}
+
+
+def _cpu_snapshot() -> dict:
+    """Return a per-core CPU breakdown suitable for an htop-style UI.
+
+    Cached for 800 ms so a polling Dev Ops page (typically 2 s tick) gets
+    fresh numbers without re-blocking the request loop.  Returns:
+
+      {
+        "cores": [{"user": 12.3, "system": 4.1, "iowait": 0.8, "idle": 82.8,
+                   "total": 17.2}],
+        "logical": int,
+        "physical": int | None,
+        "load_avg": [1m, 5m, 15m] | None,
+      }
+    """
+    try:
+        import psutil
+    except ImportError:
+        return {"cores": [], "logical": 0, "physical": None, "load_avg": None,
+                "error": "psutil not installed"}
+
+    now = time.time()
+    with _CPU_SAMPLE_LOCK:
+        last = _CPU_LAST_SAMPLE
+        if last["data"] is not None and (now - last["ts"]) < 0.8:
+            return last["data"]
+        try:
+            # interval=None → returns the delta since the last call. We
+            # prime the sampler at module load and re-read here; first
+            # request after boot can return zeros, which is correct.
+            per_core = psutil.cpu_times_percent(interval=None, percpu=True) or []
+            cores: list[dict] = []
+            for c in per_core:
+                user    = float(getattr(c, "user", 0.0) or 0.0)
+                nice    = float(getattr(c, "nice", 0.0) or 0.0)
+                system  = float(getattr(c, "system", 0.0) or 0.0)
+                iowait  = float(getattr(c, "iowait", 0.0) or 0.0)
+                irq     = float(getattr(c, "irq", 0.0) or 0.0)
+                softirq = float(getattr(c, "softirq", 0.0) or 0.0)
+                steal   = float(getattr(c, "steal", 0.0) or 0.0)
+                idle    = float(getattr(c, "idle", 0.0) or 0.0)
+                # htop's coloring: user (incl. nice) → green; system (incl.
+                # IRQ + steal) → red; iowait → blue.
+                user_t = user + nice
+                sys_t  = system + irq + softirq + steal
+                io_t   = iowait
+                total  = round(min(100.0, max(0.0, user_t + sys_t + io_t)), 1)
+                cores.append({
+                    "user":   round(user_t, 1),
+                    "system": round(sys_t, 1),
+                    "iowait": round(io_t, 1),
+                    "idle":   round(max(0.0, idle), 1),
+                    "total":  total,
+                })
+            try:
+                phys = psutil.cpu_count(logical=False)
+            except Exception:
+                phys = None
+            try:
+                load = list(psutil.getloadavg())   # may raise on stripped envs
+            except (AttributeError, OSError):
+                load = None
+            data = {
+                "cores": cores,
+                "logical": len(cores),
+                "physical": phys,
+                "load_avg": load,
+            }
+            last["ts"] = now
+            last["data"] = data
+            return data
+        except Exception as exc:
+            return {"cores": [], "logical": 0, "physical": None, "load_avg": None,
+                    "error": f"{type(exc).__name__}: {exc}"}
+
+
+def _memory_snapshot() -> dict:
+    """Quick RAM headline — total / used / percent.  Same lazy-import
+    guard as the CPU snapshot so this stays optional."""
+    try:
+        import psutil
+    except ImportError:
+        return {}
+    try:
+        m = psutil.virtual_memory()
+        return {
+            "total_mb":   round(m.total   / (1024 * 1024), 0),
+            "used_mb":    round(m.used    / (1024 * 1024), 0),
+            "percent":    round(m.percent, 1),
+        }
+    except Exception:
+        return {}
+
+
+# Sampling for top-processes — psutil's `cpu_percent()` measures across
+# the interval BETWEEN consecutive calls, so the first call always returns
+# 0%. We keep a primed registry that prepares each visible process and a
+# 1.5 s cache so the dev page polls don't pay the per-process priming
+# cost on every tick.
+_PROC_SAMPLE_LOCK = threading.Lock()
+_PROC_LAST_SAMPLE = {"ts": 0.0, "data": None}
+
+
+def _top_processes(limit: int = 5) -> dict:
+    """Return the top processes by CPU and by memory, htop-style.
+
+    Result shape:
+        {
+          "by_cpu": [{pid, name, cpu, mem_mb, mem_pct, user}, ...],
+          "by_mem": [...same shape...],
+          "sampled_at": <iso>,
+        }
+
+    Sampling strategy: psutil's process-level cpu_percent only returns a
+    real number on its 2nd+ call (interval=None compares against the
+    previous sample). We cache a primed list for ~1.5 s so repeated
+    polls don't lose the delta to teardown/rebuild churn.
+    """
+    try:
+        import psutil
+    except ImportError:
+        return {"by_cpu": [], "by_mem": [], "error": "psutil not installed"}
+
+    now = time.time()
+    with _PROC_SAMPLE_LOCK:
+        cached = _PROC_LAST_SAMPLE
+        if cached["data"] is not None and (now - cached["ts"]) < 1.5:
+            return cached["data"]
+        try:
+            ncpu = psutil.cpu_count() or 1
+            # First sweep primes psutil's per-process cpu accumulator.
+            procs: list = []
+            for p in psutil.process_iter(["pid", "name", "username"]):
+                try:
+                    p.cpu_percent(interval=None)
+                    procs.append(p)
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+            time.sleep(0.20)  # short delta — keeps the request under 250 ms
+            rows: list[dict] = []
+            for p in procs:
+                try:
+                    cpu = p.cpu_percent(interval=None) / float(ncpu)
+                    mi  = p.memory_info()
+                    mem_mb  = round(mi.rss / (1024 * 1024), 1)
+                    mem_pct = round(p.memory_percent(), 1)
+                    rows.append({
+                        "pid":     p.pid,
+                        "name":    (p.info.get("name") or "")[:40],
+                        "user":    (p.info.get("username") or "")[:24],
+                        "cpu":     round(cpu, 1),
+                        "mem_mb":  mem_mb,
+                        "mem_pct": mem_pct,
+                    })
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+            by_cpu = sorted(rows, key=lambda r: r["cpu"],     reverse=True)[:limit]
+            by_mem = sorted(rows, key=lambda r: r["mem_mb"],  reverse=True)[:limit]
+            data = {
+                "by_cpu":     by_cpu,
+                "by_mem":     by_mem,
+                "sampled_at": datetime.now().isoformat(timespec="seconds"),
+                "total":      len(rows),
+            }
+            cached["ts"] = time.time()
+            cached["data"] = data
+            return data
+        except Exception as exc:
+            return {"by_cpu": [], "by_mem": [], "error": f"{type(exc).__name__}: {exc}"}
+
+
+def _cpu_temperature() -> dict | None:
+    """Read the CPU package temperature where the OS exposes it.
+
+    Returns ``{current, high, critical, label}`` or ``None`` if no
+    temperature sensor is reachable. Linux exposes most thermal zones
+    via ``/sys/class/thermal``; macOS requires `sudo`-only IOKit calls
+    (psutil returns empty); Windows requires WMI which often errors
+    without admin.  None is a perfectly valid result on those systems —
+    the UI just hides the temperature row.
+    """
+    try:
+        import psutil
+    except ImportError:
+        return None
+    if not hasattr(psutil, "sensors_temperatures"):
+        return None
+    try:
+        sensors = psutil.sensors_temperatures(fahrenheit=False) or {}
+    except Exception:
+        return None
+    if not sensors:
+        return None
+    # Prefer the package-level reading (Intel: `coretemp`, AMD: `k10temp`,
+    # generic: `cpu_thermal` on Pi). Fall back to whichever sensor reports.
+    for key in ("coretemp", "k10temp", "cpu_thermal", "acpitz", "cpu", "soc_thermal"):
+        readings = sensors.get(key) or []
+        if not readings:
+            continue
+        primary = next(
+            (r for r in readings
+             if "package" in (r.label or "").lower() or "tctl" in (r.label or "").lower()),
+            readings[0],
+        )
+        return {
+            "current":  round(float(primary.current), 1),
+            "high":     round(float(primary.high), 1)     if primary.high     else None,
+            "critical": round(float(primary.critical), 1) if primary.critical else None,
+            "label":    primary.label or key,
+            "source":   key,
+        }
+    # Last resort: pick whatever sensor reported anything.
+    for key, readings in sensors.items():
+        if readings:
+            r = readings[0]
+            return {
+                "current":  round(float(r.current), 1),
+                "high":     round(float(r.high), 1)     if r.high     else None,
+                "critical": round(float(r.critical), 1) if r.critical else None,
+                "label":    r.label or key,
+                "source":   key,
+            }
+    return None
+
+
+# Prime the psutil sampler so the first dev-overview request returns real
+# data instead of 0% on every core.
+try:
+    import psutil as _psutil_init
+    _psutil_init.cpu_times_percent(interval=None, percpu=True)
+except ImportError:
+    pass
+
 # Per-session locks for state mutations done from worker threads. Multiple
 # concurrent SSE phases for the same session would otherwise interleave
 # `_S["done"].add`, `state["error"][phase] = ...`, and JSON saves.
@@ -748,8 +981,16 @@ async def session_state_middleware(request: Request, call_next):
     # by a concurrent /api/auth/google request — load happens before the OAuth
     # mutation, save happens after, so the OAuth state vanishes and the callback
     # fails the state check.
+    # GET requests are read-only by convention. Saving stale per-request state
+    # on every read clobbers concurrent writes — e.g. /api/reset clears the
+    # session, then a GET /api/ollama/status that started before the reset
+    # finishes after and writes its (pre-reset) snapshot back to the DB,
+    # silently undoing the reset. The two GET endpoints that DO mutate state
+    # (auth_google sets google_oauth_state; the OAuth callback fully
+    # re-binds the session) save explicitly inside their handlers.
     skip_save = (
         response.headers.get("content-type", "").startswith("text/event-stream")
+        or request.method == "GET"
         or request.url.path in ("/api/state", "/api/webhooks/stripe")
     )
     if not skip_save:
@@ -798,7 +1039,6 @@ def _get_resume_by_id(rid: str) -> dict | None:
     return None
 
 
-_EDU_RANK = {"high_school": 0, "associates": 1, "bachelors": 2, "masters": 3, "phd": 4}
 _DEGREE_TOKEN_TO_LEVEL = (
     ("phd",         "phd"),  ("doctor",      "phd"),
     ("master",      "masters"), ("m.s",         "masters"), ("m.eng",       "masters"),
@@ -832,10 +1072,185 @@ def _infer_edu_filter_from_profile(profile: dict) -> list[str]:
     return [best_level] if best_level else []
 
 
-def _apply_profile_search_prefs(state: dict, profile: dict | None) -> bool:
-    """Fill EMPTY search-pref fields on *state* from a freshly-extracted
-    *profile*. Never overwrites a value the user has already set — empty
-    string / empty list / None are the only fields we touch.
+def _infer_experience_levels_from_profile(profile: dict) -> list[str]:
+    """Infer the experience-level chips (``internship`` / ``entry-level`` /
+    ``mid-level`` / ``senior``) from the resume profile.
+
+    Order of precedence (first hit wins so a single strong signal isn't
+    drowned out by a weaker one further down):
+      1. Student / new-graduate signals **in the summary** —
+         "fresh graduating", "currently studying", "recent graduate", etc.
+         These come first because a student-with-leadership often holds a
+         "Chief / Lead / President" club title that would otherwise trip
+         the senior heuristic (Colin Tse held "Chief of Operation" at a
+         student film club).
+      2. Intern token in the most-recent role title — late-stage interns
+         without a student-signal summary still belong here.
+      3. Senior keywords in the most-recent role title or target titles
+         (Senior / Lead / Principal / Staff / Director / Head / VP /
+         Architect) → ``["senior"]``.
+      4. In-progress education — a degree whose end year is in the future
+         or marked ``Present`` / ``Current``, with less than ~5 years of
+         work span. Catches active students even when the LLM rewrites the
+         summary in a way the rule-1 regex misses. The 5-year gate is
+         what protects mid-career professionals pursuing an MBA / EdD
+         from being miscategorised as students.
+      5. Fallback: rough years-of-experience computed from date ranges on
+         work entries — earliest start year to latest end year (treats
+         Present/Current as today's calendar year).
+
+    Returns lowercase, hyphenated values that match the frontend
+    ``_EXP_LEVEL_OPTIONS`` chips. Empty list when nothing's confident.
+    """
+    if not profile:
+        return []
+
+    summary = (profile.get("summary") or "").lower()
+
+    exp_entries = profile.get("experience") or profile.get("work_experience") or []
+    titles_blob_parts: list[str] = []
+    for e in exp_entries[:3]:
+        if isinstance(e, dict):
+            t = e.get("title") or ""
+            if t:
+                titles_blob_parts.append(str(t).lower())
+    for t in (profile.get("target_titles") or []):
+        if isinstance(t, dict):
+            t = t.get("title") or ""
+        if t:
+            titles_blob_parts.append(str(t).lower())
+    titles_blob = " ".join(titles_blob_parts)
+
+    # ── Rule 1: student / new-graduate signals in the summary ──────────
+    # Trailing \w* is intentional: matches "fresh graduating", "graduated",
+    # etc., where a trailing \b would fail because the next char is a word
+    # character. Summary-only because club titles ("Senior Class President")
+    # would otherwise misroute student profiles to senior in titles.
+    student_re = re.compile(
+        r"(?:fresh\s+graduat\w*|new\s+graduat\w*|recent\s+graduat\w*|"
+        r"graduating\s+student|rising\s+(?:senior|junior)|"
+        r"current(?:ly)?\s+studying|undergraduate\s+student|"
+        r"current\s+student|college\s+student)",
+        re.IGNORECASE,
+    )
+    if student_re.search(summary):
+        return ["internship", "entry-level"]
+
+    # ── Rule 2: intern / co-op token in role titles ───────────────────
+    intern_re = re.compile(
+        r"\b(?:intern|internship|trainee|co-?op)\b",
+        re.IGNORECASE,
+    )
+    if intern_re.search(titles_blob):
+        return ["internship", "entry-level"]
+
+    # If the profile is genuinely empty (no summary, no titles, no
+    # experience entries) return [] so a force_refresh caller doesn't
+    # clobber an existing user-set value with a default guess.
+    if not summary.strip() and not titles_blob.strip() and not exp_entries:
+        return []
+
+    # ── Compute the "active student" flag up front so it can gate the
+    # senior-keyword check below. An active student is someone with a
+    # degree-in-progress AND less than ~5 years of work history. The
+    # 5-year work-span gate prevents misclassifying a senior engineer who
+    # happens to be pursuing an MBA. We need this BEFORE the senior check
+    # because student leadership titles ("Chief of Operation" at a film
+    # club) would otherwise hit rule 3 even when the LLM rewrites the
+    # summary in a way the rule-1 regex doesn't catch.
+    import datetime as _dt
+    this_year = _dt.date.today().year
+    year_re = re.compile(r"(?:19|20)\d{2}")
+    in_progress_marker_re = re.compile(
+        r"\b(?:present|current|now|expected|in\s+progress|ongoing)\b",
+        re.IGNORECASE,
+    )
+
+    work_years_seen: list[int] = []
+    work_has_present = False
+    for e in exp_entries:
+        if not isinstance(e, dict):
+            continue
+        dates = e.get("dates") or e.get("date") or ""
+        if not isinstance(dates, str):
+            continue
+        for m in year_re.finditer(dates):
+            try:
+                work_years_seen.append(int(m.group(0)))
+            except ValueError:
+                pass
+        if in_progress_marker_re.search(dates):
+            work_has_present = True
+    if work_years_seen:
+        work_latest = this_year if work_has_present else max(work_years_seen)
+        work_span = max(0, work_latest - min(work_years_seen))
+    else:
+        work_span = 0
+
+    edu_in_progress = False
+    for edu in (profile.get("education") or []):
+        if not isinstance(edu, dict):
+            continue
+        edu_blob = " ".join(
+            str(edu.get(k) or "")
+            for k in ("year", "years", "dates", "date", "name", "institution")
+        )
+        if in_progress_marker_re.search(edu_blob):
+            edu_in_progress = True
+            break
+        for m in year_re.finditer(edu_blob):
+            try:
+                if int(m.group(0)) > this_year:
+                    edu_in_progress = True
+                    break
+            except ValueError:
+                pass
+        if edu_in_progress:
+            break
+    is_active_student = edu_in_progress and work_span < 5
+
+    # ── Rule 3: senior keywords in role / target titles ───────────────
+    # Skipped for active students because their leadership titles are
+    # virtually always student-organisation roles, not real senior
+    # employment.
+    senior_re = re.compile(
+        r"\b(?:senior|lead|principal|staff|director|head\s+of|"
+        r"chief|vp|vice\s+president|architect)\b",
+        re.IGNORECASE,
+    )
+    if not is_active_student and senior_re.search(titles_blob):
+        return ["senior"]
+
+    # ── Rule 4: active student fall-through ───────────────────────────
+    if is_active_student:
+        return ["internship", "entry-level"]
+
+    # ── Rule 5: fallback years-of-experience from work date ranges ────
+    if not work_years_seen:
+        return ["entry-level"]
+    if work_span >= 7:
+        return ["senior"]
+    if work_span >= 3:
+        return ["mid-level"]
+    return ["entry-level"]
+
+
+def _apply_profile_search_prefs(state: dict, profile: dict | None,
+                                  *, force_refresh: bool = False) -> bool:
+    """Fill search-pref fields on *state* from a freshly-extracted *profile*.
+
+    Two modes:
+      * ``force_refresh=False`` (default) — only fills EMPTY fields. Used on
+        the very first upload when the prefs are still at their fresh-state
+        defaults; preserves whatever the user typed in by hand.
+      * ``force_refresh=True`` — overwrites pref values from the profile.
+        Used when the *primary* resume changes (clear "use this resume's
+        signals now" intent) or when an extraction completes for the
+        primary resume (the fresh extraction IS the latest signal). The
+        cost is that purely-manual customisations get clobbered on the
+        next re-scan; this matches the expected behaviour that uploading
+        a new resume should refresh job-search location / education /
+        experience-level chips together.
 
     Returns True if anything was changed. The caller is responsible for
     persisting the state.
@@ -844,37 +1259,62 @@ def _apply_profile_search_prefs(state: dict, profile: dict | None) -> bool:
         return False
     changed = False
 
+    def _is_blank(val) -> bool:
+        if val is None:
+            return True
+        if isinstance(val, str):
+            return not val.strip()
+        if isinstance(val, list):
+            return len(val) == 0
+        return False
+
+    def _set(key: str, value) -> None:
+        nonlocal changed
+        if value is None or _is_blank(value):
+            return
+        if force_refresh or _is_blank(state.get(key)):
+            if state.get(key) != value:
+                state[key] = value
+                changed = True
+
     # job_titles ← profile.target_titles
-    if not str(state.get("job_titles") or "").strip():
-        titles = []
-        for t in (profile.get("target_titles") or []):
-            if isinstance(t, dict):
-                t = t.get("title") or ""
-            t = str(t).strip()
-            if t:
-                titles.append(t)
-        if titles:
-            state["job_titles"] = ", ".join(titles[:5])
-            changed = True
+    titles: list[str] = []
+    for t in (profile.get("target_titles") or []):
+        if isinstance(t, dict):
+            t = t.get("title") or ""
+        t = str(t).strip()
+        if t:
+            titles.append(t)
+    if titles:
+        _set("job_titles", ", ".join(titles[:5]))
 
     # location ← profile.location
-    if not str(state.get("location") or "").strip():
-        loc = str((profile.get("location") or "")).strip()
-        if loc:
-            state["location"] = loc
-            changed = True
+    loc = str((profile.get("location") or "")).strip()
+    if loc:
+        _set("location", loc)
 
-    # education_filter ← inferred from profile.education
-    if not (state.get("education_filter") or []):
-        derived = _infer_edu_filter_from_profile(profile)
-        if derived:
-            state["education_filter"] = derived
-            changed = True
+    # education_filter ← inferred from profile.education (highest degree).
+    derived_edu = _infer_edu_filter_from_profile(profile)
+    if derived_edu:
+        _set("education_filter", derived_edu)
+
+    # experience_levels ← inferred from summary + recent roles + date ranges.
+    derived_exp = _infer_experience_levels_from_profile(profile)
+    if derived_exp:
+        _set("experience_levels", derived_exp)
 
     return changed
 
 
-def _sync_primary_scalars(record=None):
+def _sync_primary_scalars(record=None, *, force_prefs_refresh: bool = False):
+    """Mirror the primary resume's scalar fields (text / filename / profile)
+    onto session state, and optionally refresh the job-search prefs from
+    the new primary's profile. Pass ``force_prefs_refresh=True`` whenever
+    the caller represents a "primary changed" event (set-primary, last
+    primary deleted) — the fresh resume IS the latest signal of who the
+    user is, so location / experience / education chips should overwrite
+    the prefs cached from the previous primary.
+    """
     pr = record or _get_primary_resume()
     if pr:
         _S["resume_text"] = pr["text"]
@@ -886,7 +1326,10 @@ def _sync_primary_scalars(record=None):
             # Mirror the profile-derived search prefs onto the bound state so
             # the SettingsPage picks up titles/location/education immediately
             # after a primary switch (not just after a fresh extraction).
-            _apply_profile_search_prefs(_S.current(), pr["profile"])
+            _apply_profile_search_prefs(
+                _S.current(), pr["profile"],
+                force_refresh=force_prefs_refresh,
+            )
         else:
             _S["done"].discard(1)
     else:
@@ -917,6 +1360,19 @@ def _serialize_resume(r: dict) -> dict:
         if full and full.exists() and full.is_file():
             original_url = _output_url(full)
             original_kind = full.suffix.lstrip(".").lower()
+    # Generated preview PDF — used for .txt / .docx / .tex uploads (and as
+    # an extra fallback for .pdf). The renderer is best-effort, so this is
+    # only set when the file actually exists on disk.
+    preview_pdf_url = ""
+    prel = r.get("preview_pdf_path") or ""
+    if prel:
+        pfull = (OUTPUT_DIR / prel).resolve()
+        try:
+            pfull.relative_to(OUTPUT_DIR.resolve())
+        except ValueError:
+            pfull = None
+        if pfull and pfull.exists() and pfull.is_file():
+            preview_pdf_url = _output_url(pfull)
     return {
         "id": r["id"],
         "filename": r["filename"],
@@ -929,6 +1385,7 @@ def _serialize_resume(r: dict) -> dict:
         "profile": full_profile,
         "original_url": original_url,
         "original_kind": original_kind,
+        "preview_pdf_url": preview_pdf_url,
     }
 
 
@@ -1019,6 +1476,15 @@ def _run_extraction_bg(record: dict, state: dict, session_id: str | None,
             target["profile"] = extraction_result
             target["updated_at"] = datetime.now().isoformat()
             target.pop("extract_error", None)
+            # Re-render the preview PDF now that we have a structured
+            # profile — the post-extraction render produces a much nicer
+            # layout (sectioned, bulleted, with skills) than the raw-text
+            # block we generated at upload time.
+            try:
+                target["preview_pdf_path"] = _render_preview_pdf(target)
+            except Exception as exc:
+                print(f"[preview pdf] post-extraction re-render failed: "
+                      f"{type(exc).__name__}: {exc}", flush=True)
             # When the freshly-extracted resume is the primary, push every
             # scalar derived from it (profile, resume_text, latex_source,
             # filename, done flag) so the Profile page reflects the new
@@ -1033,11 +1499,15 @@ def _run_extraction_bg(record: dict, state: dict, session_id: str | None,
                     done = set(done or [])
                 done.add(1)
                 latest["done"] = done
-                # First resume: there are no hardcoded job_titles / location /
-                # education_filter on a fresh account anymore, so backfill them
-                # from the extracted profile. Only fields the user hasn't
-                # explicitly set get touched.
-                _apply_profile_search_prefs(latest, extraction_result)
+                # Fresh extraction on the primary resume — refresh ALL the
+                # Re-derive search prefs from the freshly-extracted profile.
+                # force_refresh=True because a fresh primary upload (or a
+                # Re-scan click) signals "this resume is now the truth" —
+                # leaving stale prefs from a prior primary in place produces
+                # job postings mis-aimed at the old persona.
+                _apply_profile_search_prefs(
+                    latest, extraction_result, force_refresh=True
+                )
         elif extraction_error is not None:
             target["extract_error"] = extraction_error
 
@@ -1055,7 +1525,8 @@ def _run_extraction_bg(record: dict, state: dict, session_id: str | None,
         # reference) see consistent values. Safe: we hold the lock.
         for k in ("resumes", "resume_text", "latex_source", "resume_filename",
                   "profile", "done", "extracting_ids",
-                  "job_titles", "location", "education_filter"):
+                  "job_titles", "location", "education_filter",
+                  "experience_levels"):
             if k in latest:
                 state[k] = latest[k]
 
@@ -1461,6 +1932,86 @@ def _require_auth_user(request: Request) -> dict:
 _PREVIEWABLE_RESUME_SUFFIXES = {".pdf", ".docx", ".txt", ".md", ".tex"}
 
 
+def _primary_format_profile() -> dict | None:
+    """Cached layout fingerprint of the primary resume (or None if absent).
+    Used by every tailoring path so generated PDFs mirror the user's source
+    layout — column count, font sizes, accent."""
+    pr = _get_primary_resume()
+    if not pr:
+        return None
+    fp = pr.get("format_profile")
+    return fp if isinstance(fp, dict) and fp else None
+
+
+def _detect_pdf_format_profile(suffix: str, content: bytes) -> dict:
+    """Best-effort PDF layout fingerprint.  Only runs for .pdf uploads;
+    other suffixes return ``{}`` (the renderer's defaults will apply)."""
+    if (suffix or "").lower() != ".pdf":
+        return {}
+    import tempfile
+    try:
+        from pipeline.pdf_format import detect_format_profile
+    except ImportError:
+        return {}
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+            tmp.write(content)
+            tmp_path = Path(tmp.name)
+        try:
+            return detect_format_profile(tmp_path) or {}
+        finally:
+            tmp_path.unlink(missing_ok=True)
+    except Exception as exc:
+        print(f"[pdf format] fingerprint failed: {type(exc).__name__}: {exc}",
+              file=sys.stderr)
+        return {}
+
+
+def _render_preview_pdf(record: dict) -> str | None:
+    """Render a polished PDF preview of the resume's plaintext + extracted
+    profile, persist it under ``uploads/{id}_preview.pdf``, and return the
+    OUTPUT_DIR-relative path.
+
+    This is the fix for "PDF preview shows basic .txt": users who upload
+    plain-text or .docx resumes never have a real PDF to embed.  Instead
+    of dumping monospace text into the preview pane, render the same
+    reportlab layout the tailored-resume path uses, but with no tailoring
+    applied — so the user always sees a properly-formatted document.
+
+    Real PDF uploads keep their original (the iframe still prefers
+    ``original_url`` when it's a PDF); this helper is the fallback for
+    every other suffix.
+
+    Returns ``None`` if reportlab is unavailable or rendering fails — in
+    which case the SPA gracefully degrades to the plaintext view.
+    """
+    try:
+        rid = record.get("id")
+        if not rid:
+            return None
+        dest_dir = _session_output_dir() / "uploads"
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / f"{rid}_preview.pdf"
+        # Use whatever profile we have. Before extraction completes the
+        # profile is empty — _render_resume_pdf_reportlab handles that by
+        # falling back to the raw resume text block.
+        profile = record.get("profile") or {}
+        text = record.get("text") or ""
+        if not text.strip() and not profile:
+            return None
+        ok = _render_resume_pdf_reportlab(
+            dest, profile, tailored={}, job={}, resume_text=text,
+            format_profile=record.get("format_profile") or None,
+        )
+        if not ok:
+            return None
+        return dest.resolve().relative_to(OUTPUT_DIR.resolve()).as_posix()
+    except Exception as exc:
+        print(f"[preview pdf] {record.get('id')!r} render failed: "
+              f"{type(exc).__name__}: {exc}", file=sys.stderr)
+        return None
+
+
 def _persist_uploaded_resume(record_id: str, suffix: str, content: bytes) -> str | None:
     """Save the uploaded bytes under output/sessions/{sid}/uploads/{id}{ext}
     and return the path relative to OUTPUT_DIR (posix style).
@@ -1511,6 +2062,16 @@ async def upload_resume(request: Request, file: UploadFile = File(...)):
     # binds to the record. Stored under the bound session's output dir so
     # /output/sessions/{sid}/... auth-gating already covers access control.
     record["original_path"] = _persist_uploaded_resume(record["id"], suffix, content)
+    # Capture the source PDF's visual fingerprint so any subsequent render
+    # (preview + every tailored output) can mirror the user's actual
+    # layout — column count, font sizes, accent color. Only meaningful
+    # for .pdf uploads; everything else returns {} and the renderer keeps
+    # its built-in defaults.
+    record["format_profile"] = _detect_pdf_format_profile(suffix, content)
+    # Render a polished preview PDF immediately. For .pdf uploads the iframe
+    # prefers `original_url` so this is just an extra fallback; for .txt /
+    # .docx / .tex / .md it's THE preview the user sees on the Resume page.
+    record["preview_pdf_path"] = _render_preview_pdf(record)
     resumes = _S.setdefault("resumes", [])
 
     # First upload → becomes primary; subsequent uploads are non-primary
@@ -1529,6 +2090,7 @@ def load_demo_resume(request: Request):
     _require_auth_user(request)
     text = _build_demo_resume()
     record = _new_resume_record("demo_resume.txt", text, None)
+    record["preview_pdf_path"] = _render_preview_pdf(record)
     resumes = _S.setdefault("resumes", [])
     is_first = len(resumes) == 0
     record["primary"] = is_first
@@ -1830,6 +2392,7 @@ def get_state(request: Request):
 @app.post("/api/reset")
 def reset_state(request: Request):
     _require_auth_user(request)
+    sid = _S.session_id()
     # Preserve auth + provider/UI prefs so the user stays logged in and configured
     preserved = {
         k: _S.get(k) for k in (
@@ -1838,13 +2401,28 @@ def reset_state(request: Request):
         )
     }
 
-    state = _S.current()
-    fresh = _default_state()
-    state.clear()
-    state.update(fresh)
-    for k, v in preserved.items():
-        if v is not None:
-            state[k] = v
+    # Hold the per-session lock for the entire clear+persist so a concurrent
+    # extraction thread can't race in between (its end-of-run save reloads
+    # state from the DB while holding this same lock, sees the cleared
+    # resumes list, and bails — but only if our save lands first).
+    with _session_lock(sid):
+        state = _S.current()
+        fresh = _default_state()
+        state.clear()
+        state.update(fresh)
+        for k, v in preserved.items():
+            if v is not None:
+                state[k] = v
+        # Persist the cleared state inline rather than waiting for the
+        # post-response middleware save. The middleware save happens AFTER
+        # the response is returned, which leaves a window where a polling
+        # /api/state read can see the still-uncleared DB row.
+        if sid:
+            user = state.get("user") or {}
+            if (user.get("id") or user.get("email")) and _session_store is not None:
+                _session_store.save_state(sid, state)
+            else:
+                _memory_sessions[sid] = state
 
     # Wipe generated output files for this session (resumes, trackers, reports).
     # rmtree+mkdir is simpler than per-file unlink and tolerates Windows file
@@ -1988,6 +2566,10 @@ def auth_google(request: Request):
         redirect_uri = str(request.url_for("auth_google_callback"))
         url, state = get_google_auth_url(redirect_uri)
         _S["google_oauth_state"] = state
+        # Persist explicitly: GET requests skip the post-response middleware
+        # save (see session_state_middleware) so the OAuth state would
+        # otherwise vanish before the callback can verify it.
+        _save_bound_state(_S.current(), _S.session_id())
         print(
             f"[google oauth init] session={_S.session_id()} "
             f"state_set={state[:8] if state else '<empty>'}… redirect_uri={redirect_uri}",
@@ -2234,7 +2816,10 @@ def resume_delete(resume_id: str, request: Request):
         remaining = _S["resumes"]
         if remaining:
             remaining[0]["primary"] = True
-            _sync_primary_scalars(remaining[0])
+            # Primary changed (deletion fallback) — refresh search prefs from
+            # the new primary's profile so location / experience / education
+            # chips track the new resume rather than the deleted one.
+            _sync_primary_scalars(remaining[0], force_prefs_refresh=True)
             _S["done"].discard(1)
         else:
             for k in ("resume_text", "latex_source", "resume_filename", "profile"):
@@ -2253,8 +2838,10 @@ def resume_set_primary(resume_id: str, request: Request):
     # Sync scalar fields and global profile from the new primary. If the new
     # primary already has an extracted profile, _sync_primary_scalars copies
     # name/email/education/projects/etc. into _S["profile"] so the Profile
-    # page reflects the new resume immediately.
-    _sync_primary_scalars(target)
+    # page reflects the new resume immediately. force_prefs_refresh=True
+    # because the user explicitly switched primary — that's an unambiguous
+    # signal to refresh the job-search-pref chips from the new resume.
+    _sync_primary_scalars(target, force_prefs_refresh=True)
 
     # Phase results downstream of 1 (jobs, scored, applications, tracker)
     # are tied to the old profile, so clear them. _sync_primary_scalars
@@ -2294,6 +2881,41 @@ async def resume_rename(resume_id: str, req: Request):
     if r.get("primary"):
         _S["resume_filename"] = new_name
     return {"ok": True}
+
+
+@app.post("/api/resume/{resume_id}/render-preview")
+async def resume_render_preview(resume_id: str, request: Request):
+    """Generate (or regenerate) a polished preview PDF for *resume_id*.
+
+    Used as a back-fill for legacy records that were uploaded before the
+    auto-render landed.  The SPA calls this when it notices a resume has
+    text content but no ``preview_pdf_url``.  Idempotent: re-rendering
+    overwrites the existing preview file.
+    """
+    _require_auth_user(request)
+    record = _get_resume_by_id(resume_id)
+    if not record:
+        raise HTTPException(404, "Resume not found")
+
+    # Back-fill the format fingerprint for legacy records that were
+    # uploaded before format detection landed: if we still have the
+    # original PDF on disk and no cached fingerprint, run detection now.
+    if not record.get("format_profile") and (record.get("original_path") or "").endswith(".pdf"):
+        try:
+            pdf_path = (OUTPUT_DIR / record["original_path"]).resolve()
+            if pdf_path.exists():
+                from pipeline.pdf_format import detect_format_profile
+                record["format_profile"] = detect_format_profile(pdf_path) or {}
+        except Exception as exc:
+            print(f"[pdf format] backfill failed for {resume_id!r}: "
+                  f"{type(exc).__name__}: {exc}", file=sys.stderr)
+
+    rel = _render_preview_pdf(record)
+    if not rel:
+        raise HTTPException(500, "Preview render failed — reportlab may be missing.")
+    record["preview_pdf_path"] = rel
+    record["updated_at"] = datetime.now().isoformat()
+    return {"ok": True, "preview_pdf_url": _output_url(OUTPUT_DIR / rel)}
 
 
 @app.post("/api/resume/tailor")
@@ -2348,6 +2970,7 @@ async def resume_tailor(request: Request):
             _S.get("latex_source"),
             resume_text=_S.get("resume_text", ""),
             output_dir=_session_output_dir(),
+            format_profile=_primary_format_profile(),
         )
     except Exception as exc:
         raise HTTPException(500, f"Tailoring failed: {type(exc).__name__}: {exc}") from exc
@@ -3164,6 +3787,106 @@ def _list_tracked_sessions() -> list[dict]:
         )
     return sessions
 
+@app.get("/api/dev/logs")
+def dev_logs(request: Request, since: int = 0, limit: int = 500):
+    """Recent server stdout / stderr / logging records.
+
+    Backs the Dev Ops "Server log" terminal panel.  Returns at most
+    *limit* most-recent records whose ``seq`` is greater than *since*
+    so the SPA can ask "what's new" without re-fetching the entire
+    ring on every poll.
+    """
+    if not _is_dev_request(request):
+        raise HTTPException(403, "Developer access denied")
+    try:
+        limit = max(1, min(int(limit) or 500, _LOG_RING_MAX))
+    except (TypeError, ValueError):
+        limit = 500
+    try:
+        since = int(since) if since else 0
+    except (TypeError, ValueError):
+        since = 0
+    with _LOG_RING_LOCK:
+        snapshot = list(_LOG_RING)
+        latest_seq = _LOG_SEQ
+    fresh = [r for r in snapshot if r.get("seq", 0) > since]
+    if len(fresh) > limit:
+        fresh = fresh[-limit:]
+    return {
+        "logs":       fresh,
+        "latest_seq": latest_seq,
+        "max_buffer": _LOG_RING_MAX,
+        "total":      len(snapshot),
+    }
+
+
+@app.get("/api/dev/logs/stream")
+def dev_logs_stream(request: Request, since: int = 0):
+    """SSE feed of new log records.  One ``log`` event per record plus a
+    ``ping`` every 15 s to keep the connection alive."""
+    if not _is_dev_request(request):
+        raise HTTPException(403, "Developer access denied")
+    try:
+        since = int(since) if since else 0
+    except (TypeError, ValueError):
+        since = 0
+    q: "queue.Queue[dict]" = queue.Queue(maxsize=2000)
+    def _gen():
+        with _LOG_RING_LOCK:
+            backlog = [r for r in list(_LOG_RING) if r.get("seq", 0) > since]
+            _LOG_SUBSCRIBERS.append(q)
+        try:
+            for r in backlog:
+                yield "event: log\ndata: " + json.dumps(r) + "\n\n"
+            last_ping = time.time()
+            while True:
+                try:
+                    rec = q.get(timeout=1.5)
+                    yield "event: log\ndata: " + json.dumps(rec) + "\n\n"
+                except queue.Empty:
+                    pass
+                if time.time() - last_ping > 15:
+                    last_ping = time.time()
+                    yield "event: ping\ndata: {}\n\n"
+        finally:
+            try:
+                _LOG_SUBSCRIBERS.remove(q)
+            except ValueError:
+                pass
+    return StreamingResponse(
+        _gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.get("/api/dev/metrics")
+def dev_metrics(request: Request, with_processes: int = 0):
+    """Fast-path system metrics for the Dev Ops page.
+
+    Separate from /api/dev/overview because that handler iterates every
+    session row and is too heavy to call once a second.  This endpoint
+    only reads cached psutil samples + uptime, so it can drive a live
+    htop-style CPU view at a 1-2s cadence without churn.
+
+    `with_processes=1` opts into the heavier per-process snapshot
+    (top-by-CPU + top-by-memory). The Server tab uses it; the Overview
+    tab leaves it off so the standard 2-second tick stays cheap.
+    """
+    if not _is_dev_request(request):
+        raise HTTPException(403, "Developer access denied")
+    payload = {
+        "server_started_at": _SERVER_STARTED_AT.isoformat(timespec="seconds"),
+        "server_uptime_s":   round(_server_uptime_seconds(), 1),
+        "cpu":               _cpu_snapshot(),
+        "memory":            _memory_snapshot(),
+        "cpu_temp":          _cpu_temperature(),
+    }
+    if with_processes:
+        payload["processes"] = _top_processes()
+    return payload
+
+
 @app.get("/api/dev/overview")
 def dev_overview(request: Request):
     if not _is_dev_request(request):
@@ -3195,6 +3918,16 @@ def dev_overview(request: Request):
             ) if DB_PATH.exists() else 0,
             "disk_free_gb": round(disk.free / 1e9, 1),
             "tweaks": _S.get("dev_tweaks") or {},
+            # Server-process uptime — wall-clock seconds since uvicorn
+            # boot.  Surfaced as both seconds (for the SPA's live tick)
+            # and an ISO timestamp (for absolute reference).
+            "server_started_at": _SERVER_STARTED_AT.isoformat(timespec="seconds"),
+            "server_uptime_s":   round(_server_uptime_seconds(), 1),
+            # Live system metrics — htop-style per-core breakdown plus a
+            # quick memory headline.  Cheap; cached server-side for 800ms.
+            "cpu":      _cpu_snapshot(),
+            "memory":   _memory_snapshot(),
+            "cpu_temp": _cpu_temperature(),
         },
         "sessions": sessions,
         "events": [],
@@ -3882,6 +4615,7 @@ def run_phase4():
                     _S.get("latex_source"),
                     resume_text=_S.get("resume_text", ""),
                     output_dir=_session_output_dir(),
+                    format_profile=_primary_format_profile(),
                 )
                 resume_file = resume_files.get("pdf") or resume_files.get("tex")
                 resume_path = _session_output_dir() / resume_file

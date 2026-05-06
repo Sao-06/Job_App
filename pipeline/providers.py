@@ -330,7 +330,7 @@ class AnthropicProvider(BaseProvider):
 
     def extract_profile(self, resume_text: str, preferred_titles: list = None,
                         heuristic_hint: dict = None) -> dict:
-        from .profile_audit import DOMAIN_TITLE_FAMILIES, FORBIDDEN_GENERIC_TITLES
+        from .profile_audit import DOMAIN_TITLE_FAMILIES
 
         tool = {
             "name": "save_profile",
@@ -347,20 +347,24 @@ class AnthropicProvider(BaseProvider):
                     "target_titles": {
                         "type": "array",
                         "description": (
-                            "5–8 domain-specific job titles drawn ONLY from the "
-                            "hardware / semiconductor / photonics / embedded title "
-                            "families listed in the prompt. Every title MUST include "
-                            "an 'evidence' line quoted from the resume's Education or "
-                            "Research Experience section justifying it."
+                            "5–8 job titles that fit the candidate's actual "
+                            "experience based on what's IN the resume. The "
+                            "candidate may be in software, hardware, data, "
+                            "design, marketing, sales, healthcare, finance, "
+                            "education, operations, etc. Pick titles drawn "
+                            "from THEIR background — never default to a "
+                            "domain you assume. Every title MUST include an "
+                            "`evidence` line quoted from the resume that "
+                            "justifies it."
                         ),
                         "items": {
                             "type": "object",
                             "properties": {
                                 "title":    {"type": "string"},
                                 "family":   {"type": "string",
-                                             "description": "Which title family from the whitelist"},
+                                             "description": "Coarse family label (e.g. 'Software Engineering', 'Marketing', 'Clinical')."},
                                 "evidence": {"type": "string",
-                                             "description": "Exact line from Education or Research Experience that justifies this title"},
+                                             "description": "Exact line from the resume that justifies this title."},
                             },
                             "required": ["title", "family", "evidence"],
                         },
@@ -368,13 +372,17 @@ class AnthropicProvider(BaseProvider):
                     "top_hard_skills": {
                         "type": "array",
                         "description": (
-                            "TECHNICAL NOUNS ONLY: programming languages, software "
-                            "tools, simulation environments, lab equipment, "
-                            "fabrication processes, measurement techniques, hardware "
-                            "platforms, named methodologies. NEVER include "
-                            "interpersonal traits. Scan EVERY section — coursework, "
-                            "research bullets, projects, skills list — and extract "
-                            "every technical noun you see. Completeness over brevity."
+                            "Concrete, verifiable competencies the candidate "
+                            "actually exercises — programming languages, "
+                            "software / SaaS tools, frameworks, lab / fab / "
+                            "clinical equipment, measurement techniques, "
+                            "domain-specific methodologies. NEVER include "
+                            "interpersonal traits. Scan EVERY section — "
+                            "coursework, projects, work bullets, skills list — "
+                            "and extract every concrete competency you see. "
+                            "Completeness over brevity. Categories cover "
+                            "every professional domain, not just hardware: "
+                            "use whichever category best fits each skill."
                         ),
                         "items": {
                             "type": "object",
@@ -385,12 +393,20 @@ class AnthropicProvider(BaseProvider):
                                     "enum": [
                                         "programming_language",
                                         "software_tool",
+                                        "framework_library",
+                                        "data_platform",
                                         "simulation_environment",
                                         "fab_process",
                                         "lab_instrument",
                                         "measurement_technique",
                                         "hardware_platform",
+                                        "design_tool",
+                                        "marketing_platform",
+                                        "sales_crm",
+                                        "finance_accounting",
+                                        "healthcare_clinical",
                                         "methodology",
+                                        "other",
                                     ],
                                 },
                                 "evidence": {
@@ -466,7 +482,8 @@ class AnthropicProvider(BaseProvider):
         if preferred_titles:
             pref_hint = (
                 f"\nThe candidate's stated preferences are: {', '.join(preferred_titles)}. "
-                "Use these as a TIEBREAKER only — they do NOT override the domain whitelist."
+                "Use these as a tiebreaker only when the resume itself doesn't "
+                "obviously favor one direction."
             )
 
         heur_block = _build_heuristic_block(heuristic_hint)
@@ -478,28 +495,33 @@ class AnthropicProvider(BaseProvider):
             "Identify and label Education, Research Experience, Work Experience, "
             "Projects, Skills, and Publications. Separate research roles (lab / PI / "
             "research group) from industry roles.\n\n"
-            "PASS 2 — Hard-skill extraction (STRICT taxonomy):\n"
-            "Hard skills = TECHNICAL NOUNS ONLY: tools, software, programming "
-            "languages, lab equipment, fabrication processes, measurement techniques, "
-            "simulation environments, named methodologies.\n"
-            "Soft skills = BEHAVIORAL / INTERPERSONAL traits ONLY (teamwork, "
-            "communication, project management). NEVER place lab techniques, "
-            "instruments, or software packages under soft skills.\n"
-            "Scan the ENTIRE resume — every bullet under Research Experience, "
-            "Projects, Coursework, and the Skills list. List EVERY technical noun. "
-            "Completeness > brevity. For each hard skill, include the exact "
-            "substring from the resume as `evidence`.\n\n"
-            "PASS 3 — Target titles:\n"
-            "Suggest 5–8 titles DRAWN ONLY from this whitelist of "
-            "hardware / semiconductor / photonics / embedded role families:\n"
-            f"  {chr(10).join('  - ' + f for f in DOMAIN_TITLE_FAMILIES)}\n\n"
-            "FORBIDDEN titles (do NOT suggest unless the candidate's primary Education "
-            "is Computer Science AND there is ZERO lab/fab/device research experience):\n"
-            f"  {', '.join(sorted(FORBIDDEN_GENERIC_TITLES))}\n\n"
-            "Every suggested title MUST be justified by a specific line from the "
-            "Education or Research Experience section — put that line in the "
-            "`evidence` field. Weight Education and Research Experience much more "
-            "heavily than Work Experience when choosing titles."
+            "PASS 2 — Hard-skill extraction (cross-domain — DO NOT assume EE/CS):\n"
+            "Hard skills = concrete, verifiable competencies the candidate "
+            "actually exercises: programming languages, software / SaaS tools, "
+            "frameworks, lab / fab / clinical equipment, measurement techniques, "
+            "domain-specific methodologies. The candidate may be in software, "
+            "hardware, data, design, marketing, sales, healthcare, finance, "
+            "education, operations, etc. — extract whatever's actually there.\n"
+            "Soft skills = behavioral / interpersonal traits ONLY (teamwork, "
+            "communication, project management). NEVER place tools, techniques, "
+            "or platforms under soft skills.\n"
+            "Scan the ENTIRE resume. For each hard skill, include the exact "
+            "substring from the resume as `evidence`. Completeness > brevity.\n\n"
+            "PASS 3 — Target titles (GROUNDED IN RESUME, NOT IN A WHITELIST):\n"
+            "Infer 5–8 titles that match the candidate's actual experience "
+            "based on what's IN the resume — their most recent role, their "
+            "education program, their dominant skill stack, their projects.\n"
+            "Do NOT default to a domain you assume. A candidate with "
+            "marketing experience gets marketing titles. A nurse gets clinical "
+            "titles. A data scientist gets data titles. A hardware engineer "
+            "gets hardware titles. Match the resume.\n"
+            "For the `family` field on each title, you MAY pick from this "
+            "menu of common families (or supply your own if none fits):\n"
+            f"  {chr(10).join('  - ' + f for f in DOMAIN_TITLE_FAMILIES)}\n"
+            "Every suggested title MUST be justified by a specific line from "
+            "the resume — put that line in the `evidence` field. The line "
+            "should come from Work Experience, Research Experience, "
+            "Education, or Projects, whichever is most representative."
             f"{pref_hint}\n\n"
             f"Resume:\n{resume_text}"
         )
@@ -663,12 +685,13 @@ def _extract_name_from_text(text: str) -> str:
 
     Tier 1 — spaCy NER (highest accuracy, optional):
         Uses the 'en_core_web_sm' model to find PERSON entities in the first
-        200 characters. Skipped gracefully if spaCy is not installed.
+        ~300 characters. Skipped gracefully if spaCy is not installed.
 
     Tier 2 — First-line heuristic:
         The very first non-empty, non-contact line of a well-structured resume
         is almost always the candidate's name.  Applies strict sanity guards
-        (no @, no digits, no URLs, no section-header words, 2–4 tokens).
+        (no @, no digits, no URLs, no section-header / role-title words, 2–4
+        tokens).
 
     Tier 3 — Scored window scan:
         Scans the first 30 lines with a confidence model:
@@ -677,10 +700,10 @@ def _extract_name_from_text(text: str) -> str:
         - must match a name-safe character pattern
         Best-scoring candidate wins.
 
-    Falls back to OWNER_NAME placeholder if all three tiers fail.
+    Falls back to "" if all three tiers fail (do NOT inject the placeholder
+    OWNER_NAME — the upstream merger would treat the placeholder as truth,
+    masking real extraction failures).
     """
-    from .config import OWNER_NAME as _placeholder
-
     _SECTION_HEADERS = {
         "education", "experience", "skills", "projects", "objective",
         "summary", "profile", "about", "interests", "certifications",
@@ -688,12 +711,24 @@ def _extract_name_from_text(text: str) -> str:
         "technical skills", "core competencies", "work experience",
         "professional experience", "research experience",
         "volunteer", "activities", "languages", "coursework",
+        "achievements", "honors", "leadership",
     }
+    # Words that almost always mark a job title or institution line — never
+    # a person name. If a candidate line contains any of these, reject.
+    _ROLE_OR_INSTITUTION_RE = re.compile(
+        r"\b(?:engineer|developer|analyst|manager|director|scientist|"
+        r"researcher|architect|consultant|designer|specialist|associate|"
+        r"officer|coordinator|technician|fellow|assistant|administrator|"
+        r"intern|internship|nurse|paralegal|accountant|teacher|tutor|"
+        r"professor|trader|recruiter|operator|representative|"
+        r"university|college|institute|school|academy|department|"
+        r"corporation|company|inc|llc|ltd|gmbh)\b",
+        re.IGNORECASE,
+    )
     _BAD_RE = re.compile(
         r'[@/\\]|https?://|www\.|\.com|\.edu|\.org|\.io|\.net|'
         r'\d{3}[\s.\-]\d{3,4}|'          # phone fragments
-        r'\b(?:university|college|institute|school|department|'
-        r'gpa|grade|phone|tel|fax|email)\b',
+        r'\b(?:gpa|grade|phone|tel|fax|email|cv|resume|curriculum)\b',
         re.I,
     )
     # Name-safe: each word must match one of:
@@ -723,9 +758,53 @@ def _extract_name_from_text(text: str) -> str:
 
     _NAME_RE = _name_re_match  # callable, same interface as re.match
 
+    # Two-word title-case "city-shaped" lines that match _NAME_RE but are
+    # never personal names. Cities fronting a sidebar contact block (Colin's
+    # CV puts "Hong Kong" four lines under CONTACT) are the canonical
+    # collision; the section-aware rejection below handles the general case,
+    # this list is belt-and-suspenders for resumes whose section markers got
+    # stripped during PDF text extraction.
+    _CITY_BLACKLIST = {
+        s.lower() for s in (
+            "Hong Kong", "New York", "Los Angeles", "San Francisco",
+            "San Diego", "San Jose", "Las Vegas", "New Delhi", "New Orleans",
+            "Mexico City", "Tel Aviv", "Cape Town", "Buenos Aires",
+            "Sao Paulo", "Rio de Janeiro", "Hong Kong SAR", "Kuala Lumpur",
+            "Saudi Arabia", "South Korea", "South Africa", "United Kingdom",
+            "United States", "United Arab Emirates", "New Zealand",
+            "Czech Republic", "Costa Rica", "Puerto Rico", "El Salvador",
+        )
+    }
+
+    def _line_is_name_safe(line: str) -> bool:
+        """Hard rejects regardless of which tier is checking."""
+        if _BAD_RE.search(line):
+            return False
+        if _ROLE_OR_INSTITUTION_RE.search(line):
+            return False
+        if line.lower().rstrip(":.,") in _SECTION_HEADERS:
+            return False
+        if line.strip().rstrip(",.;:|").lower() in _CITY_BLACKLIST:
+            return False
+        return _NAME_RE(line)
+
     lines = [l.strip() for l in text.splitlines() if l.strip()]
     if not lines:
-        return _placeholder
+        return ""
+
+    # Build a per-line section label. The "header" zone is everything BEFORE
+    # the first recognised section header. Lines after that point sit inside
+    # CONTACT / SKILLS / EDUCATION / etc. and are NOT eligible to be the name —
+    # this is what kills "Hong Kong" winning over the actual name in a sidebar
+    # resume layout. If extraction is uncertain we'd rather return "" and let
+    # the LLM merge fill the field than commit to a wrong guess.
+    section_at: list[str] = []
+    current_section = "header"
+    for ln in lines:
+        norm = ln.lower().rstrip(":.,;-").strip()
+        if norm in _SECTION_HEADERS:
+            current_section = norm
+        section_at.append(current_section)
 
     # ── Tier 1: spaCy NER ────────────────────────────────────────────────────
     try:
@@ -740,38 +819,33 @@ def _extract_name_from_text(text: str) -> str:
             doc = nlp(snippet)
             for ent in doc.ents:
                 if ent.label_ == "PERSON" and len(ent.text.split()) >= 2:
-                    # Confirm the token passes basic sanity (no @, no digits).
                     candidate = ent.text.strip()
-                    if not _BAD_RE.search(candidate) and _NAME_RE(candidate):
+                    if _line_is_name_safe(candidate):
                         return candidate
     except ImportError:
         pass  # spaCy optional — move to next tier
 
     # ── Tier 2: first-line heuristic ─────────────────────────────────────────
     # The first non-empty line of a resume is the name ~80% of the time.
-    first = lines[0]
-    if (
-        not _BAD_RE.search(first)
-        and first.lower().rstrip(":.") not in _SECTION_HEADERS
-        and _NAME_RE(first)
-    ):
-        return first
+    if _line_is_name_safe(lines[0]):
+        return lines[0]
 
     # ── Tier 3: scored window scan ────────────────────────────────────────────
+    # Widened from 30 to 60 lines so sidebar resumes (where the name is drawn
+    # in PDF order *after* the left-column CONTACT/EDUCATION blocks — like
+    # Colin Tse's CV at line 41) still have a chance. The section-aware
+    # rejection below keeps false-positives like "Hong Kong" or "Project
+    # Management" from winning when they sit inside CONTACT/SKILLS blocks.
     candidates: list[tuple[int, str]] = []
 
-    for i, line in enumerate(lines[:30]):
+    for i, line in enumerate(lines[:60]):
         if len(line) > 55:          # long lines are addresses / bullets
             continue
-        if _BAD_RE.search(line):
+        if not _line_is_name_safe(line):
             continue
-        low = line.lower().rstrip(":,.")
-        if low in _SECTION_HEADERS:
-            continue
-        words = line.split()
-        if not (2 <= len(words) <= 4):
-            continue
-        if not _NAME_RE(line):
+        # Only the "header" zone (before any section marker) is eligible.
+        # Names inside CONTACT/SKILLS/etc. are virtually always false hits.
+        if i < len(section_at) and section_at[i] != "header":
             continue
 
         score = max(0, 15 - i)                              # earlier → higher
@@ -779,7 +853,7 @@ def _extract_name_from_text(text: str) -> str:
             score += 6                                       # Title Case bonus
         elif line == line.upper():
             score += 4                                       # ALL CAPS bonus
-        if len(words) == 3:
+        if len(line.split()) == 3:
             score += 2                                       # first middle last
         candidates.append((score, line))
 
@@ -787,18 +861,24 @@ def _extract_name_from_text(text: str) -> str:
         candidates.sort(key=lambda x: -x[0])
         return candidates[0][1]
 
-    return _placeholder
+    return ""
 
 
 def _extract_location_from_text(text: str) -> str:
-    """Best-effort location extraction from raw resume text.
+    """Best-effort residence-location extraction from the resume header.
 
-    Detects locations in order of confidence:
-      1. Inline contact separator — "City, ST  |  email  |  phone"
-      2. US "City, ST" / "City, State" pattern (2- and 3-word cities).
-      3. International "City, Country" pattern.
-      4. Standalone US state name in the first 20 lines.
-      5. Empty string — never injects a hardcoded location.
+    Strategy:
+      1. Restrict the search to the first 12 lines (header block) — anything
+         later is almost certainly an Education/Experience location, not the
+         candidate's residence.
+      2. Skip any line that is part of an Education entry: lines that contain
+         "university", "college", "institute", or a degree token.
+      3. Try the inline contact-bar pattern first (City, ST | email | phone).
+      4. Fall back to a "City, ST"/"City, State" / "City, Country" match
+         in the same restricted header, again skipping institution lines.
+      5. Last resort: a standalone state name on a contact-style line.
+      6. Return empty string when nothing safely matches — never inject
+         a hardcoded location.
     """
     _US_STATES = {
         "Alabama","Alaska","Arizona","Arkansas","California","Colorado",
@@ -815,38 +895,126 @@ def _extract_location_from_text(text: str) -> str:
     _US_STATE_RE = (
         r'(?:' + '|'.join(re.escape(s) for s in _US_STATES) + r'|[A-Z]{2})'
     )
-    # Pattern 1: inline separator bar — grab first segment that looks like a location.
-    # e.g. "Austin, TX  |  john@email.com  |  (512) 555-1234"
     bar_line_re = re.compile(
         r'\b([A-Z][a-z]+(?:[\s-][A-Z][a-z]+){0,2}),\s*' + _US_STATE_RE + r'\b'
     )
-    # Pattern 2: International — "City, Country" where country is title-case.
+    # International: "City, Country" — explicit country list keeps us from
+    # matching arbitrary "Word, Word" pairs (which previously matched things
+    # like "Stanford, CA" and "Engineering, Inc").
+    _COUNTRIES = (
+        "Canada", "Mexico", "United Kingdom", "UK", "Ireland", "France",
+        "Germany", "Spain", "Italy", "Portugal", "Netherlands", "Belgium",
+        "Switzerland", "Austria", "Denmark", "Norway", "Sweden", "Finland",
+        "Iceland", "Poland", "Czech Republic", "Hungary", "Romania", "Greece",
+        "Turkey", "Israel", "United Arab Emirates", "UAE", "Saudi Arabia",
+        "India", "Pakistan", "Bangladesh", "Nepal", "Sri Lanka",
+        "China", "Japan", "South Korea", "Singapore", "Malaysia", "Thailand",
+        "Vietnam", "Philippines", "Indonesia", "Australia", "New Zealand",
+        "Brazil", "Argentina", "Chile", "Colombia", "Peru", "Mexico City",
+        "South Africa", "Nigeria", "Kenya", "Egypt", "Morocco",
+    )
     intl_re = re.compile(
-        r'\b([A-Z][a-z]+(?:[\s-][A-Z][a-z]+){0,2}),\s*'
-        r'([A-Z][a-z]+(?:\s[A-Z][a-z]+)?)\b'
+        r'\b([A-Z][a-z]+(?:[\s-][A-Z][a-z]+){0,2}),\s*('
+        + r'|'.join(re.escape(c) for c in _COUNTRIES)
+        + r')\b'
+    )
+    institution_re = re.compile(
+        r"\b(?:university|college|institute|institut|school|academy|"
+        r"polytechnic|conservatory|seminary)\b",
+        re.IGNORECASE,
+    )
+    degree_re = re.compile(
+        r"\b(?:b\.?[as]\.?|bsc|m\.?[as]\.?|msc|m\.?eng|ph\.?d|doctorate|"
+        r"bachelor|master|associate|diploma)\b",
+        re.IGNORECASE,
     )
 
-    header = "\n".join(text.splitlines()[:25])   # location always near the top
+    def _line_is_institution(line: str) -> bool:
+        # Education / school lines mention a city only as the school's city,
+        # not the candidate's residence — skip them.
+        return bool(institution_re.search(line) or degree_re.search(line))
 
-    m = bar_line_re.search(header)
-    if m:
-        return m.group(0)
+    # Standalone metropolises that act as a complete location on their own
+    # line — they don't need a "City, Country" comma. Sidebar-style PDFs
+    # routinely list these alone (e.g. Colin's CV: "Hong Kong" sits one line
+    # under his email). To avoid matching mid-sentence prose ("Worked in
+    # Singapore"), Pass 4 below requires the standalone line to live within
+    # a contact-block (email/phone/| within a few lines).
+    _STANDALONE_CITIES = {
+        "Hong Kong", "Singapore", "Macau", "Macao", "Dubai", "Abu Dhabi",
+        "Doha", "Kuwait City", "Tel Aviv", "Tokyo", "Osaka", "Kyoto",
+        "Seoul", "Busan", "Taipei", "Shanghai", "Beijing", "Shenzhen",
+        "Bangkok", "Manila", "Jakarta", "Hanoi", "Ho Chi Minh City",
+        "Mumbai", "Bangalore", "Bengaluru", "Delhi", "New Delhi",
+        "Hyderabad", "Chennai", "Pune", "Kolkata",
+        "Berlin", "Munich", "Hamburg", "Frankfurt", "Cologne",
+        "Paris", "Lyon", "Marseille", "Madrid", "Barcelona", "Valencia",
+        "Rome", "Milan", "Naples", "Florence", "Vienna", "Zurich",
+        "Geneva", "Brussels", "Amsterdam", "Rotterdam",
+        "Prague", "Warsaw", "Krakow", "Budapest", "Bucharest",
+        "Stockholm", "Oslo", "Copenhagen", "Helsinki", "Reykjavik",
+        "Moscow", "Saint Petersburg", "Istanbul", "Athens", "Dublin",
+        "Edinburgh", "Glasgow", "Manchester", "Birmingham", "London",
+        "Sydney", "Melbourne", "Brisbane", "Perth", "Auckland",
+        "Toronto", "Montreal", "Vancouver", "Ottawa", "Calgary",
+        "Mexico City", "Guadalajara", "Monterrey",
+        "Buenos Aires", "São Paulo", "Sao Paulo", "Rio de Janeiro",
+        "Brasília", "Brasilia", "Bogotá", "Bogota", "Lima", "Santiago",
+        "Cairo", "Lagos", "Nairobi", "Johannesburg", "Cape Town",
+    }
+    standalone_re = re.compile(
+        r'^\s*(' + '|'.join(re.escape(c) for c in sorted(_STANDALONE_CITIES,
+                                                          key=len, reverse=True)) + r')\s*$'
+    )
 
-    # Pattern 3: international match (lower confidence — only use if no US match).
-    intl_m = intl_re.search(header)
+    contact_signal = re.compile(r"[@|]|\d{3}[\s.\-]\d{3,4}", re.IGNORECASE)
 
-    # Pattern 4: standalone state name scan.
-    for line in text.splitlines()[:20]:
+    # Sidebar layouts (Colin's CV) push the contact block well past the first
+    # 12 lines — extracted text reads main column first, then sidebar. 30
+    # lines covers the common cases without venturing into experience prose.
+    raw_header_lines = [l for l in text.splitlines()[:30] if l.strip()]
+    header_lines = raw_header_lines
+
+    # Pass 1: contact-bar — strongest signal because it sits next to email.
+    for line in header_lines:
+        if _line_is_institution(line):
+            continue
+        m = bar_line_re.search(line)
+        if m:
+            return m.group(0)
+
+    # Pass 2: international city/country.
+    for line in header_lines:
+        if _line_is_institution(line):
+            continue
+        m = intl_re.search(line)
+        if m:
+            return m.group(0)
+
+    # Pass 3: standalone state name on a contact-style line. We require the
+    # line to look like contact info (has @ / phone / pipe) so we don't pull
+    # "Worked at the California Institute of Technology" → "California".
+    for line in header_lines:
+        if _line_is_institution(line):
+            continue
+        if not contact_signal.search(line):
+            continue
         for state in _US_STATES:
             if re.search(rf'\b{re.escape(state)}\b', line, re.I):
-                # Prefer "City, State" over bare state.
-                m2 = bar_line_re.search(line)
-                if m2:
-                    return m2.group(0)
                 return state
 
-    if intl_m:
-        return intl_m.group(0)
+    # Pass 4: standalone metropolis on a line whose ±3-line neighborhood
+    # contains a contact signal (email / phone / pipe). The neighborhood
+    # gate is what stops "Worked in Tokyo on …" from registering.
+    for i, line in enumerate(header_lines):
+        if _line_is_institution(line):
+            continue
+        m = standalone_re.match(line)
+        if not m:
+            continue
+        nearby = header_lines[max(0, i - 3):i + 4]
+        if any(contact_signal.search(l) for l in nearby if l != line):
+            return m.group(1)
 
     return ""
 
@@ -1582,25 +1750,15 @@ class DemoProvider(BaseProvider):
         return _build_rubric_result(job, req_raw, industry_raw, loc_seniority_raw,
                                     matched=matched, missing=missing)
 
-    def tailor_resume(self, job: dict, profile: dict, resume_text: str) -> dict:  # noqa: ARG002
-        jd_keywords  = [r.lower() for r in job.get("requirements", [])]
-        skills       = profile.get("top_hard_skills", [])
-        skills_lower = {s.lower(): s for s in skills}
-
-        matching         = [skills_lower[k] for k in jd_keywords if k in skills_lower]
-        other            = [s for s in skills if s not in matching]
-        skills_reordered = matching + other
-
-        missing_kw = [
-            r.title() for r in jd_keywords
-            if not any(r in s.lower() or s.lower() in r for s in skills)
-        ]
-        return {
-            "skills_reordered":     skills_reordered,
-            "experience_bullets":   [],
-            "ats_keywords_missing": missing_kw[:5],
-            "section_order":        ["Skills", "Projects", "Experience", "Education"],
-        }
+    def tailor_resume(self, job: dict, profile: dict, resume_text: str) -> dict:
+        # Demo mode IS the heuristic — delegate to the shared module so the
+        # output matches what phase4_tailor_resume falls back to when the
+        # configured LLM glitches.  This means demo and "Ollama-with-bad-output"
+        # paths now produce structurally identical resumes (skills reordered,
+        # bullets reordered per role, missing JD keywords flagged but never
+        # silently appended to the user's skill list).
+        from .heuristic_tailor import heuristic_tailor_resume
+        return heuristic_tailor_resume(job, profile, resume_text)
 
     def generate_cover_letter(self, job: dict, profile: dict) -> str:
         name       = profile.get("name") or OWNER_NAME
@@ -1896,8 +2054,15 @@ class OllamaProvider(BaseProvider):
             "  • Hard skills = technical nouns only (languages, tools, equipment, methods).\n"
             "  • Soft skills = behavioral traits only (teamwork, communication).\n"
             "  • Never put lab techniques or software under soft skills.\n\n"
-            "TARGET TITLES:\n"
-            f"  Pick 5–8 from these families: {', '.join(DOMAIN_TITLE_FAMILIES)}\n"
+            "TARGET TITLES (ground in the resume, NOT a fixed whitelist):\n"
+            "  • Infer 5–8 titles that fit the candidate's actual experience.\n"
+            "  • Pick from THEIR background — software / hardware / data / "
+            "design / marketing / sales / healthcare / finance / education / "
+            "operations / legal — whatever's in the resume.\n"
+            "  • Use the recent work role + dominant skills + degree as cues.\n"
+            "  • Common families to pick from (use your own if none fits):\n"
+            f"      {', '.join(DOMAIN_TITLE_FAMILIES[:18])}\n"
+            f"      {', '.join(DOMAIN_TITLE_FAMILIES[18:])}\n"
             f"{pref_hint}"
             "\ncritical_analysis: 3-4 paragraph honest critique covering impact & "
             "quantified achievements, skill density, ATS/structural clarity, and "

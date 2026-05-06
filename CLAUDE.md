@@ -28,6 +28,8 @@ Job_App/
 │   ├── profile_audit.py        # Post-extraction validation of resume profiles.
 │   ├── providers.py            # BaseProvider, AnthropicProvider, OllamaProvider, DemoProvider.
 │   ├── resume.py               # PDF/DOCX extraction chain; tailored-resume save; demo resume builder.
+│   ├── heuristic_tailor.py     # Deterministic tailoring + structural validator (LLM-free safety net for low-end models).
+│   ├── pdf_format.py           # pdfplumber-based layout fingerprint (columns / font sizes / accent color).
 │   └── scrapers.py             # JobSpy, SimplifyJobs, Jobright, InternList, Himalayas, Remotive, Arbeitnow.
 │
 ├── frontend/
@@ -94,7 +96,7 @@ Job_App/
 ### Route inventory (high-level)
 - **Static**: `GET /` (landing), `GET /app` (SPA), `GET /frontend/{f}`, `GET /output/{path}` (sandboxed download).
 - **Auth**: `POST /api/auth/{login,signup,logout}`, `GET /api/auth/google`, `GET /api/auth/google/callback`.
-- **Resume**: `POST /api/resume/upload`, `POST /api/resume/demo`, `GET /api/resume/content`, `POST /api/resume/text`, `DELETE /api/resume/{id}`, `POST /api/resume/primary/{id}`, `POST /api/resume/rename/{id}`, `POST /api/resume/tailor` (per-job on-demand tailoring; same shape as one phase-4 item).
+- **Resume**: `POST /api/resume/upload`, `POST /api/resume/demo`, `GET /api/resume/content`, `POST /api/resume/text`, `DELETE /api/resume/{id}`, `POST /api/resume/primary/{id}`, `POST /api/resume/rename/{id}`, `POST /api/resume/tailor` (per-job on-demand tailoring; same shape as one phase-4 item), `POST /api/resume/{id}/render-preview` (back-fill polished preview PDF for legacy records that lack one).
 - **Config / state**: `POST /api/config` (whitelisted keys only — see below), `GET /api/state`, `POST /api/reset`.
 - **Profile**: `GET /api/profile`, `POST /api/profile`, `POST /api/profile/extract`.
 - **Jobs / feedback**: `POST /api/jobs/action`, `POST /api/feedback`.

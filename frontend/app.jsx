@@ -422,10 +422,14 @@ function Rail({ page, setPage, counts, isDev, onLogout, navOpen, closeNav }) {
       <div className="rail-bottom">
         {NAV_UTIL.map(it => (
           <div key={it.id}
-               className={'rail-item' + (page === it.id ? ' active' : '')}
+               className={'rail-item' + (page === it.id ? ' active' : '')
+                        + (it.id === 'plans' ? ' rail-item-plans' : '')}
                onClick={() => utilSelect(it)}>
             <span className="rail-icon"><Icon name={it.icon} size={15}/></span>
             <span className="lbl">{it.label}</span>
+            {/* Plans gets a subtle gold "Pro" glint and a shimmer sweep so
+                it actually catches the eye in the rail-bottom utility row. */}
+            {it.id === 'plans' && <span className="rail-plans-glint" aria-hidden="true"/>}
           </div>
         ))}
       </div>
@@ -800,41 +804,103 @@ function MarketPulse({ jobs, profileSkills }) {
   );
 }
 
-function MarketNews() {
-  const [items, setItems] = useState(null);
-  const [err, setErr] = useState(null);
+/* Industry-curated HN Algolia queries for the market-news widget.
+   Bare terms OR; parens group; AND/OR are explicit. When a tighter topic
+   returns nothing in 7 days the fetcher widens the window — see the loop
+   below — so a sparse industry never strands the user on an empty card. */
+const NEWS_TOPICS = [
+  { id: 'all',      label: 'All',         icon: 'globe',          q: '"job market" OR hiring OR layoffs OR career OR salary' },
+  { id: 'tech',     label: 'Software',    icon: 'terminal',       q: '(software OR developer OR engineer OR coding) AND (hiring OR layoff OR jobs OR market)' },
+  { id: 'ai',       label: 'AI / ML',     icon: 'cpu',            q: '(AI OR LLM OR "machine learning" OR OpenAI OR Anthropic OR DeepMind) AND (hiring OR layoff OR jobs OR research)' },
+  { id: 'startups', label: 'Startups',    icon: 'rocket',         q: 'startup AND (hiring OR funding OR "Y Combinator" OR seed OR "Series A" OR layoff)' },
+  { id: 'design',   label: 'Design',      icon: 'palette',        q: '(designer OR "UX " OR "UI " OR "product design") AND (hiring OR portfolio OR job OR market)' },
+  { id: 'finance',  label: 'Finance',     icon: 'banknote',       q: '(finance OR fintech OR banking OR analyst OR trading OR "Wall Street") AND (hiring OR layoff OR job)' },
+  { id: 'health',   label: 'Healthcare',  icon: 'heart-pulse',    q: '(healthcare OR pharma OR biotech OR medical OR clinical) AND (hiring OR layoff OR jobs OR research)' },
+  { id: 'research', label: 'Research',    icon: 'graduation-cap', q: '(PhD OR postdoc OR research OR academic OR university) AND (hiring OR job OR funding)' },
+  { id: 'remote',   label: 'Remote',      icon: 'home',           q: '("remote work" OR WFH OR "work from home" OR hybrid OR "return to office") AND (hiring OR jobs OR future)' },
+  { id: 'layoffs',  label: 'Layoffs',     icon: 'trending-down',  q: 'layoffs OR fired OR severance OR "reduction in force" OR "RIF"' },
+];
 
+/* Pick a sensible default chip based on the user's profile. A designer
+   lands on Design, an AI engineer on AI/ML, etc., without manually
+   clicking — keeps the widget feeling tailored. Falls back to "All"
+   for anyone whose target_titles don't fingerprint any industry. */
+function _pickDefaultNewsTopic(profile) {
+  const titles = (profile?.target_titles || []).map(String).join(' ').toLowerCase();
+  const skills = (profile?.top_hard_skills || []).map(String).join(' ').toLowerCase();
+  const blob = titles + ' ' + skills;
+  if (!blob.trim()) return 'all';
+  if (/\b(ai|ml|machine\s*learning|data\s*scientist|llm|nlp|deep\s*learning|pytorch|tensorflow)\b/.test(blob)) return 'ai';
+  if (/\b(designer|ux|ui|product\s*design|figma|illustrator)\b/.test(blob)) return 'design';
+  if (/\b(finance|fintech|analyst|banking|trading|investment)\b/.test(blob)) return 'finance';
+  if (/\b(healthcare|nurse|physician|medical|clinical|pharma|biotech)\b/.test(blob)) return 'health';
+  if (/\b(phd|postdoc|research\s*scientist|academic|professor)\b/.test(blob)) return 'research';
+  if (/\b(software|developer|engineer|backend|frontend|fullstack|swe|sde)\b/.test(blob)) return 'tech';
+  if (/\b(startup|founder|product\s*manager|growth)\b/.test(blob)) return 'startups';
+  return 'all';
+}
+
+function MarketNews({ profile }) {
+  const [topic, setTopic]           = useState(() => _pickDefaultNewsTopic(profile));
+  const [items, setItems]           = useState(null);
+  const [err, setErr]               = useState(null);
+  const [windowDays, setWindowDays] = useState(7);
+
+  // Refetch whenever the topic changes. The fetcher auto-widens the window
+  // from 7 → 30 → 180 days if the topic is sparse (Healthcare and Research
+  // routinely have <3 stories in any given week on HN). Recency wins when
+  // it can; we only widen when we'd otherwise show nothing.
   useEffect(() => {
     let cancelled = false;
-    const since = Math.floor(Date.now() / 1000) - 7 * 24 * 3600;
-    const url = `https://hn.algolia.com/api/v1/search_by_date?query=hiring%20OR%20layoffs%20OR%20internship%20OR%20%22job%20market%22&tags=story&numericFilters=created_at_i%3E${since}&hitsPerPage=12`;
+    setItems(null); setErr(null); setWindowDays(7);
 
-    fetch(url)
-      .then(r => r.json())
-      .then(d => {
-        if (cancelled) return;
-        const hits = (d.hits || [])
-          .filter(h => h.title && h.url)
-          .slice(0, 6)
-          .map(h => {
-            let host = 'news';
-            try { host = new URL(h.url).hostname.replace(/^www\./, ''); } catch (_) {}
-            return {
-              title: h.title,
-              url: h.url,
-              host,
-              points: h.points || 0,
-              comments: h.num_comments || 0,
-              when: h.created_at,
-              hnUrl: `https://news.ycombinator.com/item?id=${h.objectID}`,
-            };
-          });
-        setItems(hits);
-      })
-      .catch(e => { if (!cancelled) setErr(e.message || 'Network'); });
+    const t = NEWS_TOPICS.find(x => x.id === topic) || NEWS_TOPICS[0];
+
+    const fetchWindow = async (days) => {
+      const since = Math.floor(Date.now() / 1000) - days * 24 * 3600;
+      const url = 'https://hn.algolia.com/api/v1/search_by_date'
+        + '?query=' + encodeURIComponent(t.q)
+        + '&tags=story'
+        + '&numericFilters=' + encodeURIComponent(`created_at_i>${since},points>1`)
+        + '&hitsPerPage=20';
+      const r = await fetch(url);
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const d = await r.json();
+      return (d.hits || [])
+        .filter(h => h.title && h.url)
+        .map(h => {
+          let host = 'news';
+          try { host = new URL(h.url).hostname.replace(/^www\./, ''); } catch (_) {}
+          return {
+            title: h.title,
+            url: h.url,
+            host,
+            points: h.points || 0,
+            comments: h.num_comments || 0,
+            when: h.created_at,
+            hnUrl: `https://news.ycombinator.com/item?id=${h.objectID}`,
+          };
+        });
+    };
+
+    (async () => {
+      try {
+        for (const days of [7, 30, 180]) {
+          const hits = await fetchWindow(days);
+          if (cancelled) return;
+          if (hits.length >= 3 || days === 180) {
+            setItems(hits.slice(0, 7));
+            setWindowDays(days);
+            return;
+          }
+        }
+      } catch (e) {
+        if (!cancelled) setErr(e.message || 'Network');
+      }
+    })();
 
     return () => { cancelled = true; };
-  }, []);
+  }, [topic]);
 
   const fmt = iso => {
     const ms = Date.now() - new Date(iso).getTime();
@@ -844,53 +910,83 @@ function MarketNews() {
     return Math.round(h / 24) + 'd ago';
   };
 
+  const chips = (
+    <div className="news-topics" role="tablist" aria-label="News topic">
+      {NEWS_TOPICS.map(t => (
+        <button
+          key={t.id}
+          role="tab"
+          aria-selected={topic === t.id}
+          className={'news-topic' + (topic === t.id ? ' on' : '')}
+          onClick={() => setTopic(t.id)}>
+          <Icon name={t.icon} size={11}/>
+          {t.label}
+        </button>
+      ))}
+    </div>
+  );
+
+  let body;
   if (err) {
-    return (
+    body = (
       <div className="news-empty">
         <Icon name="wifi-off" size={18}/>
         <span>News feed offline — {err}</span>
       </div>
     );
-  }
-  if (!items) {
-    return (
+  } else if (!items) {
+    body = (
       <div className="news-skel">
         {[0, 1, 2, 3].map(i => <div key={i} className="news-skel-row" style={{ animationDelay: `${i * 120}ms` }}/>)}
       </div>
     );
-  }
-  if (!items.length) {
-    return (
+  } else if (!items.length) {
+    body = (
       <div className="news-empty">
         <Icon name="search" size={18}/>
-        <span>No matching headlines this week.</span>
+        <span>No relevant stories — even the long-window search came up empty.</span>
       </div>
+    );
+  } else {
+    body = (
+      <>
+        {windowDays > 7 && (
+          <div className="news-window-hint">
+            <Icon name="info" size={11}/>
+            Quiet week — showing the last {windowDays === 30 ? '30 days' : '6 months'} instead.
+          </div>
+        )}
+        <ul className="news-list">
+          {items.map((it, i) => (
+            <li key={i} className="news-item" style={{ animationDelay: `${i * 70}ms` }}>
+              <a className="news-link" href={it.url} target="_blank" rel="noopener noreferrer">
+                <div className="news-row">
+                  <span className="news-host">{it.host}</span>
+                  <span className="news-when">{fmt(it.when)}</span>
+                </div>
+                <div className="news-title">{it.title}</div>
+                <div className="news-meta">
+                  <span><Icon name="arrow-up" size={10}/> {it.points}</span>
+                  <span className="news-sep">·</span>
+                  <span><Icon name="message-circle" size={10}/> {it.comments}</span>
+                  <span className="news-sep">·</span>
+                  <a className="news-thread" href={it.hnUrl} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()}>
+                    thread
+                  </a>
+                </div>
+              </a>
+            </li>
+          ))}
+        </ul>
+      </>
     );
   }
 
   return (
-    <ul className="news-list">
-      {items.map((it, i) => (
-        <li key={i} className="news-item" style={{ animationDelay: `${i * 70}ms` }}>
-          <a className="news-link" href={it.url} target="_blank" rel="noopener noreferrer">
-            <div className="news-row">
-              <span className="news-host">{it.host}</span>
-              <span className="news-when">{fmt(it.when)}</span>
-            </div>
-            <div className="news-title">{it.title}</div>
-            <div className="news-meta">
-              <span><Icon name="arrow-up" size={10}/> {it.points}</span>
-              <span className="news-sep">·</span>
-              <span><Icon name="message-circle" size={10}/> {it.comments}</span>
-              <span className="news-sep">·</span>
-              <a className="news-thread" href={it.hnUrl} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()}>
-                thread
-              </a>
-            </div>
-          </a>
-        </li>
-      ))}
-    </ul>
+    <div className="news-wrap">
+      {chips}
+      {body}
+    </div>
   );
 }
 
@@ -931,6 +1027,10 @@ function ResumeIntelligencePanel({ profile, resumes, setPage, refresh }) {
   const m = insights?.metrics || {};
   const score = insights ? Math.max(0, Math.min(100, Math.round(insights.overall_score || 0))) : null;
   const verified = insights && insights.verified_by && insights.verified_by !== 'heuristic';
+  // Local busy state for the re-scan button — gives immediate feedback
+  // before the next /api/state poll surfaces the backend's `extracting`
+  // flag (~150 ms request RTT + up to 2 s poll cadence).
+  const [rescanning, setRescanning] = useState(false);
 
   // Big-number ring config (sized for the home dossier card).
   const R = 62, CIRC = 2 * Math.PI * R;
@@ -1048,16 +1148,26 @@ function ResumeIntelligencePanel({ profile, resumes, setPage, refresh }) {
             <button className="intel-btn primary" onClick={() => setPage('resume')}>
               <Icon name="bar-chart-3" size={12}/> Open analysis
             </button>
-            {primary && (
-              <button className="intel-btn ghost" onClick={async () => {
-                try {
-                  await api.post('/api/profile/extract', { resume_id: primary.id, force: true });
-                  refresh?.();
-                } catch (e) { /* swallow — UI shows extracting state */ }
-              }}>
-                <Icon name="refresh-cw" size={11}/> Re-scan
-              </button>
-            )}
+            {primary && (() => {
+              const busy = rescanning || !!primary?.extracting;
+              return (
+                <button className="intel-btn ghost" disabled={busy}
+                  onClick={async () => {
+                    setRescanning(true);
+                    try {
+                      await api.post('/api/profile/extract',
+                                      { resume_id: primary.id, force: true });
+                      await refresh?.();
+                    } catch (e) { /* swallow — UI shows extracting state */ }
+                    finally { setRescanning(false); }
+                  }}>
+                  {busy
+                    ? <span className="spin" style={{ width:11, height:11, borderWidth:1.5 }}/>
+                    : <Icon name="refresh-cw" size={11}/>}
+                  {busy ? 'Scanning…' : 'Re-scan'}
+                </button>
+              );
+            })()}
           </div>
         </div>
       </div>
@@ -1071,6 +1181,10 @@ function MissionControlPanel({ state, setPage, refresh }) {
   const apps = state?.applications || [];
   const jobs_total = state?.scored_summary?.total || state?.job_count || 0;
   const primary = (state?.resumes || []).find(r => r.primary) || (state?.resumes || [])[0];
+  // Local busy state for the Re-scan tile so the user gets immediate
+  // feedback. Stays "busy" until the backend's `extracting` flag clears.
+  const [rescanning, setRescanning] = useState(false);
+  const isScanning = rescanning || !!primary?.extracting;
 
   const actions = [
     {
@@ -1084,13 +1198,24 @@ function MissionControlPanel({ state, setPage, refresh }) {
       tone: 'cyan', onClick: () => setPage('agent'),
     },
     {
-      n: '03', icon: 'scan-text', label: 'Re-scan resume',
-      sub: primary ? primary.filename.replace(/\.[^.]+$/, '').slice(0, 22) : 'analyze resume',
+      n: '03',
+      icon: isScanning ? 'loader-2' : 'scan-text',
+      label: isScanning ? 'Scanning…' : 'Re-scan resume',
+      sub: isScanning
+        ? 'reading bullets, recomputing score'
+        : (primary ? primary.filename.replace(/\.[^.]+$/, '').slice(0, 22) : 'analyze resume'),
       tone: 'pink',
+      busy: isScanning,
       onClick: async () => {
+        if (isScanning) return;
         if (!primary) { setPage('resume'); return; }
-        try { await api.post('/api/profile/extract', { resume_id: primary.id, force: true }); refresh?.(); }
-        catch (e) {}
+        setRescanning(true);
+        try {
+          await api.post('/api/profile/extract',
+                          { resume_id: primary.id, force: true });
+          await refresh?.();
+        } catch (e) { /* swallow — extracting flag carries the state */ }
+        finally { setRescanning(false); }
       },
     },
     {
@@ -1122,13 +1247,17 @@ function MissionControlPanel({ state, setPage, refresh }) {
         {actions.map((a, i) => (
           <button
             key={a.n}
-            className={'mission-tile tone-' + a.tone}
+            className={'mission-tile tone-' + a.tone + (a.busy ? ' busy' : '')}
             onClick={a.onClick}
-            disabled={!has_resume && (a.label === 'Discover roles' || a.label === 'Run agent')}
+            disabled={a.busy || (!has_resume && (a.label === 'Discover roles' || a.label === 'Run agent'))}
             style={{ animationDelay: `${i * 60}ms` }}
           >
             <span className="mission-num">{a.n}</span>
-            <span className="mission-icon"><Icon name={a.icon} size={20}/></span>
+            <span className="mission-icon">
+              {a.busy
+                ? <span className="spin" style={{ width:18, height:18, borderWidth:2 }}/>
+                : <Icon name={a.icon} size={20}/>}
+            </span>
             <span className="mission-label">{a.label}</span>
             <span className="mission-sub">{a.sub}</span>
             <span className="mission-arrow"><Icon name="arrow-up-right" size={13}/></span>
@@ -1177,6 +1306,24 @@ function Dashboard({ state, setPage, refresh }) {
     : 0;
   const done       = new Set(state?.done || []);
   const phasePct   = Math.round((done.size / 7) * 100);
+
+  // Hero-row Re-scan CTA: a previous iteration of this button only lived
+  // inside ResumeIntelligencePanel's footer, where users had to scroll
+  // and visually hunt for it.  Surfacing it in the hero row is the fix —
+  // it's the action people use most often, so it belongs above the fold.
+  const primary = (state?.resumes || []).find(r => r.primary) || (state?.resumes || [])[0];
+  const [rescanningHero, setRescanningHero] = useState(false);
+  const rescanBusy = rescanningHero || !!primary?.extracting;
+  const rescanResume = async () => {
+    if (rescanBusy) return;
+    if (!primary) { setPage('resume'); return; }
+    setRescanningHero(true);
+    try {
+      await api.post('/api/profile/extract', { resume_id: primary.id, force: true });
+      await refresh?.();
+    } catch (e) { /* extraction state surfaces via /api/state */ }
+    finally { setRescanningHero(false); }
+  };
 
   const streak = Math.max(1, done.size + (apps.length > 0 ? 2 : 0));
 
@@ -1232,6 +1379,21 @@ function Dashboard({ state, setPage, refresh }) {
               </button>
               <button className="hero-cta-g" onClick={() => setPage('resume')}>
                 <Icon name="file-text" size={14}/> Tune résumé
+              </button>
+              {/* Prominent Re-scan CTA right in the hero — the previous
+                  placement (footer of the dossier card below) was too
+                  buried; users had to dig into Resume → Deep dive to
+                  trigger a re-scan. */}
+              <button className={'hero-cta-g hero-cta-rescan' + (rescanBusy ? ' busy' : '')}
+                      onClick={rescanResume}
+                      disabled={rescanBusy}
+                      title={primary
+                        ? `Re-run AI scan on ${primary.filename}`
+                        : 'Upload a résumé to scan it'}>
+                {rescanBusy
+                  ? <span className="spin" style={{ width:12, height:12, borderWidth:1.5 }}/>
+                  : <Icon name="refresh-cw" size={14}/>}
+                {rescanBusy ? 'Scanning…' : 'Re-scan résumé'}
               </button>
             </div>
             <div className="hero-pipeline">
@@ -1383,14 +1545,14 @@ function Dashboard({ state, setPage, refresh }) {
         <div className="viz-card news-card">
           <div className="viz-head">
             <div>
-              <div className="viz-eyebrow"><span className="news-rss"/> Hacker News · last 7 days</div>
-              <div className="viz-h">Hiring, layoffs &amp; the labor market</div>
+              <div className="viz-eyebrow"><span className="news-rss"/> Industry pulse · curated weekly</div>
+              <div className="viz-h">Hiring, layoffs &amp; market moves</div>
             </div>
             <a className="viz-link" href="https://hn.algolia.com/?dateRange=pastWeek&query=hiring%20OR%20layoffs" target="_blank" rel="noopener noreferrer">
-              All stories <Icon name="external-link" size={11}/>
+              View on HN <Icon name="external-link" size={11}/>
             </a>
           </div>
-          <MarketNews/>
+          <MarketNews profile={state?.profile}/>
         </div>
       </section>
 
@@ -1591,10 +1753,10 @@ function JobCard({ job, idx, isLiked, onLike, onHide, onAsk, onTailor }) {
                 style={isLiked ? { color:'var(--accent-h)', background:'var(--accent-d)', borderColor:'var(--accent-b)' } : {}}>
                 <Icon name="bookmark" size={13} fill={isLiked ? "currentColor" : "none"}/>
               </button>
-              <button className="btn-ghost" onClick={() => onAsk?.(job)}>
+              <button className="btn-atlas" onClick={() => onAsk?.(job)}>
                 <Icon name="sparkles" size={12}/> Ask Atlas
               </button>
-              <button className="btn-ghost btn-tailor" onClick={() => onTailor?.(job)} title="Generate a resume tailored to this job">
+              <button className="btn-tailor" onClick={() => onTailor?.(job)} title="Generate a resume tailored to this job">
                 <Icon name="wand-2" size={12}/> Tailor
               </button>
               <button className="btn-primary" onClick={() => job.url && window.open(job.url, '_blank')}>
@@ -3444,6 +3606,25 @@ function ResumePage({ state, refresh, setPage }) {
       .finally(() => setLoading(false));
   }, [selected?.id]);
 
+  // Back-fill the preview PDF for legacy records (uploaded before the
+  // auto-render landed). Fires once per resume when we have a record
+  // with no embeddable PDF but text content exists. The render itself
+  // is server-side; we just refresh after it's done so the iframe picks
+  // up the new preview_pdf_url.
+  const previewBackfillTriedRef = useRef(new Set());
+  useEffect(() => {
+    if (!selected) return;
+    if (previewBackfillTriedRef.current.has(selected.id)) return;
+    const hasOriginalPdf = selected.original_kind === 'pdf' && selected.original_url;
+    const hasPreview = !!selected.preview_pdf_url;
+    if (hasOriginalPdf || hasPreview) return;
+    if (selected.extracting) return;        // wait until extraction settles
+    previewBackfillTriedRef.current.add(selected.id);
+    api.post(`/api/resume/${selected.id}/render-preview`, {})
+      .then(() => refresh?.())
+      .catch(() => {/* graceful: text fallback still works */});
+  }, [selected?.id, selected?.original_url, selected?.preview_pdf_url, selected?.extracting]);
+
   const stats = useMemo(() => {
     if (!sp) return null;
     return {
@@ -3573,11 +3754,11 @@ function ResumePage({ state, refresh, setPage }) {
         <div className="page-title-big">Resume</div>
         <div className="head-spacer"/>
         {/* Re-scan the currently-selected resume with the configured AI.
-            Mirrors the home-page hero CTA so the same action is reachable
-            without bouncing back to home. Hidden when there's no resume
-            yet (nothing to scan); disabled while a scan is already in
-            flight (server-side `extracting` flag OR our local optimistic
-            flag). */}
+            Mirrors the home-page hero CTA (Dashboard) so the same action is
+            reachable without bouncing back to home. Disabled while a scan
+            is already in flight (server-side `extracting` flag OR our local
+            optimistic flag). Hidden when there's no resume yet — nothing
+            to scan. */}
         {selected && (
           <button
             className="btn-ghost"
@@ -3722,16 +3903,33 @@ function ResumePage({ state, refresh, setPage }) {
                 </button>
               </div>
 
-              {tab === 'preview' && (
+              {tab === 'preview' && (() => {
+                // Pick which PDF (if any) to embed. Original wins when the
+                // user uploaded a real .pdf; otherwise the rendered preview
+                // (auto-generated for .txt / .docx / .tex / .md) is used.
+                const originalIsPdf = !!selected.original_url && selected.original_kind === 'pdf';
+                const embedUrl = originalIsPdf
+                  ? selected.original_url
+                  : (selected.preview_pdf_url || '');
+                const embedLabel = originalIsPdf
+                  ? 'Original PDF'
+                  : (embedUrl ? 'Generated preview' : '');
+                const downloadUrl = selected.original_url || selected.preview_pdf_url || '';
+                const downloadLabel = selected.original_url
+                  ? 'Download original'
+                  : (selected.preview_pdf_url ? 'Download preview PDF' : 'No file to download');
+                const showDocumentToggle = !!embedUrl && !isEditing;
+              return (
                 <div className="data-card fade-in" style={{ padding:0, overflow:'hidden' }}>
                   <div style={{ padding:'10px 16px', background:'var(--bg-2)', borderBottom:'1px solid var(--bdr)', display:'flex', alignItems:'center', justifyContent:'space-between', gap:12, flexWrap:'wrap' }}>
                     <div style={{ display:'flex', alignItems:'center', gap:12, minWidth:0 }}>
                       <div style={{ fontSize:14.5, color:'var(--t3)', fontFamily:'var(--mono)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{selected.filename}</div>
-                      {/* Document / Text toggle — only shown when the user
-                          uploaded an actual PDF we can embed. .docx / .tex /
-                          .txt fall back to text-only because there's nothing
-                          else to render. */}
-                      {selected.original_url && selected.original_kind === 'pdf' && !isEditing && (
+                      {embedLabel && (
+                        <span className="badge b-accent" style={{ fontSize:11, fontWeight:600 }}>{embedLabel}</span>
+                      )}
+                      {/* Document / Text toggle — visible whenever we have
+                          an embeddable PDF (original or generated). */}
+                      {showDocumentToggle && (
                         <div className="prof-tabs" style={{ margin:0 }}>
                           <button
                             className={'prof-tab' + (previewMode === 'document' ? ' active' : '')}
@@ -3760,19 +3958,19 @@ function ResumePage({ state, refresh, setPage }) {
                         <>
                           <button className="icon-btn" title="Edit text" onClick={() => { setPreviewMode('text'); setIsEditing(true); }}><Icon name="edit-3" size={12}/></button>
                           <button className="icon-btn" title="Copy text" onClick={() => { navigator.clipboard.writeText(resumeText); alert('Copied!'); }}><Icon name="copy" size={12}/></button>
-                          {selected.original_url ? (
-                            <a className="icon-btn" title="Download original" href={selected.original_url}
+                          {downloadUrl ? (
+                            <a className="icon-btn" title={downloadLabel} href={downloadUrl}
                                download={selected.filename || true} target="_blank" rel="noopener noreferrer">
                               <Icon name="download" size={12}/>
                             </a>
                           ) : (
-                            <button className="icon-btn" title="No original file" disabled style={{ opacity:.4, cursor:'not-allowed' }}><Icon name="download" size={12}/></button>
+                            <button className="icon-btn" title={downloadLabel} disabled style={{ opacity:.4, cursor:'not-allowed' }}><Icon name="download" size={12}/></button>
                           )}
                         </>
                       )}
                     </div>
                   </div>
-                  {(!isEditing && selected.original_url && selected.original_kind === 'pdf' && previewMode === 'document') ? (
+                  {(!isEditing && embedUrl && previewMode === 'document') ? (
                     <div style={{ padding:0, height:720, background:'#0f0f13' }}>
                       {/* Browsers render PDFs natively in an iframe. The
                           #toolbar=0&navpanes=0 hash hides the Chrome/Edge
@@ -3780,8 +3978,8 @@ function ResumePage({ state, refresh, setPage }) {
                           ignores the params, harmless. The key forces a
                           remount when the user switches resumes. */}
                       <iframe
-                        key={selected.original_url}
-                        src={selected.original_url + '#toolbar=0&navpanes=0'}
+                        key={embedUrl}
+                        src={embedUrl + '#toolbar=0&navpanes=0'}
                         title="Resume preview"
                         style={{ width:'100%', height:'100%', border:'none', background:'#0f0f13' }}/>
                     </div>
@@ -3805,7 +4003,8 @@ function ResumePage({ state, refresh, setPage }) {
                   </div>
                   )}
                 </div>
-              )}
+              );
+              })()}
 
               {tab === 'analysis' && (
                 <div className="fade-in">
@@ -4026,6 +4225,22 @@ function ResumePage({ state, refresh, setPage }) {
 /* ══════════════════════════════════════════════════════════
    PROFILE PAGE
 ══════════════════════════════════════════════════════════ */
+
+// Form-field → config-key mapping for saveProfile. Each tuple is
+// (formKey, cfgKey, predicate). Predicate decides whether the form
+// value is set enough to push to /api/config — undefined / NaN / wrong
+// type are skipped so a partial form save can't blow away values the
+// user never touched.
+const SEARCH_PREF_FIELDS = [
+  ['search_location',           'location',           v => typeof v === 'string'],
+  ['search_experience_levels',  'experience_levels',  Array.isArray],
+  ['search_education_filter',   'education_filter',   Array.isArray],
+  ['search_citizenship_filter', 'citizenship_filter', v => typeof v === 'string' && v.length > 0],
+  ['search_max_scrape_jobs',    'max_scrape_jobs',    Number.isFinite],
+  ['search_days_old',           'days_old',           Number.isFinite],
+  ['search_threshold',          'threshold',          Number.isFinite],
+];
+
 function ProfilePage({ state, refresh, setPage }) {
   const p = state?.profile;
   const resumes = state?.resumes || [];
@@ -4062,17 +4277,13 @@ function ProfilePage({ state, refresh, setPage }) {
     try {
       const titles = splitList(form.target_titles).filter(Boolean);
       await api.post('/api/profile', formToProfile(form));
-      // Keep the search config in sync so Phase 2 + the live job feed pick up
-      // the new preferences. Only send fields the user actually edited this
-      // session — `?? undefined` guards leave the previously-saved value intact.
+      // Only fields the user actually edited this session get pushed to
+      // /api/config — fields where the corresponding form key is still
+      // unset (undefined) leave the previously-saved value intact.
       const cfg = { job_titles: titles.join(', ') };
-      if (form.search_location !== undefined) cfg.location = form.search_location;
-      if (Array.isArray(form.search_experience_levels)) cfg.experience_levels = form.search_experience_levels;
-      if (Array.isArray(form.search_education_filter)) cfg.education_filter = form.search_education_filter;
-      if (form.search_citizenship_filter !== undefined) cfg.citizenship_filter = form.search_citizenship_filter;
-      if (Number.isFinite(form.search_max_scrape_jobs)) cfg.max_scrape_jobs = form.search_max_scrape_jobs;
-      if (Number.isFinite(form.search_days_old)) cfg.days_old = form.search_days_old;
-      if (Number.isFinite(form.search_threshold)) cfg.threshold = form.search_threshold;
+      for (const [src, dst, ok] of SEARCH_PREF_FIELDS) {
+        if (ok(form[src])) cfg[dst] = form[src];
+      }
       await api.post('/api/config', cfg);
       setDirty(false);
       await refresh?.();
@@ -4377,15 +4588,6 @@ function formToProfile(form) {
 function splitBullets(value) {
   return String(value || '').split('\n').map(s => s.trim());
 }
-/* The "Search Preferences" card lives at the top of the Personal tab so the
-   five fields that drive job matching (target roles, search location, seniority,
-   degree level, citizenship gate) are the FIRST thing a new user sees after
-   their resume is parsed — and they can be edited at any time without hunting
-   through Settings. Each field has a fallback chain:
-     form.search_X  (user has typed something this session)
-     ?? state.X     (persisted value from a previous save / resume extraction)
-     ?? sane default
-   so the inputs always have a controlled value and the user's edits stick. */
 const _EXP_LEVEL_OPTIONS = [
   { v: 'internship',  label: 'Internship' },
   { v: 'entry-level', label: 'Entry-level' },
@@ -4484,25 +4686,14 @@ function ProfileInput({ label, value, onChange, textarea=false, type='text', pla
   );
 }
 
-/* ────────────────────────────────────────────────────────────────
-   Profile links — industry-specific online presence
-
-   The catalog below is the result of mapping which profile sites each
-   industry's hiring pipeline actually values. It's grouped so the
-   five sites a software engineer cares about don't drown out the
-   three a journalist needs (and vice versa). Each entry has:
-
-     key      : stable id, mirrors PROFILE_LINK_KEYS in profile_extractor.py
-     label    : what we show in the input label
-     mono     : 2-letter monogram for the colored chip
-     color    : brand color used by the chip (semi-transparent so it
-                works in both dark + light themes)
-     hint     : URL example shown as the input placeholder so users see
-                the canonical shape they should paste
-   ──────────────────────────────────────────────────────────────── */
+// Industry-grouped catalog of profile sites. Item.key mirrors
+// PROFILE_LINK_KEYS in pipeline/profile_extractor.py — keep both in sync.
+// `scalar: true` items are stored as flat keys on the profile dict
+// (linkedin/github/website) for back-compat; everything else lives
+// under profile.links[key].
 const PROFILE_LINK_GROUPS = [
   {
-    name: 'Universal',
+    id: 'universal', name: 'Universal',
     description: 'Filled by every industry — start here.',
     icon: 'globe',
     defaultOpen: true,
@@ -4513,7 +4704,7 @@ const PROFILE_LINK_GROUPS = [
     ],
   },
   {
-    name: 'Software & Engineering',
+    id: 'tech', name: 'Software & Engineering',
     description: 'Code repos, Q&A reputation, and interview-prep proof.',
     icon: 'terminal',
     items: [
@@ -4524,7 +4715,7 @@ const PROFILE_LINK_GROUPS = [
     ],
   },
   {
-    name: 'Data, ML & AI',
+    id: 'data_ai', name: 'Data, ML & AI',
     description: 'For data scientists, ML/AI engineers, and applied researchers.',
     icon: 'cpu',
     items: [
@@ -4534,7 +4725,7 @@ const PROFILE_LINK_GROUPS = [
     ],
   },
   {
-    name: 'Design & Creative',
+    id: 'design', name: 'Design & Creative',
     description: 'UI/UX, illustration, 3D — the portfolio sites recruiters open first.',
     icon: 'palette',
     items: [
@@ -4545,7 +4736,7 @@ const PROFILE_LINK_GROUPS = [
     ],
   },
   {
-    name: 'Writing & Content',
+    id: 'writing', name: 'Writing & Content',
     description: 'Long-form writing, newsletters, video essays.',
     icon: 'feather',
     items: [
@@ -4555,7 +4746,7 @@ const PROFILE_LINK_GROUPS = [
     ],
   },
   {
-    name: 'Academic & Research',
+    id: 'academic', name: 'Academic & Research',
     description: 'Citations, identifiers, and peer-network sites for researchers.',
     icon: 'graduation-cap',
     items: [
@@ -4566,7 +4757,7 @@ const PROFILE_LINK_GROUPS = [
     ],
   },
   {
-    name: 'Visual & Media',
+    id: 'visual', name: 'Visual & Media',
     description: 'Photography, film, and short-form video.',
     icon: 'camera',
     items: [
@@ -4577,7 +4768,7 @@ const PROFILE_LINK_GROUPS = [
     ],
   },
   {
-    name: 'Audio & Music',
+    id: 'audio', name: 'Audio & Music',
     description: 'Catalog, tracks, and producer credits.',
     icon: 'music',
     items: [
@@ -4586,7 +4777,7 @@ const PROFILE_LINK_GROUPS = [
     ],
   },
   {
-    name: 'Business & Startups',
+    id: 'business', name: 'Business & Startups',
     description: 'Founders, investors, BD — where deal flow happens.',
     icon: 'briefcase',
     items: [
@@ -4596,7 +4787,7 @@ const PROFILE_LINK_GROUPS = [
     ],
   },
   {
-    name: 'Industry Specialties',
+    id: 'specialty', name: 'Industry Specialties',
     description: 'Field-specific directories — fill what applies.',
     icon: 'badge-check',
     items: [
@@ -4608,19 +4799,21 @@ const PROFILE_LINK_GROUPS = [
   },
 ];
 
+const PROFILE_LINK_ITEMS = PROFILE_LINK_GROUPS.flatMap(g => g.items);
+
 function ProfileLinksCard({ form, updateField }) {
-  // Three groups stay open by default (Universal + the user's most likely
-  // primary profession by inference), the rest collapse so the card doesn't
-  // dominate the page. The user can click any header to toggle a group.
+  // Open-state set is keyed by group.id (stable) rather than group.name
+  // (which is user-facing copy and could be renamed without breaking
+  // anyone's open/closed memory).
   const [openGroups, setOpenGroups] = useState(() => {
     const open = new Set();
-    PROFILE_LINK_GROUPS.forEach(g => { if (g.defaultOpen) open.add(g.name); });
+    PROFILE_LINK_GROUPS.forEach(g => { if (g.defaultOpen) open.add(g.id); });
     return open;
   });
-  const toggleGroup = (name) => {
+  const toggleGroup = (id) => {
     setOpenGroups(prev => {
       const next = new Set(prev);
-      if (next.has(name)) next.delete(name); else next.add(name);
+      if (next.has(id)) next.delete(id); else next.add(id);
       return next;
     });
   };
@@ -4641,9 +4834,8 @@ function ProfileLinksCard({ form, updateField }) {
   };
 
   // Quick "you've filled X of Y" stat shown in the header.
-  const allItems = PROFILE_LINK_GROUPS.flatMap(g => g.items);
-  const filled = allItems.filter(it => String(readValue(it) || '').trim()).length;
-  const total = allItems.length;
+  const filled = PROFILE_LINK_ITEMS.filter(it => String(readValue(it) || '').trim()).length;
+  const total = PROFILE_LINK_ITEMS.length;
 
   return (
     <div className="data-card profile-links-card" style={{ padding:24, marginTop:18 }}>
@@ -4658,14 +4850,14 @@ function ProfileLinksCard({ form, updateField }) {
       </div>
 
       {PROFILE_LINK_GROUPS.map(group => {
-        const isOpen = openGroups.has(group.name);
+        const isOpen = openGroups.has(group.id);
         const groupFilled = group.items.filter(it => String(readValue(it) || '').trim()).length;
         return (
-          <div key={group.name} className={'profile-link-group' + (isOpen ? ' open' : '')}>
+          <div key={group.id} className={'profile-link-group' + (isOpen ? ' open' : '')}>
             <button
               type="button"
               className="profile-link-group-head"
-              onClick={() => toggleGroup(group.name)}
+              onClick={() => toggleGroup(group.id)}
               aria-expanded={isOpen}
             >
               <span className="profile-link-group-icon"><Icon name={group.icon} size={14}/></span>
@@ -5834,6 +6026,190 @@ function AtlasChat({ state, dataPing }) {
   );
 }
 
+/* ── Past runs & outputs ─────────────────────────────────────────────────
+   Lists every artefact this user's pipeline has produced — tailored
+   resumes, monthly tracker spreadsheets, run reports — so they don't have
+   to dig into the filesystem. Reads `state.output_files` (already shaped
+   by /api/state with name, phase, size_kb, url, mtime-sorted desc). */
+const _RUN_BUCKETS = [
+  { key: 'tracker',  match: f => /\.xlsx$/i.test(f.name) || f.phase === 6,
+    title: 'Trackers',         icon: 'file-spreadsheet', desc: 'Monthly application tracker spreadsheets.' },
+  { key: 'resumes',  match: f => f.phase === 4 || /_Resume_/i.test(f.name),
+    title: 'Tailored résumés', icon: 'file-text',        desc: 'Per-job tailored résumé PDFs and LaTeX sources.' },
+  { key: 'reports',  match: f => f.phase === 7 || /\.md$/i.test(f.name),
+    title: 'Run reports',      icon: 'file-line-chart',  desc: 'Plain-language summaries of each pipeline run.' },
+  { key: 'other',    match: () => true,
+    title: 'Other',            icon: 'file',             desc: 'Other artefacts produced by the pipeline.' },
+];
+
+function _humanSize(kb) {
+  const n = Number(kb) || 0;
+  if (n < 1) return `${Math.max(1, Math.round(n * 1024))} B`;
+  if (n < 1024) return `${n.toFixed(1)} KB`;
+  return `${(n / 1024).toFixed(2)} MB`;
+}
+
+function RunOutputsPanel({ state, refresh }) {
+  const allFiles = state?.output_files || [];
+  const [openBuckets, setOpenBuckets] = useState({});
+  const [expandedBuckets, setExpandedBuckets] = useState({});
+  const [collapsed, setCollapsed] = useState(false);
+
+  // Bucket the files exactly once per render. Each file lands in its
+  // first-matching bucket so no row is duplicated and "Other" is a true
+  // catch-all rather than a merge of leftovers.
+  const grouped = useMemo(() => {
+    const claimed = new Set();
+    const out = {};
+    for (const b of _RUN_BUCKETS) out[b.key] = [];
+    for (const f of allFiles) {
+      for (const b of _RUN_BUCKETS) {
+        if (claimed.has(f.url)) break;
+        if (b.match(f)) {
+          out[b.key].push(f);
+          claimed.add(f.url);
+          break;
+        }
+      }
+    }
+    return out;
+  }, [allFiles]);
+
+  const totalCount = allFiles.length;
+  const trackerLatest = grouped.tracker?.[0];
+
+  // Empty state — nothing to show yet.
+  if (totalCount === 0) {
+    return (
+      <section className="run-outputs run-outputs-empty">
+        <div className="run-outputs-head">
+          <div className="run-outputs-head-l">
+            <Icon name="archive" size={14}/>
+            <span className="run-outputs-h">Past runs &amp; outputs</span>
+          </div>
+        </div>
+        <div className="run-outputs-empty-body">
+          <Icon name="folder-open" size={20} color="var(--t4)"/>
+          <div>
+            <div className="run-outputs-empty-h">No artefacts yet</div>
+            <div className="run-outputs-empty-sub">
+              Run phases 4 (résumé tailoring), 6 (tracker), or 7 (run report)
+              to generate downloadable files. They'll all surface here once produced.
+            </div>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section className={'run-outputs' + (collapsed ? ' run-outputs-collapsed' : '')}>
+      <div className="run-outputs-head" onClick={() => setCollapsed(c => !c)}
+           role="button" tabIndex={0}
+           aria-expanded={!collapsed}>
+        <div className="run-outputs-head-l">
+          <Icon name="archive" size={14}/>
+          <span className="run-outputs-h">Past runs &amp; outputs</span>
+          <span className="run-outputs-count">{totalCount} file{totalCount === 1 ? '' : 's'}</span>
+        </div>
+        <div className="run-outputs-head-r">
+          {trackerLatest && (
+            <a className="run-outputs-quick"
+               href={trackerLatest.url}
+               download={trackerLatest.name}
+               onClick={e => e.stopPropagation()}
+               title={`Download ${trackerLatest.name}`}>
+              <Icon name="download" size={11}/> Latest tracker
+            </a>
+          )}
+          <button className="run-outputs-refresh"
+                  onClick={e => { e.stopPropagation(); refresh?.(); }}
+                  title="Refresh outputs list">
+            <Icon name="refresh-cw" size={11}/>
+          </button>
+          <span className="run-outputs-chev" aria-hidden="true">
+            <Icon name={collapsed ? 'chevron-down' : 'chevron-up'} size={14}/>
+          </span>
+        </div>
+      </div>
+
+      {!collapsed && (
+        <div className="run-outputs-body">
+          {_RUN_BUCKETS.map(bucket => {
+            const files = grouped[bucket.key] || [];
+            if (!files.length) return null;
+            const isOpen = openBuckets[bucket.key] !== false;   // default open
+            const expanded = !!expandedBuckets[bucket.key];
+            const visible = expanded ? files : files.slice(0, 6);
+            return (
+              <div key={bucket.key} className={'run-bucket' + (isOpen ? '' : ' run-bucket-closed')}>
+                <button type="button" className="run-bucket-h"
+                        onClick={() => setOpenBuckets(b => ({ ...b, [bucket.key]: !isOpen }))}
+                        aria-expanded={isOpen}>
+                  <Icon name={bucket.icon} size={12}/>
+                  <span className="run-bucket-t">{bucket.title}</span>
+                  <span className="run-bucket-n">{files.length}</span>
+                  <span className="run-bucket-d">{bucket.desc}</span>
+                  <Icon name={isOpen ? 'chevron-up' : 'chevron-down'}
+                        size={12} className="run-bucket-chev"/>
+                </button>
+
+                {isOpen && (
+                  <ul className="run-files">
+                    {visible.map(f => (
+                      <li key={f.url} className="run-file">
+                        <span className="run-file-icon">
+                          <Icon name={
+                            /\.xlsx$/i.test(f.name) ? 'file-spreadsheet' :
+                            /\.pdf$/i.test(f.name)  ? 'file-text'        :
+                            /\.tex$/i.test(f.name)  ? 'file-code-2'      :
+                            /\.md$/i.test(f.name)   ? 'file-line-chart'  : 'file'
+                          } size={13}/>
+                        </span>
+                        <span className="run-file-name" title={f.name}>{f.name}</span>
+                        <span className="run-file-size">{_humanSize(f.size_kb)}</span>
+                        <span className="run-file-actions">
+                          <a className="run-file-btn"
+                             href={f.url} target="_blank" rel="noopener noreferrer"
+                             title="Open in new tab">
+                            <Icon name="external-link" size={11}/>
+                          </a>
+                          <a className="run-file-btn run-file-btn-primary"
+                             href={f.url} download={f.name}
+                             title={`Download ${f.name}`}>
+                            <Icon name="download" size={11}/>
+                          </a>
+                        </span>
+                      </li>
+                    ))}
+                    {files.length > visible.length && (
+                      <li className="run-files-more">
+                        <button type="button" className="run-files-more-btn"
+                                onClick={() => setExpandedBuckets(e => ({ ...e, [bucket.key]: true }))}>
+                          Show {files.length - visible.length} more
+                        </button>
+                      </li>
+                    )}
+                    {expanded && files.length > 6 && (
+                      <li className="run-files-more">
+                        <button type="button" className="run-files-more-btn"
+                                onClick={() => setExpandedBuckets(e => ({ ...e, [bucket.key]: false }))}>
+                          Collapse
+                        </button>
+                      </li>
+                    )}
+                  </ul>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+}
+
+
 function AgentPage({ state, refresh }) {
   const [open,    setOpen]    = useState({});
   const [running, setRunning] = useState(null);
@@ -5991,6 +6367,8 @@ function AgentPage({ state, refresh }) {
               skill overlap + freshness + title match. Higher cap = more candidates for Phase 3 to score.
             </div>
           </div>
+
+          <RunOutputsPanel state={state} refresh={refresh}/>
 
           <ol className="agent-phases">
             {[1,2,3,4,5,6,7].map((n, idx) => {
@@ -6626,12 +7004,378 @@ function FeedbackPage({ refresh }) {
 
 /* Dev console — operator surface */
 const DEV_TABS = [
-  { id:'overview', label:'OVERVIEW', icon:'gauge'              },
-  { id:'sessions', label:'SESSIONS', icon:'users'              },
-  { id:'server',   label:'SERVER',   icon:'sliders-horizontal' },
-  { id:'console',  label:'CONSOLE',  icon:'terminal'           },
-  { id:'tweaks',   label:'TWEAKS',   icon:'wand-sparkles'      },
+  { id:'overview', label:'Overview',  icon:'gauge',              hint:'health, metrics & recent users' },
+  { id:'sessions', label:'Users',     icon:'users',              hint:'inspect, impersonate, manage plans' },
+  { id:'server',   label:'Server',    icon:'sliders-horizontal', hint:'runtime flags, LLM, pipeline knobs' },
+  { id:'console',  label:'Console',   icon:'terminal',           hint:'sandboxed CLI + event log' },
+  { id:'tweaks',   label:'Tweaks',    icon:'wand-sparkles',      hint:'per-session UI experiments' },
 ];
+
+/* ── Dev Ops helpers ─────────────────────────────────────────────────────
+   Uptime formatter + htop-style per-core CPU panel. Pulled out of DevPage
+   to keep that component readable; both are pure, so they re-render only
+   when their props change. */
+function _formatUptime(seconds) {
+  const s = Math.max(0, Math.floor(Number(seconds) || 0));
+  const d = Math.floor(s / 86400);
+  const h = Math.floor((s % 86400) / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if (d > 0) return `${d}d ${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${sec.toString().padStart(2, '0')}`;
+  return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${sec.toString().padStart(2, '0')}`;
+}
+
+/* Live mirror of the running app.py terminal. SSE-driven; stdout / stderr
+   / Python `logging` records are tagged separately so the panel can color
+   them (white for stdout, red for stderr, dim cyan for logger lines). */
+function _appendLogs(prev, fresh, cap) {
+  if (!fresh.length) return prev;
+  const seen = new Set(prev.map(r => r.seq));
+  const add  = fresh.filter(r => !seen.has(r.seq));
+  if (!add.length) return prev;
+  const merged = prev.concat(add);
+  return merged.length > cap ? merged.slice(merged.length - cap) : merged;
+}
+
+function _logTimestamp(ts) {
+  if (!ts) return '--:--:--';
+  const d = new Date(ts * 1000);
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  const ss = String(d.getSeconds()).padStart(2, '0');
+  return `${hh}:${mm}:${ss}`;
+}
+
+function _logStreamLabel(stream) {
+  if (!stream) return 'out';
+  if (stream === 'stdout') return 'out';
+  if (stream === 'stderr') return 'err';
+  if (stream.startsWith('logger:')) return stream.slice(7);
+  return stream;
+}
+
+function DevServerLogPanel({ active }) {
+  const [logs, setLogs] = useState([]);
+  const [paused, setPaused] = useState(false);
+  const [autoScroll, setAutoScroll] = useState(true);
+  const [filter, setFilter] = useState('');
+  const [streamErr, setStreamErr] = useState(null);
+  const scrollRef = useRef(null);
+  const seqRef = useRef(0);
+
+  // SSE connection lifecycle: open whenever the panel's parent is the
+  // active sub-page AND the user hasn't paused.  Closing on tab-switch
+  // saves a long-lived TCP connection per session.
+  useEffect(() => {
+    if (!active || paused) return undefined;
+
+    api.get(`/api/dev/logs?since=${seqRef.current}&limit=2000`)
+      .then(res => {
+        const fresh = res?.logs || [];
+        if (!fresh.length) return;
+        setLogs(prev => _appendLogs(prev, fresh, 4000));
+        seqRef.current = res.latest_seq || seqRef.current;
+        setStreamErr(null);
+      })
+      .catch(() => {/* SSE will catch up if backfill fails */});
+
+    let es;
+    try {
+      es = new EventSource(`/api/dev/logs/stream?since=${seqRef.current}`);
+    } catch (e) {
+      setStreamErr(`Stream init failed: ${e.message}`);
+      return undefined;
+    }
+    es.addEventListener('log', ev => {
+      try {
+        const rec = JSON.parse(ev.data || '{}');
+        if (!rec || !rec.line) return;
+        seqRef.current = Math.max(seqRef.current, rec.seq || 0);
+        setLogs(prev => _appendLogs(prev, [rec], 4000));
+      } catch (_) {/* drop malformed records */}
+    });
+    es.addEventListener('ping', () => {/* keepalive */});
+    es.onerror = () => {
+      setStreamErr('Reconnecting…');
+      setTimeout(() => setStreamErr(null), 4000);
+    };
+
+    return () => { try { es.close(); } catch (_) {} };
+  }, [active, paused]);
+
+  // Pin to bottom on every new line unless the user scrolled up.
+  useEffect(() => {
+    if (!autoScroll) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [logs, autoScroll]);
+
+  const onScroll = () => {
+    const el = scrollRef.current; if (!el) return;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 12;
+    setAutoScroll(atBottom);
+  };
+
+  const filtered = useMemo(() => {
+    if (!filter.trim()) return logs;
+    const needle = filter.toLowerCase();
+    return logs.filter(r => (r.line || '').toLowerCase().includes(needle));
+  }, [logs, filter]);
+
+  const copyAll = () => {
+    const text = (filtered.length ? filtered : logs)
+      .map(r => `${_logTimestamp(r.ts)} ${r.stream} ${r.line}`)
+      .join('\n');
+    navigator.clipboard?.writeText(text);
+  };
+
+  return (
+    <div className="dop-panel dev-log-panel">
+      <DevSecHead
+        title="Server log"
+        hint={paused
+          ? 'paused — live tail off'
+          : (streamErr || `live · ${logs.length} line${logs.length === 1 ? '' : 's'}`)}
+        meta={(filter ? `${filtered.length} match${filtered.length === 1 ? '' : 'es'} · ` : '')
+              + 'echoes app.py terminal output'}
+      />
+      <div className="dev-log-toolbar">
+        <input
+          type="text" className="dev-log-filter" placeholder="filter…"
+          value={filter} onChange={e => setFilter(e.target.value)}/>
+        <button className={'dev-log-btn' + (paused ? ' active' : '')}
+                onClick={() => setPaused(p => !p)}
+                title={paused ? 'Resume live tail' : 'Pause live tail'}>
+          <Icon name={paused ? 'play' : 'pause'} size={11}/>
+          {paused ? 'Resume' : 'Pause'}
+        </button>
+        <button className={'dev-log-btn' + (autoScroll ? ' active' : '')}
+                onClick={() => setAutoScroll(s => !s)}
+                title="Pin to bottom on new lines">
+          <Icon name="arrow-down" size={11}/> Follow
+        </button>
+        <button className="dev-log-btn" onClick={() => setLogs([])}
+                title="Clear local view (server ring keeps the lines)">
+          <Icon name="trash-2" size={11}/> Clear
+        </button>
+        <button className="dev-log-btn" onClick={copyAll} title="Copy visible lines">
+          <Icon name="copy" size={11}/> Copy
+        </button>
+      </div>
+      <div className="dev-log-body" ref={scrollRef} onScroll={onScroll}>
+        {filtered.length === 0 && (
+          <div className="dev-log-empty">
+            {filter ? 'No lines match the filter.' : 'Waiting for terminal output…'}
+          </div>
+        )}
+        {filtered.map(r => {
+          const stream = r.stream || 'stdout';
+          const cls = stream === 'stderr' ? 'dev-log-line stream-stderr'
+                    : stream.startsWith('logger:') ? 'dev-log-line stream-logger'
+                    : 'dev-log-line stream-stdout';
+          return (
+            <div key={r.seq} className={cls}>
+              <span className="dev-log-ts">{_logTimestamp(r.ts)}</span>
+              <span className="dev-log-stream">{_logStreamLabel(stream)}</span>
+              <span className="dev-log-text">{r.line}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+
+function HtopCpuPanel({ metrics }) {
+  const cpu  = metrics?.cpu  || null;
+  const mem  = metrics?.memory || null;
+  const temp = metrics?.cpu_temp || null;
+  const cores = cpu?.cores || [];
+  const loadAvg = cpu?.load_avg || null;
+  const error = cpu?.error;
+
+  if (error && !cores.length) {
+    return (
+      <div className="dop-panel">
+        <DevSecHead title="System resources" hint="psutil unavailable"/>
+        <div className="dop-empty" style={{ padding:'16px 14px', color:'var(--t3)', fontSize:13 }}>
+          {error.includes('not installed')
+            ? 'psutil not installed — pip install psutil to see live CPU + memory usage.'
+            : `psutil error: ${error}`}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="dop-panel">
+      <DevSecHead
+        title={`System resources · ${cores.length} core${cores.length === 1 ? '' : 's'}`}
+        hint="user · system · iowait · idle (htop-style)"/>
+      <div className="htop-cpu">
+        {cores.map((c, i) => {
+          const total = Math.max(0, Math.min(100, Number(c.total) || 0));
+          const u = Math.max(0, Math.min(100, Number(c.user)   || 0));
+          const s = Math.max(0, Math.min(100, Number(c.system) || 0));
+          const w = Math.max(0, Math.min(100, Number(c.iowait) || 0));
+          const tone = total >= 85 ? 'crit' : total >= 60 ? 'warn' : 'ok';
+          return (
+            <div key={i} className="htop-row">
+              <span className="htop-lbl">{String(i).padStart(2, '0')}</span>
+              <div className="htop-track" title={`Core ${i}: user ${u}% · sys ${s}% · iowait ${w}% · idle ${c.idle}%`}>
+                <div className="htop-seg htop-user"   style={{ width:`${u}%` }}/>
+                <div className="htop-seg htop-system" style={{ width:`${s}%` }}/>
+                <div className="htop-seg htop-iowait" style={{ width:`${w}%` }}/>
+              </div>
+              <span className={'htop-pct htop-pct-' + tone}>{Math.round(total)}<i>%</i></span>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Memory bar — single track using the same paint vocabulary so the
+          eye recognizes it as part of the same panel. */}
+      {mem && mem.total_mb != null && (
+        <div className="htop-mem">
+          <span className="htop-mem-lbl">Mem</span>
+          <div className="htop-track">
+            <div className="htop-seg htop-user" style={{ width:`${Math.min(100, mem.percent)}%` }}/>
+          </div>
+          <span className="htop-mem-num">
+            {Math.round((mem.used_mb || 0) / 1024 * 10) / 10}<i>G</i>
+            <em>/</em>
+            {Math.round((mem.total_mb || 0) / 1024 * 10) / 10}<i>G</i>
+          </span>
+        </div>
+      )}
+
+      {loadAvg && loadAvg.length === 3 && (
+        <div className="htop-load">
+          <span>load</span>
+          <b>{loadAvg[0].toFixed(2)}</b>
+          <i>·</i>
+          <b>{loadAvg[1].toFixed(2)}</b>
+          <i>·</i>
+          <b>{loadAvg[2].toFixed(2)}</b>
+          <span className="htop-load-hint">1 / 5 / 15 min</span>
+        </div>
+      )}
+
+      {/* CPU temperature row — psutil's sensors_temperatures(). Hidden
+          on platforms (macOS, locked-down Windows) where the OS doesn't
+          expose thermal zones to userspace. Color tone follows the same
+          ok/warn/crit ladder used by the per-core total. */}
+      {temp && Number.isFinite(temp.current) && (() => {
+        const t = temp.current;
+        const high = temp.high || 80;
+        const crit = temp.critical || 100;
+        const tone = t >= crit - 5 ? 'crit' : t >= high - 8 ? 'warn' : 'ok';
+        return (
+          <div className={'htop-temp htop-temp-' + tone}>
+            <Icon name="thermometer" size={11}/>
+            <span>cpu temp</span>
+            <b>{t.toFixed(1)}<i>°C</i></b>
+            <span className="htop-temp-meta" title={`${temp.label} (${temp.source})`}>
+              {temp.high ? `high ${temp.high}° / crit ${temp.critical || '?'}°` : temp.label}
+            </span>
+          </div>
+        );
+      })()}
+
+      {/* Legend. Mirrors the htop convention so anyone who's used a
+          terminal knows immediately what each color means. */}
+      <div className="htop-legend">
+        <span><i className="htop-dot htop-user"/> user</span>
+        <span><i className="htop-dot htop-system"/> system</span>
+        <span><i className="htop-dot htop-iowait"/> iowait</span>
+      </div>
+    </div>
+  );
+}
+
+
+/* Top-5 processes by CPU + memory, side-by-side. Each row is a single
+   "fuel-gauge" line: the colored bar lives in the row's BACKGROUND and
+   the process name + pid + value read on top of it. Compact and dense
+   without the cramped 4-column grid the previous design used. */
+function TopProcessesPanel({ processes }) {
+  const TOP = 5;
+  const byCpu = (processes?.by_cpu || []).slice(0, TOP);
+  const byMem = (processes?.by_mem || []).slice(0, TOP);
+  const error = processes?.error;
+  const total = processes?.total || 0;
+
+  if (error) {
+    return (
+      <div className="dop-panel">
+        <DevSecHead title="Top processes" hint="psutil unavailable"/>
+        <div className="dop-empty" style={{ padding:'16px 14px', color:'var(--t3)', fontSize:13 }}>
+          {error.includes('not installed')
+            ? 'psutil not installed — pip install psutil to see the process table.'
+            : `psutil error: ${error}`}
+        </div>
+      </div>
+    );
+  }
+  if (!processes || (!byCpu.length && !byMem.length)) {
+    return (
+      <div className="dop-panel">
+        <DevSecHead title="Top processes" hint="sampling…"/>
+        <div className="proc-skel">
+          {[0,1,2,3,4].map(i => <div key={i} className="proc-skel-row" style={{animationDelay: `${i*120}ms`}}/>)}
+        </div>
+      </div>
+    );
+  }
+
+  const renderRow = (p, kind, idx) => {
+    const v = kind === 'cpu' ? p.cpu : p.mem_pct;
+    const tone = v >= 60 ? 'crit' : v >= 25 ? 'warn' : 'ok';
+    const display = kind === 'cpu'
+      ? `${p.cpu.toFixed(1)}%`
+      : (p.mem_mb >= 1024
+          ? `${(p.mem_mb / 1024).toFixed(2)} GB`
+          : `${p.mem_mb.toFixed(0)} MB`);
+    return (
+      <li
+        key={p.pid}
+        className={'proc-row proc-tone-' + tone}
+        style={{ animationDelay: `${idx * 35}ms`, '--fill': `${Math.min(100, Math.max(0, v))}%` }}
+        title={`${p.name || '(unnamed)'} · pid ${p.pid} · ${p.user || 'unknown user'}`}>
+        <span className="proc-rank">{String(idx + 1).padStart(2, '0')}</span>
+        <span className="proc-name">{p.name || '(unnamed)'}</span>
+        <span className="proc-pid">{p.pid}</span>
+        <span className="proc-num">{display}</span>
+      </li>
+    );
+  };
+
+  return (
+    <div className="dop-panel">
+      <DevSecHead
+        title="Top processes"
+        hint={`top 5 of ${total} · sampled ${processes.sampled_at ? new Date(processes.sampled_at).toLocaleTimeString() : 'just now'}`}
+      />
+      <div className="proc-grid">
+        <div className="proc-col">
+          <div className="proc-col-h"><Icon name="cpu" size={11}/> CPU</div>
+          <ul className="proc-list">
+            {byCpu.map((p, i) => renderRow(p, 'cpu', i))}
+          </ul>
+        </div>
+        <div className="proc-col">
+          <div className="proc-col-h"><Icon name="memory-stick" size={11}/> Memory</div>
+          <ul className="proc-list">
+            {byMem.map((p, i) => renderRow(p, 'mem', i))}
+          </ul>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 
 function DevPage({ state: globalState, refresh: globalRefresh }) {
   const [data, setData] = useState(null);
@@ -6649,6 +7393,11 @@ function DevPage({ state: globalState, refresh: globalRefresh }) {
   const [reloadFlash, setReloadFlash] = useState(null);
   const [now, setNow] = useState(() => new Date());
   const [planFlash, setPlanFlash] = useState(null);
+  // Live system metrics — driven by the dedicated /api/dev/metrics
+  // fast-path endpoint so we can render htop-style CPU bars at a
+  // 2-second cadence without re-fetching the heavier /api/dev/overview
+  // payload (which iterates every session row).
+  const [metrics, setMetrics] = useState(null);
 
   const setPlanTier = async (userId, tier) => {
     if (!userId) return;
@@ -6695,6 +7444,25 @@ function DevPage({ state: globalState, refresh: globalRefresh }) {
     const id = setInterval(refresh, 10000);
     return () => clearInterval(id);
   }, [refresh]);
+
+  // Live psutil tick — every 2s while the Overview or Server tab is
+  // active. The Server tab opts into the per-process snapshot (heavier:
+  // ~250ms server-side) so the top-N tables can populate; Overview no
+  // longer renders htop bars so it just needs the cheap cpu/memory.
+  useEffect(() => {
+    if (devTab !== 'overview' && devTab !== 'server') return undefined;
+    const wantsProcesses = devTab === 'server';
+    let cancelled = false;
+    const tick = () => {
+      const url = '/api/dev/metrics' + (wantsProcesses ? '?with_processes=1' : '');
+      api.get(url)
+        .then(m => { if (!cancelled) setMetrics(m); })
+        .catch(() => {/* silent — last cached value remains visible */});
+    };
+    tick();
+    const id = setInterval(tick, 2000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [devTab]);
 
   useEffect(() => {
     if (selected) {
@@ -6834,70 +7602,69 @@ function DevPage({ state: globalState, refresh: globalRefresh }) {
       {/* ── Ops bar ───────────────────────────────────────────────── */}
       <div className="dop-opsbar">
         <div className="dop-opsbar-left">
-          <span className="dop-brand">JOBSAI <span>·</span> DEV</span>
-          <span className={'dop-pulse dop-pulse-' + opsHealth}>
+          <span className="dop-brand">Dev Console</span>
+          <span className={'dop-pulse dop-pulse-' + opsHealth} title={errorCount + ' open error(s) across active sessions'}>
             <span className="dop-dot"/>
-            {opsHealth === 'ok' ? 'LIVE' : opsHealth === 'warn' ? 'DEGRADED' : 'ALERT'}
+            {opsHealth === 'ok' ? 'All systems normal' : opsHealth === 'warn' ? `${errorCount} issue${errorCount === 1 ? '' : 's'}` : `${errorCount} alerts`}
           </span>
           {isImpersonating && (
             <span className="dop-pulse dop-pulse-warn">
-              <Icon name="eye" size={10}/> IMPERSONATING
+              <Icon name="eye" size={10}/> Viewing as user
             </span>
           )}
         </div>
         <div className="dop-opsbar-meta">
-          <span><i>UTC</i><b>{clock}</b></span>
-          <span><i>DATE</i><b>{dateStamp}</b></span>
-          <span><i>PY</i><b>{status.python || '—'}</b></span>
-          <span><i>OUT</i><b>{status.output_files ?? 0}</b></span>
-          <span><i>DB</i><b>{status.session_db_mb ?? 0}MB</b></span>
-          <span><i>DISK</i><b>{status.disk_free_gb ?? 0}G</b></span>
+          <span title="Local time"><i>Time</i><b>{clock}</b></span>
+          <span title="Today's date (UTC)"><i>Date</i><b>{dateStamp}</b></span>
+          <span title="Python version"><i>Python</i><b>{status.python || '—'}</b></span>
+          <span title="Generated artifacts in output/"><i>Outputs</i><b>{status.output_files ?? 0}</b></span>
+          <span title="Session DB file size"><i>DB</i><b>{status.session_db_mb ?? 0} MB</b></span>
+          <span title="Free disk space"><i>Disk</i><b>{status.disk_free_gb ?? 0} GB</b></span>
         </div>
         <div className="dop-opsbar-right">
           {isImpersonating && (
-            <button className="dop-btn dop-btn-warn" onClick={stopImpersonating}>
-              <Icon name="user-minus" size={11}/> STOP
+            <button className="dop-btn dop-btn-warn" onClick={stopImpersonating} title="Stop viewing as that user">
+              <Icon name="user-minus" size={11}/> Stop
             </button>
           )}
-          <button className="dop-btn" onClick={testAsCustomer}>
-            <Icon name="user" size={11}/> AS CUSTOMER
+          <button className="dop-btn" onClick={testAsCustomer} title="See the app the way a free-tier customer does">
+            <Icon name="user" size={11}/> As customer
           </button>
-          <button className="dop-btn" onClick={refresh} disabled={refreshing}>
+          <button className="dop-btn" onClick={refresh} disabled={refreshing} title="Reload metrics + sessions (auto-refreshes every 10s)">
             {refreshing ? <span className="spin" style={{ width:11, height:11, borderWidth:2 }}/> : <Icon name="refresh-cw" size={11}/>}
-            REFRESH
+            Refresh
           </button>
         </div>
       </div>
 
       {/* ── Sub-nav ───────────────────────────────────────────────── */}
       <nav className="dop-tabs" role="tablist" aria-label="Dev sub-pages">
-        {DEV_TABS.map((t, idx) => (
+        {DEV_TABS.map((t) => (
           <button
             key={t.id}
             role="tab"
             aria-selected={devTab === t.id}
             className={'dop-tab' + (devTab === t.id ? ' on' : '')}
-            onClick={() => setDevTab(t.id)}>
-            <span className="dop-tab-num">[{String(idx + 1).padStart(2, '0')}]</span>
-            <Icon name={t.icon} size={12}/>
+            onClick={() => setDevTab(t.id)}
+            title={t.hint}>
+            <Icon name={t.icon} size={13}/>
             <span className="dop-tab-label">{t.label}</span>
           </button>
         ))}
-        <span className="dop-tabs-trail">
-          <span className="dop-tab-cursor">▸</span> {DEV_TABS.find(t => t.id === devTab)?.label.toLowerCase()}
-        </span>
+        <span className="dop-tabs-hint">{DEV_TABS.find(t => t.id === devTab)?.hint}</span>
       </nav>
 
       {/* ── Sub-page body ────────────────────────────────────────── */}
       <div className="dop-body">
 
-        {/* [01] OVERVIEW ── KPIs · system status · activity */}
+        {/* OVERVIEW — at-a-glance health, system snapshot, recent users */}
         {devTab === 'overview' && (
           <div className="dop-page fade-in">
-            <div className="dop-secrow">
-              <div className="dop-sec-h"><span className="dop-sec-prefix">{'>'}</span> KPIs</div>
-              <div className="dop-sec-meta">last refresh {refreshing ? '… now' : '< 10s'}</div>
-            </div>
+            <DevSecHead
+              title="Key metrics"
+              hint="counts roll up across every authenticated user"
+              meta={refreshing ? 'updating now…' : 'auto-refreshing every 10s'}
+            />
             <div className="dop-kpis">
               <DevKpi label="Users"        value={summary.users || 0}        icon="users"/>
               <DevKpi label="Resumes"      value={summary.with_resume || 0}  icon="file-check-2"/>
@@ -6909,51 +7676,60 @@ function DevPage({ state: globalState, refresh: globalRefresh }) {
 
             <div className="dop-overview-grid">
               <div className="dop-panel">
-                <div className="dop-sec-h"><span className="dop-sec-prefix">{'>'}</span> SYSTEM</div>
+                <DevSecHead title="System" hint="server process snapshot"/>
                 <div className="dop-keyval">
-                  <div><span>app</span><b className={'tag tag-' + (status.app === 'running' ? 'ok' : 'bad')}>{status.app || '—'}</b></div>
-                  <div><span>python</span><b>{status.python || '—'}</b></div>
-                  <div><span>output_files</span><b>{status.output_files ?? 0}</b></div>
-                  <div><span>session_files</span><b>{status.session_files ?? 0}</b></div>
-                  <div><span>session_db_mb</span><b>{status.session_db_mb ?? 0}</b></div>
-                  <div><span>disk_free_gb</span><b>{status.disk_free_gb ?? 0}</b></div>
+                  <div><span>App status</span><b className={'tag tag-' + (status.app === 'running' ? 'ok' : 'bad')}>{status.app || '—'}</b></div>
+                  <div title={(metrics?.server_started_at || status.server_started_at || '') + ' (since process boot)'}>
+                    <span>Uptime</span>
+                    <b>{_formatUptime(metrics?.server_uptime_s ?? status.server_uptime_s ?? 0)}</b>
+                  </div>
+                  <div><span>Disk free</span><b>{status.disk_free_gb ?? 0} GB</b></div>
+                </div>
+                <div className="dop-sys-foot">
+                  <span><i>py</i><b>{status.python || '—'}</b></span>
+                  <span><i>db</i><b>{status.session_db_mb ?? 0} MB</b></span>
+                  <span><i>files</i><b>{status.output_files ?? 0}</b></span>
+                  <button className="dop-btn dop-btn-link dop-sys-link" onClick={() => setDevTab('server')}>
+                    <Icon name="cpu" size={11}/> Live resources →
+                  </button>
                 </div>
               </div>
 
               <div className="dop-panel">
-                <div className="dop-sec-h"><span className="dop-sec-prefix">{'>'}</span> ENV</div>
+                <DevSecHead title="Environment" hint="secrets & runtime flags"/>
                 <div className="dop-keyval">
-                  <div><span>ANTHROPIC_API_KEY</span><b className={'tag tag-' + (runtime?.env?.anthropic_key_present ? 'ok' : 'bad')}>{runtime?.env?.anthropic_key_present ? 'present' : 'missing'}</b></div>
-                  <div><span>SMTP</span><b className={'tag tag-' + (runtime?.env?.smtp_configured ? 'ok' : 'mid')}>{runtime?.env?.smtp_configured ? 'configured' : 'unset'}</b></div>
-                  <div><span>OLLAMA_URL</span><b className="tag tag-mid">{runtime?.env?.ollama_url || '—'}</b></div>
-                  <div><span>LOCAL_DEV_BYPASS</span><b className={'tag tag-' + (runtime?.env?.local_dev_bypass ? 'warn' : 'mid')}>{runtime?.env?.local_dev_bypass ? 'on' : 'off'}</b></div>
-                  <div><span>maintenance</span><b className={'tag tag-' + (runtime?.runtime?.maintenance ? 'warn' : 'mid')}>{runtime?.runtime?.maintenance ? 'on' : 'off'}</b></div>
-                  <div><span>verbose_logs</span><b className={'tag tag-' + (runtime?.runtime?.verbose_logs ? 'ok' : 'mid')}>{runtime?.runtime?.verbose_logs ? 'on' : 'off'}</b></div>
+                  <div><span>Anthropic API key</span><b className={'tag tag-' + (runtime?.env?.anthropic_key_present ? 'ok' : 'bad')}>{runtime?.env?.anthropic_key_present ? 'Present' : 'Missing'}</b></div>
+                  <div><span>SMTP</span><b className={'tag tag-' + (runtime?.env?.smtp_configured ? 'ok' : 'mid')}>{runtime?.env?.smtp_configured ? 'Configured' : 'Unset'}</b></div>
+                  <div><span>Ollama URL</span><b className="tag tag-mid" title={runtime?.env?.ollama_url || ''}>{runtime?.env?.ollama_url || '—'}</b></div>
+                  <div><span>Local dev bypass</span><b className={'tag tag-' + (runtime?.env?.local_dev_bypass ? 'warn' : 'mid')}>{runtime?.env?.local_dev_bypass ? 'On (insecure)' : 'Off'}</b></div>
+                  <div><span>Maintenance mode</span><b className={'tag tag-' + (runtime?.runtime?.maintenance ? 'warn' : 'mid')}>{runtime?.runtime?.maintenance ? 'On' : 'Off'}</b></div>
+                  <div><span>Verbose logs</span><b className={'tag tag-' + (runtime?.runtime?.verbose_logs ? 'ok' : 'mid')}>{runtime?.runtime?.verbose_logs ? 'On' : 'Off'}</b></div>
                 </div>
               </div>
 
               <div className="dop-panel">
-                <div className="dop-sec-h"><span className="dop-sec-prefix">{'>'}</span> RECENT USERS</div>
+                <DevSecHead title="Recent users" hint="click to jump to inspector"/>
                 <div className="dop-recent-users">
                   {sessions.slice(0, 6).map(s => (
                     <button key={s.id} className="dop-recent-row" onClick={() => { setSelected(s); setDevTab('sessions'); }}>
-                      <span className="dop-recent-id">{s.id.slice(0, 8)}</span>
+                      <span className="dop-recent-id" title={s.id}>{s.id.slice(0, 8)}</span>
                       <span className="dop-recent-name">{s.name || 'Anonymous'}</span>
-                      <span className="dop-recent-phase">{s.done.length}/7</span>
+                      <span className="dop-recent-phase" title={`${s.done.length} of 7 phases complete`}>{s.done.length}/7</span>
                       {s.unread_feedback_count > 0 && (
-                        <span className="dop-recent-fb"><Icon name="message-square" size={9}/>{s.unread_feedback_count}</span>
+                        <span className="dop-recent-fb" title={`${s.unread_feedback_count} unread feedback`}><Icon name="message-square" size={9}/>{s.unread_feedback_count}</span>
                       )}
                     </button>
                   ))}
-                  {sessions.length === 0 && <div className="dop-empty">No sessions yet.</div>}
+                  {sessions.length === 0 && <div className="dop-empty">No sessions yet — they'll appear here as users sign in.</div>}
                 </div>
               </div>
             </div>
 
-            <div className="dop-secrow" style={{ marginTop: 4 }}>
-              <div className="dop-sec-h"><span className="dop-sec-prefix">{'>'}</span> ACTIVITY</div>
-              <button className="dop-btn dop-btn-link" onClick={() => setDevTab('console')}>view full log →</button>
-            </div>
+            <DevSecHead
+              title="Activity"
+              hint="server-side events from the last few minutes"
+              extra={<button className="dop-btn dop-btn-link" onClick={() => setDevTab('console')}>View full log →</button>}
+            />
             <div className="dop-events">
               {(data.events || []).slice(0, 8).map((e, i) => (
                 <div key={i} className="dop-event">
@@ -6962,24 +7738,30 @@ function DevPage({ state: globalState, refresh: globalRefresh }) {
                   <p>{e.message}</p>
                 </div>
               ))}
-              {(data.events || []).length === 0 && <div className="dop-empty">No recent events.</div>}
+              {(data.events || []).length === 0 && <div className="dop-empty">Nothing recent. The server is quiet.</div>}
             </div>
+
+            {/* Live mirror of the running app.py terminal. Sits at the
+                bottom of the overview (full-width) since the lines are
+                wide and the user typically scrolls to it intentionally. */}
+            <DevServerLogPanel active={devTab === 'overview'}/>
           </div>
         )}
 
-        {/* [02] SESSIONS ── user list + inspector */}
+        {/* SESSIONS — user list + inspector */}
         {devTab === 'sessions' && (
           <div className="dop-page dop-sessions fade-in">
             <aside className="dop-userlist">
-              <div className="dop-sec-h" style={{ paddingLeft: 4 }}>
-                <span className="dop-sec-prefix">{'>'}</span> USERS
-                <span className="dop-pill-mini">{sessions.length}</span>
+              <div className="dop-userlist-head">
+                <span className="dop-userlist-title">All users</span>
+                <span className="dop-userlist-count">{sessions.length}</span>
               </div>
               <div className="dop-userlist-scroll">
                 {sessions.map(s => (
                   <button key={s.id}
                     className={'dop-user' + (active?.id === s.id ? ' on' : '')}
-                    onClick={() => setSelected(s)}>
+                    onClick={() => setSelected(s)}
+                    title={s.email || s.id}>
                     <span className="dop-user-av">{(s.name || 'U')[0]}</span>
                     <span className="dop-user-meta">
                       <b>{s.name || 'Anonymous'}</b>
@@ -6987,18 +7769,19 @@ function DevPage({ state: globalState, refresh: globalRefresh }) {
                     </span>
                     <span className="dop-user-tail">
                       {s.user_id && (
-                        <span className={'plan-pill-mini plan-pill-' + (s.plan_tier || 'free')}>
-                          {(s.plan_tier || 'free').slice(0, 4).toUpperCase()}
+                        <span className={'plan-pill-mini plan-pill-' + (s.plan_tier || 'free')}
+                              title={`Plan tier: ${s.plan_tier || 'free'}`}>
+                          {((s.plan_tier || 'free') === 'pro') ? 'Pro' : 'Free'}
                         </span>
                       )}
-                      <em>{s.done.length}/7</em>
+                      <em title={`${s.done.length} of 7 phases complete`}>{s.done.length}/7</em>
                       {s.unread_feedback_count > 0 && (
-                        <span className="dop-user-fb"><Icon name="message-square" size={9}/>{s.unread_feedback_count}</span>
+                        <span className="dop-user-fb" title={`${s.unread_feedback_count} unread feedback`}><Icon name="message-square" size={9}/>{s.unread_feedback_count}</span>
                       )}
                     </span>
                   </button>
                 ))}
-                {sessions.length === 0 && <div className="dop-empty">No sessions.</div>}
+                {sessions.length === 0 && <div className="dop-empty">No sessions yet.</div>}
               </div>
             </aside>
 
@@ -7013,57 +7796,64 @@ function DevPage({ state: globalState, refresh: globalRefresh }) {
                   <div className="dop-inspect-head">
                     <div className="dop-inspect-id">
                       <div className="dop-inspect-name">{active.name || 'Anonymous'}</div>
-                      <code className="dop-inspect-sid">{active.id}</code>
+                      <div className="dop-inspect-meta-row">
+                        <code className="dop-inspect-sid" title="Session ID">{active.id}</code>
+                        {active.email && <span className="dop-inspect-email">{active.email}</span>}
+                      </div>
                     </div>
                     <div className="dop-inspect-actions">
                       <button className="dop-btn dop-btn-warn"
-                        onClick={async () => { if (confirm('Reset this session state? Files will be deleted.')) { await api.post(`/api/dev/session/${active.id}/reset`, {}); refresh(); setSelected(null); } }}>
-                        <Icon name="rotate-ccw" size={11}/> RESET
+                        onClick={async () => { if (confirm('Reset this session state? Files will be deleted.')) { await api.post(`/api/dev/session/${active.id}/reset`, {}); refresh(); setSelected(null); } }}
+                        title="Wipe session state but keep the user account">
+                        <Icon name="rotate-ccw" size={11}/> Reset session
                       </button>
                       <button className="dop-btn dop-btn-bad"
-                        onClick={async () => { if (confirm('Delete this user entirely? This cannot be undone.')) { await fetch(`/api/dev/session/${active.id}`, { method:'DELETE' }); refresh(); setSelected(null); } }}>
-                        <Icon name="trash-2" size={11}/> DELETE
+                        onClick={async () => { if (confirm('Delete this user entirely? This cannot be undone.')) { await fetch(`/api/dev/session/${active.id}`, { method:'DELETE' }); refresh(); setSelected(null); } }}
+                        title="Permanently delete this user and all their data">
+                        <Icon name="trash-2" size={11}/> Delete user
                       </button>
-                      <button className="dop-btn dop-btn-accent" onClick={() => impersonate(active.id)}>
-                        <Icon name="user-plus" size={11}/> VIEW AS USER
+                      <button className="dop-btn dop-btn-accent" onClick={() => impersonate(active.id)}
+                        title="Open the app from this user's perspective">
+                        <Icon name="user-plus" size={11}/> View as user
                       </button>
                     </div>
                   </div>
 
                   <div className="dop-inspect-grid">
                     <div className="dop-panel dop-panel-plan">
-                      <div className="dop-sec-h">
-                        <span className="dop-sec-prefix">{'>'}</span> PLAN
-                        {active.is_developer && <span className="dop-pill-mini">DEV</span>}
-                      </div>
+                      <DevSecHead
+                        title="Plan & billing"
+                        hint="manual flip mirrors the Stripe webhook"
+                        extra={active.is_developer && <span className="dop-pill-mini dop-pill-dev">Developer</span>}
+                      />
                       {!active.user_id ? (
                         <div className="dop-empty">Anonymous session — no user account to bill.</div>
                       ) : (
                         <>
                           <div className="dop-keyval">
-                            <div><span>tier</span>
+                            <div><span>Tier</span>
                               <b className={'plan-pill plan-pill-' + (active.plan_tier || 'free')}>
-                                {(active.plan_tier || 'free').toUpperCase()}
+                                {(active.plan_tier || 'free') === 'pro' ? 'Pro' : 'Free'}
                               </b>
                             </div>
-                            <div><span>email</span><b style={{fontFamily:'var(--mono)',fontSize:11}}>{active.email || '—'}</b></div>
+                            <div><span>Email</span><b style={{fontFamily:'var(--mono)',fontSize:11.5}}>{active.email || '—'}</b></div>
                           </div>
                           <div className="dop-plan-actions">
                             {(active.plan_tier || 'free') === 'free' ? (
                               <button className="dop-btn dop-btn-accent" onClick={() => setPlanTier(active.user_id, 'pro')}>
-                                <Icon name="zap" size={11}/> GRANT PRO
+                                <Icon name="zap" size={11}/> Grant Pro
                               </button>
                             ) : (
                               <button className="dop-btn dop-btn-warn" onClick={() => setPlanTier(active.user_id, 'free')}>
-                                <Icon name="arrow-down" size={11}/> REVOKE PRO
+                                <Icon name="arrow-down" size={11}/> Revoke Pro
                               </button>
                             )}
                             {planFlash?.userId === active.user_id && (
                               <span className={'dop-plan-flash dop-plan-flash-' + planFlash.kind}>
                                 <Icon name={planFlash.kind === 'ok' ? 'check' : 'x'} size={10}/>
                                 {planFlash.kind === 'ok'
-                                  ? `set to ${planFlash.tier}`
-                                  : (planFlash.message || 'failed')}
+                                  ? `Set to ${planFlash.tier}`
+                                  : (planFlash.message || 'Failed')}
                               </span>
                             )}
                           </div>
@@ -7072,24 +7862,36 @@ function DevPage({ state: globalState, refresh: globalRefresh }) {
                     </div>
 
                     <div className="dop-panel">
-                      <div className="dop-sec-h"><span className="dop-sec-prefix">{'>'}</span> STATS</div>
+                      <DevSecHead title="Pipeline progress" hint="phase counts and discovery state"/>
                       <div className="dop-keyval">
-                        <div><span>resume</span><b>{active.has_resume ? 'yes' : 'no'}</b></div>
-                        <div><span>target</span><b>{active.target || '—'}</b></div>
-                        <div><span>jobs</span><b>{active.job_count}</b></div>
-                        <div><span>scored</span><b>{active.scored_count}</b></div>
-                        <div><span>apps</span><b>{active.application_count}</b></div>
-                        <div><span>applied</span><b>{active.applied_count}</b></div>
+                        <div><span>Resume</span><b>{active.has_resume ? 'Uploaded' : 'None'}</b></div>
+                        <div><span>Target roles</span><b style={{fontFamily:'var(--mono)',fontSize:11.5}}>{active.target || '—'}</b></div>
+                        <div><span>Jobs discovered</span><b>{active.job_count}</b></div>
+                        <div><span>Jobs scored</span><b>{active.scored_count}</b></div>
+                        <div><span>Applications built</span><b>{active.application_count}</b></div>
+                        <div><span>Applications submitted</span><b>{active.applied_count}</b></div>
                       </div>
-                      <div className="dop-phases">
-                        {[1,2,3,4,5,6,7].map(n => (
-                          <span key={n} className={active.done.includes(n) ? 'on' : ''}>{n}</span>
-                        ))}
+                      <div className="dop-phases" role="group" aria-label="Pipeline phases completed">
+                        {PHASE_LABELS.map((label, i) => {
+                          const n = i + 1;
+                          const done = active.done.includes(n);
+                          return (
+                            <span key={n} className={done ? 'on' : ''} title={`Phase ${n}: ${label}${done ? ' (complete)' : ' (not yet run)'}`}>
+                              {n}
+                            </span>
+                          );
+                        })}
                       </div>
                     </div>
 
                     <div className="dop-panel dop-panel-feedback">
-                      <div className="dop-sec-h"><span className="dop-sec-prefix">{'>'}</span> FEEDBACK <span className="dop-pill-mini">{(fullState?.feedback || []).length}</span></div>
+                      <DevSecHead
+                        title="User feedback"
+                        hint="messages this user sent in-app"
+                        extra={(fullState?.feedback || []).length > 0 && (
+                          <span className="dop-pill-mini">{(fullState?.feedback || []).length}</span>
+                        )}
+                      />
                       {loadingFull ? <div className="dop-empty">Loading…</div> :
                         ((fullState?.feedback || []).length > 0 ? (
                           <div className="dop-fb-list">
@@ -7097,7 +7899,7 @@ function DevPage({ state: globalState, refresh: globalRefresh }) {
                               <div key={f.id} className="dop-fb-item">
                                 <div className="dop-fb-meta">
                                   <span>{new Date(f.created_at).toLocaleString()}</span>
-                                  {!f.read && <span className="dop-fb-new">NEW</span>}
+                                  {!f.read && <span className="dop-fb-new">New</span>}
                                 </div>
                                 <div className="dop-fb-msg">{f.message}</div>
                               </div>
@@ -7108,7 +7910,7 @@ function DevPage({ state: globalState, refresh: globalRefresh }) {
                                 api.get(`/api/dev/session/${active.id}`).then(setFullState);
                                 refresh();
                               }}>
-                                <Icon name="check-check" size={11}/> mark all read
+                                <Icon name="check-check" size={11}/> Mark all read
                               </button>
                             )}
                           </div>
@@ -7117,18 +7919,13 @@ function DevPage({ state: globalState, refresh: globalRefresh }) {
                     </div>
 
                     <div className="dop-panel">
-                      <div className="dop-sec-h"><span className="dop-sec-prefix">{'>'}</span> RESUME TEXT</div>
+                      <DevSecHead title="Resume text" hint="first 2000 chars of the parsed plain text"/>
                       <pre className="dop-pre dop-pre-fixed">
-                        {loadingFull ? 'Loading…' : (fullState?.resume_text || '∅  No resume uploaded.')}
+                        {loadingFull ? 'Loading…' : (fullState?.resume_text || 'No resume uploaded.')}
                       </pre>
                     </div>
 
-                    <div className="dop-panel">
-                      <div className="dop-sec-h"><span className="dop-sec-prefix">{'>'}</span> FULL STATE JSON</div>
-                      <pre className="dop-pre dop-pre-fixed dop-pre-json">
-                        {loadingFull ? 'Loading…' : JSON.stringify(fullState, null, 2)}
-                      </pre>
-                    </div>
+                    <DevJsonPanel data={fullState} loading={loadingFull}/>
                   </div>
                 </>
               )}
@@ -7136,17 +7933,31 @@ function DevPage({ state: globalState, refresh: globalRefresh }) {
           </div>
         )}
 
-        {/* [03] SERVER ── runtime + LLM + pipeline */}
+        {/* SERVER — runtime + LLM + pipeline + live system resources */}
         {devTab === 'server' && (
           <div className="dop-page fade-in">
-            <div className="dop-secrow">
-              <div className="dop-sec-h"><span className="dop-sec-prefix">{'>'}</span> SERVER CONTROLS</div>
-              <div className="dop-sec-meta">live · no restart</div>
+            {/* Live psutil-driven resource panels — htop CPU breakdown +
+                memory + load avg + temperature, then the top-N processes
+                by CPU and memory.  Both poll /api/dev/metrics every 2s
+                (with the per-process snapshot opt-in via with_processes=1). */}
+            <DevSecHead
+              title="Live system resources"
+              hint="2-second refresh · psutil-driven"
+              meta={metrics?.cpu_temp ? `CPU ${metrics.cpu_temp.current}°C` : null}
+            />
+            <div className="dop-resources-grid">
+              <HtopCpuPanel metrics={metrics || { cpu: status.cpu, memory: status.memory, server_uptime_s: status.server_uptime_s, cpu_temp: status.cpu_temp }}/>
+              <TopProcessesPanel processes={metrics?.processes}/>
             </div>
+
+            <DevSecHead
+              title="Server controls"
+              hint="changes apply live — no process restart needed"
+            />
 
             <div className="sc-grid">
               <div className="sc-col sc-runtime">
-                <div className="sc-col-h"><Icon name="server" size={11}/> Runtime · all sessions</div>
+                <div className="sc-col-h"><Icon name="server" size={11}/> Runtime — applies to every session</div>
 
                 <div className="sc-row">
                   <div className="sc-row-l">
@@ -7216,7 +8027,7 @@ function DevPage({ state: globalState, refresh: globalRefresh }) {
               </div>
 
               <div className="sc-col">
-                <div className="sc-col-h"><Icon name="cpu" size={11}/> LLM Provider · this session</div>
+                <div className="sc-col-h"><Icon name="cpu" size={11}/> LLM provider — this session only</div>
                 <div className="sc-radio-row">
                   {['anthropic', 'ollama', 'demo'].map(m => (
                     <button
@@ -7257,7 +8068,7 @@ function DevPage({ state: globalState, refresh: globalRefresh }) {
               </div>
 
               <div className="sc-col">
-                <div className="sc-col-h"><Icon name="gauge" size={11}/> Pipeline · this session</div>
+                <div className="sc-col-h"><Icon name="gauge" size={11}/> Pipeline — this session only</div>
                 <div className="sc-field">
                   <label>Score threshold <i>{globalState?.threshold ?? 75}</i></label>
                   <input type="range" min="50" max="95" step="1" className="set-range"
@@ -7296,14 +8107,14 @@ function DevPage({ state: globalState, refresh: globalRefresh }) {
           </div>
         )}
 
-        {/* [04] CONSOLE ── CLI + events */}
+        {/* CONSOLE — sandboxed CLI + event log */}
         {devTab === 'console' && (
           <div className="dop-page dop-console fade-in">
             <div className="dop-panel dop-panel-cli">
-              <div className="dop-secrow">
-                <div className="dop-sec-h"><span className="dop-sec-prefix">{'>'}</span> CLI</div>
-                <div className="dop-sec-meta">whitelist · sandboxed</div>
-              </div>
+              <DevSecHead
+                title="Sandboxed CLI"
+                hint="whitelisted read-only inspections — never execs arbitrary code"
+              />
               <div className="dop-cli-actions">
                 {commands.map(([id, label]) => (
                   <button key={id}
@@ -7320,15 +8131,16 @@ function DevPage({ state: globalState, refresh: globalRefresh }) {
                       <span className="dop-pre-prompt">$ {cli.command}</span>{'\n'}
                       {cli.output}
                     </>
-                  : <span className="dop-pre-hint">$ — pick a command above to run a sandboxed inspection.</span>}
+                  : <span className="dop-pre-hint">Pick a command above to run a sandboxed inspection.</span>}
               </pre>
             </div>
 
             <div className="dop-panel">
-              <div className="dop-secrow">
-                <div className="dop-sec-h"><span className="dop-sec-prefix">{'>'}</span> RECENT EVENTS</div>
-                <div className="dop-sec-meta">{(data.events || []).length} entries</div>
-              </div>
+              <DevSecHead
+                title="Recent events"
+                hint="server-emitted events for this process"
+                meta={`${(data.events || []).length} entr${(data.events || []).length === 1 ? 'y' : 'ies'}`}
+              />
               <div className="dop-events dop-events-tall">
                 {(data.events || []).slice(0, 80).map((e, i) => (
                   <div key={i} className="dop-event">
@@ -7343,13 +8155,14 @@ function DevPage({ state: globalState, refresh: globalRefresh }) {
           </div>
         )}
 
-        {/* [05] TWEAKS ── UI customizations */}
+        {/* TWEAKS — per-session UI experiments */}
         {devTab === 'tweaks' && (
           <div className="dop-page fade-in" style={{ maxWidth: 720 }}>
-            <div className="dop-secrow">
-              <div className="dop-sec-h"><span className="dop-sec-prefix">{'>'}</span> SITE TWEAKS</div>
-              <div className="dop-sec-meta">applied to this session only</div>
-            </div>
+            <DevSecHead
+              title="Site tweaks"
+              hint="visual experiments — applied to this session only, not persisted globally"
+            />
+
 
             <div className="dop-panel">
               <div className="sc-col-h"><Icon name="palette" size={11}/> Accent</div>
@@ -7416,6 +8229,72 @@ function DevKpi({ label, value, icon, warn }) {
       <Icon name={icon} size={15}/>
       <span>{label}</span>
       <b>{value}</b>
+    </div>
+  );
+}
+
+/* Section header for the Dev Console. `meta` is a small right-aligned
+   label (e.g. "last refresh < 10s") and `extra` slots an action button. */
+function DevSecHead({ title, hint, meta, extra }) {
+  return (
+    <header className="dop-secrow">
+      <div className="dop-sec-h">
+        <span className="dop-sec-dot" aria-hidden="true"/>
+        <span className="dop-sec-title">{title}</span>
+        {hint && <span className="dop-sec-hint">— {hint}</span>}
+      </div>
+      <div className="dop-sec-tail">
+        {meta && <span className="dop-sec-meta">{meta}</span>}
+        {extra}
+      </div>
+    </header>
+  );
+}
+
+/* Hover-tooltip labels for the seven pipeline phase chips. */
+const PHASE_LABELS = [
+  'Resume ingestion',
+  'Job discovery',
+  'Relevance scoring',
+  'Resume tailoring',
+  'Application submission',
+  'Excel tracker',
+  'Run report',
+];
+
+/* Collapsible session_state dump — closed by default since it can run
+   into hundreds of kB and would otherwise dominate the inspector grid. */
+function DevJsonPanel({ data, loading }) {
+  const [open, setOpen] = useState(false);
+  const text = loading ? 'Loading…' : JSON.stringify(data, null, 2);
+  const sizeKb = !loading && data ? Math.round(text.length / 1024) : 0;
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(text); }
+    catch (_) { /* clipboard blocked — silent */ }
+  };
+  return (
+    <div className="dop-panel">
+      <DevSecHead
+        title="Full session JSON"
+        hint="raw state — useful for replaying bugs"
+        extra={(
+          <span className="dop-json-actions">
+            {!loading && <span className="dop-sec-meta">{sizeKb} KB</span>}
+            <button className="dop-btn dop-btn-link" onClick={copy} disabled={loading}>
+              <Icon name="copy" size={11}/> Copy
+            </button>
+            <button className="dop-btn dop-btn-link" onClick={() => setOpen(o => !o)}>
+              <Icon name={open ? 'chevron-up' : 'chevron-down'} size={11}/>
+              {open ? 'Hide' : 'Show'}
+            </button>
+          </span>
+        )}
+      />
+      {open && (
+        <pre className="dop-pre dop-pre-fixed dop-pre-json">
+          {text}
+        </pre>
+      )}
     </div>
   );
 }

@@ -117,6 +117,14 @@ greenhouse:
   - canva              # AU — design
   - airwallex          # AU/HK — fintech
   - shopify            # CA — global, also already in Tech
+  # Hong Kong — heavy concentration of fintech, web3, logistics, gaming
+  - animocabrands      # HK — web3 / blockchain gaming, ~80 active
+  - lalamove           # HK — on-demand logistics across APAC + LatAm
+  - cryptocom          # HK/SG — crypto exchange (note: no dot in slug)
+  - bitmex             # HK — derivatives exchange
+  - liquidio           # HK — crypto exchange (Quoine)
+  - bigpay             # MY/HK — fintech
+  - amber-group        # HK — crypto trading (some boards use hyphen)
   # India
   - razorpay           # IN — payments (also on Lever)
   # LatAm + Africa  (nubank already listed in Finance section)
@@ -137,6 +145,11 @@ lever:
   - klook            # HK — travel
   - cresta           # US/global — AI for contact centers
   - hugging-face     # FR/global — note hyphen vs greenhouse slug
+  # Hong Kong
+  - tap              # HK — Tap Network (loyalty/payments)
+  - hex-trust        # HK — institutional crypto custody
+  - circles          # SG/HK — telecom
+  - finchat          # HK/global — finance research
 
 ashby:
   - linear
@@ -175,3 +188,9 @@ workable:
   - elements         # global — eng services
   - jobandtalent     # ES — staffing
   - workmotion       # DE — global hiring
+  # Hong Kong — Workable is heavily used by HK SMB tech/insurtech
+  - welab            # HK — digital banking
+  - bowtie           # HK — virtual insurance
+  - gogox            # HK/APAC — logistics (formerly GoGoVan)
+  - oneDegree        # HK — insurtech
+  - prenetics        # HK — health diagnostics

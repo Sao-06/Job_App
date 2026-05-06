@@ -41,7 +41,7 @@ class JoobleSource:
     LOCATIONS: tuple[str, ...] = (
         "United States", "United Kingdom", "Canada", "Australia",
         "Germany", "France", "Netherlands", "Spain", "Italy", "Sweden",
-        "India", "Singapore", "Japan", "South Korea",
+        "India", "Singapore", "Hong Kong", "Japan", "South Korea", "Taiwan",
         "Brazil", "Mexico",
         "United Arab Emirates", "Israel", "South Africa", "Poland",
     )

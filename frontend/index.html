@@ -2099,10 +2099,30 @@ input, select, textarea { font-family:var(--sans) }
 }
 
 /* ── AUTH PAGE ── */
+/* Layout note: previously `display:grid; place-items:center; overflow:hidden`
+   centered the card but when the card was taller than the viewport (short
+   phones, landscape, large dynamic-type users) the overflow extended equally
+   above + below the viewport — and `overflow:hidden` blocked any way to
+   reach it. Switched to flex with `justify-content: safe center` so the
+   card centers when it fits and falls back to top-aligned when it doesn't,
+   plus `overflow-y: auto` so the user can actually scroll to the submit
+   button. `100dvh` (vs `100vh`) accounts for the iOS Safari URL bar.
+   `overflow-x: hidden` is kept so the decorative ::before/::after blooms
+   (which extend outside the page bounds) don't cause horizontal scroll. */
 .auth-page {
   position: fixed; inset: 0; z-index: 999;
-  display: grid; place-items: center; padding: 24px;
-  background: var(--bg); overflow: hidden; isolation: isolate;
+  display: flex; flex-direction: column;
+  justify-content: safe center;
+  align-items: center;
+  padding:
+    max(24px, env(safe-area-inset-top, 24px))
+    24px
+    max(24px, env(safe-area-inset-bottom, 24px));
+  background: var(--bg); isolation: isolate;
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  min-height: 100dvh;
 }
 /* Atmospheric indigo blooms */
 .auth-page::before, .auth-page::after {
@@ -2288,6 +2308,36 @@ input, select, textarea { font-family:var(--sans) }
   padding: 0; margin-left: 6px;
 }
 .auth-switch button:hover { text-decoration: underline; text-underline-offset: 3px }
+
+/* Mobile / short-viewport compactions — keep the whole sign-in card
+   reachable on iPhone SE / SE 2 / mini, landscape phones, and dynamic
+   type. The flex layout above already makes the page scrollable, but
+   reducing chrome lets the card actually fit without needing to scroll
+   on most phones. */
+@media (max-width: 480px) {
+  .auth-card {
+    padding: 28px 22px 22px;
+    border-radius: 18px;
+  }
+  .auth-brand   { margin-bottom: 18px }
+  .auth-head    { margin-bottom: 18px }
+  .auth-h       { font-size: 26px; line-height: 1.2 }
+  .auth-sub     { font-size: 14.5px; margin-top: 6px }
+  .auth-google  { margin-bottom: 14px; padding: 10px 14px; font-size: 15.5px }
+  .auth-divider { margin-bottom: 14px; font-size: 12px; letter-spacing: .22em }
+}
+/* Very short viewports (landscape phones, accessibility zoom, etc.) —
+   shave another row of vertical space so the form is reachable
+   without the scroll being a full-page swipe. */
+@media (max-height: 700px) {
+  .auth-card {
+    padding: 22px 22px 18px;
+  }
+  .auth-brand   { margin-bottom: 12px }
+  .auth-head    { margin-bottom: 14px }
+  .auth-google  { margin-bottom: 12px }
+  .auth-divider { margin-bottom: 12px }
+}
 
 /* Light theme tweaks */
 :root[data-theme="light"] .auth-card {

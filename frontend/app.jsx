@@ -3504,6 +3504,36 @@ function ResumePage({ state, refresh, setPage }) {
       <div className="page-head">
         <div className="page-title-big">Resume</div>
         <div className="head-spacer"/>
+        {/* Re-scan the currently-selected resume with the configured AI.
+            Mirrors the home-page hero CTA so the same action is reachable
+            without bouncing back to home. Hidden when there's no resume
+            yet (nothing to scan); disabled while a scan is already in
+            flight (server-side `extracting` flag OR our local optimistic
+            flag). */}
+        {selected && (
+          <button
+            className="btn-ghost"
+            disabled={rescanning || !!selected.extracting}
+            onClick={async () => {
+              if (rescanning || selected.extracting) return;
+              setRescanning(true);
+              try {
+                await api.post('/api/profile/extract',
+                                { resume_id: selected.id, force: true });
+                await refresh?.();
+              } catch (_) { /* server-side extracting state surfaces via polling */ }
+              finally { setRescanning(false); }
+            }}
+            style={{ marginRight: 8 }}
+            title={(rescanning || selected.extracting)
+              ? 'Re-scan in progress…'
+              : `Re-scan ${selected.filename} with the configured AI`}
+          >
+            {(rescanning || selected.extracting)
+              ? <><span className="spin"/> Scanning…</>
+              : <><Icon name="refresh-cw" size={13} color="var(--cyan, #22e5ff)"/> Re-scan</>}
+          </button>
+        )}
         <div ref={addMenuRef} style={{ position:'relative', display:'inline-flex' }}>
           <button
             className="head-cta"

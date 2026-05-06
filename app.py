@@ -335,6 +335,47 @@ _memory_sessions: dict[str, dict] = {}
 # Started inside FastAPI's startup event so reloads / test harnesses don't
 # spawn a duplicate scheduler.
 @app.on_event("startup")
+def _ensure_schema_migrations() -> None:
+    """Belt-and-suspenders schema migration runner. The session store also
+    runs migrations during its own __init__, but doing it again at startup
+    means: (a) a code update that adds a new column gets applied even if
+    the session_store object was constructed before the new migration
+    was added; (b) the migration log shows up in journalctl regardless of
+    when the store was first touched. Idempotent — every call is a no-op
+    once the schema is current.
+
+    This is the long-term fix for the silent ALTER TABLE failures that
+    used to cause `no such column: jp.job_category` on the Pi after
+    `git pull && systemctl restart jobapp`.
+    """
+    if _session_store is None:
+        return
+    try:
+        from pipeline.migrations import apply_all_migrations
+        from pipeline.job_repo import init_schema as _init_jobs_schema
+        with _session_store.connect() as conn:
+            # Re-run jobs CREATE statements first so a fresh column added in
+            # the same release as a fresh table doesn't fail the column add.
+            _init_jobs_schema(conn)
+            applied = apply_all_migrations(conn)
+        if applied:
+            print(
+                f"[schema] migrations applied this boot: {len(applied)} step(s)",
+                file=sys.stderr, flush=True,
+            )
+    except Exception as exc:
+        # Migration must NEVER abort startup — failures are logged loudly so
+        # the user can see them in journalctl and apply the manual fix.
+        import traceback
+        print(
+            f"[schema] WARNING: schema migration failed at startup — "
+            f"jobs feed may return 500: {type(exc).__name__}: {exc}",
+            file=sys.stderr, flush=True,
+        )
+        traceback.print_exc(file=sys.stderr)
+
+
+@app.on_event("startup")
 def _start_ingestion() -> None:
     if os.environ.get("JOBS_AI_DISABLE_INGESTION"):
         # Test harness sets this to skip the 60s parallel backfill that

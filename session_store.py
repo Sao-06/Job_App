@@ -188,36 +188,15 @@ class SQLiteSessionStore:
                 )
                 """
             )
-            try:
-                conn.execute(
-                    "ALTER TABLE users ADD COLUMN is_developer INTEGER NOT NULL DEFAULT 0"
-                )
-            except sqlite3.OperationalError:
-                pass
-            try:
-                conn.execute(
-                    "ALTER TABLE users ADD COLUMN plan_tier TEXT NOT NULL DEFAULT 'free'"
-                )
-            except sqlite3.OperationalError:
-                pass
-            # Stripe billing — idempotent migrations. customer_id is permanent
-            # once issued (a returning user reuses the same Customer record);
-            # subscription_id rotates as users cancel and resubscribe.
-            try:
-                conn.execute("ALTER TABLE users ADD COLUMN stripe_customer_id TEXT")
-            except sqlite3.OperationalError:
-                pass
-            try:
-                conn.execute("ALTER TABLE users ADD COLUMN stripe_subscription_id TEXT")
-            except sqlite3.OperationalError:
-                pass
-            try:
-                conn.execute(
-                    "CREATE INDEX IF NOT EXISTS ix_users_stripe_customer "
-                    "ON users(stripe_customer_id)"
-                )
-            except sqlite3.OperationalError:
-                pass
+            # All idempotent column / index additions delegate to the central
+            # migrations module. It uses PRAGMA table_info to detect missing
+            # columns explicitly and re-raises real failures (instead of the
+            # old `try: ALTER…; except: pass` pattern that silently hid the
+            # job_category migration when it failed on the Pi). See
+            # pipeline/migrations.py.
+            from pipeline.migrations import apply_all_migrations
+            apply_all_migrations(conn)
+
             # One-shot purge of any auth_tokens rows that pre-date the
             # SHA-256 hashing migration. Existing rows store the raw bearer
             # cookie verbatim, which would still allow impersonation if
@@ -236,13 +215,23 @@ class SQLiteSessionStore:
                 pass
             # Job postings + FTS5 + source_runs live in the same DB so the
             # ingestion worker doesn't need a second writer connection.
+            # If the jobs schema fails to initialize, LOG the exception
+            # explicitly — do not let the failure vanish silently the way it
+            # did pre-migrations refactor. Auth/session tables still come up.
             try:
                 from pipeline.job_repo import init_schema as _init_jobs_schema
                 _init_jobs_schema(conn)
-            except Exception:
-                # Don't let a job-schema migration failure block the auth/session
-                # tables from coming up.
-                pass
+            except Exception as exc:
+                import sys, traceback
+                print(
+                    f"[session_store] WARNING: pipeline.job_repo.init_schema "
+                    f"failed — jobs feed may be broken: "
+                    f"{type(exc).__name__}: {exc}",
+                    file=sys.stderr, flush=True,
+                )
+                traceback.print_exc(file=sys.stderr)
+                # Re-raise in DEBUG mode would be friendlier, but auth must
+                # still come up so users can sign in even if jobs are broken.
 
     def connect(self) -> sqlite3.Connection:
         """Public accessor for the ingestion worker; mirrors `_connect`."""

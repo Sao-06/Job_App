@@ -43,6 +43,122 @@ if hasattr(sys.stdout, "buffer") and "utf" not in (sys.stdout.encoding or "").lo
 if hasattr(sys.stderr, "buffer") and "utf" not in (sys.stderr.encoding or "").lower():
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
+# ── Server log mirror ─────────────────────────────────────────────────────
+# Tee stdout/stderr into a bounded ring so the Dev Ops page can echo the
+# terminal output without scraping process pipes from outside.  Writes
+# still pass through to the original streams so the real terminal keeps
+# its native output — the ring is the second consumer.
+import collections as _collections
+import queue as _queue
+import threading as _threading
+import time as _logmirror_time
+import logging as _logging
+
+_LOG_RING_MAX = 3000
+_LOG_RING_LOCK = _threading.Lock()
+_LOG_RING = _collections.deque(maxlen=_LOG_RING_MAX)
+_LOG_SEQ = 0
+_LOG_SUBSCRIBERS: list = []     # queues populated by SSE listeners
+
+
+def _log_ring_push(stream: str, line: str) -> None:
+    """Append one line to the ring and fan-out to live SSE subscribers.
+    Empty-after-strip lines are dropped to keep the panel readable."""
+    line = line.rstrip("
+")
+    if not line:
+        return
+    global _LOG_SEQ
+    with _LOG_RING_LOCK:
+        _LOG_SEQ += 1
+        rec = {
+            "seq":    _LOG_SEQ,
+            "ts":     _logmirror_time.time(),
+            "stream": stream,
+            "line":   line,
+        }
+        _LOG_RING.append(rec)
+        for q in list(_LOG_SUBSCRIBERS):
+            try:
+                q.put_nowait(rec)
+            except Exception:
+                pass
+
+
+class _StreamTee:
+    """File-like wrapper that mirrors writes to the original stream AND
+    the ring.  Buffers partial lines so a multi-line print() becomes one
+    record per logical line, not one per chunk."""
+    def __init__(self, original, stream_name: str):
+        self._orig = original
+        self._name = stream_name
+        self._buf  = ""
+        self._lock = _threading.Lock()
+
+    def write(self, data):
+        if data:
+            try:
+                self._orig.write(data)
+            except Exception:
+                pass
+            with self._lock:
+                self._buf += data
+                while "
+" in self._buf:
+                    line, self._buf = self._buf.split("
+", 1)
+                    _log_ring_push(self._name, line)
+        return len(data) if data else 0
+
+    def flush(self):
+        try: self._orig.flush()
+        except Exception: pass
+
+    def isatty(self):
+        try: return bool(self._orig.isatty())
+        except Exception: return False
+
+    def fileno(self):
+        return self._orig.fileno()
+
+    def __getattr__(self, name):
+        return getattr(self._orig, name)
+
+
+# Skip the tee under pytest — it captures stdout itself and re-wrapping
+# breaks its session-end teardown. Same guard the UTF-8 block uses.
+if "pytest" not in (sys.modules or {}) and not getattr(sys.stdout, "_log_tee_installed", False):
+    sys.stdout = _StreamTee(sys.stdout, "stdout")
+    sys.stderr = _StreamTee(sys.stderr, "stderr")
+    setattr(sys.stdout, "_log_tee_installed", True)
+
+
+# Mirror Python `logging` into the same ring.  uvicorn pushes access +
+# error logs through the `uvicorn` / `uvicorn.access` loggers (NOT plain
+# print) so without this handler the SPA panel misses HTTP request lines.
+class _RingLogHandler(_logging.Handler):
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+        except Exception:
+            msg = record.getMessage()
+        _log_ring_push(f"logger:{record.name}", msg)
+
+
+_RING_LOG_HANDLER = _RingLogHandler(level=_logging.DEBUG)
+_RING_LOG_HANDLER.setFormatter(_logging.Formatter(
+    "%(asctime)s %(levelname)s %(name)s — %(message)s",
+    datefmt="%H:%M:%S",
+))
+_logging.getLogger().addHandler(_RING_LOG_HANDLER)
+# uvicorn's access logger is silent by default — flip to INFO so HTTP
+# request lines surface in the panel.
+for _ln in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+    _lg = _logging.getLogger(_ln)
+    if _lg.level == _logging.NOTSET or _lg.level > _logging.INFO:
+        _lg.setLevel(_logging.INFO)
+
+
 import uvicorn
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
@@ -2852,12 +2968,21 @@ def jobs_facets(request: Request):
     page — the frontend renders a curated default list and live-searches this
     endpoint when the user types into the chip's search box.
 
+    PUBLIC endpoint (no auth gate). Facets return pure aggregate catalog
+    metadata — "how many jobs are in London" / "how many at Stripe" — no
+    PII, no per-user data, nothing a signed-up user wouldn't already see.
+    Gating this previously caused two real problems:
+      (1) cold-load 401 race when the SPA polled before /api/state had
+          resolved the auth cookie ("GET /api/jobs/facets … 401 Unauthorized"
+          spam in journalctl), and
+      (2) the landing page couldn't show real "we have N jobs in your city"
+          stats to unauthenticated visitors.
+
     Query params:
       kind   — 'industry' | 'location' | 'company' (required)
       q      — case-insensitive substring filter on the bucket label
       limit  — max buckets to return (default 25, max 200)
     """
-    _require_auth_user(request)
     if _session_store is None:
         return {"kind": "", "buckets": []}
     qs = request.query_params

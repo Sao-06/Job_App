@@ -3311,11 +3311,19 @@ code { font-family: var(--mono); font-size: 14px; background: var(--bg-3); paddi
   transition: transform .12s, background .12s, border-color .12s;
 }
 .intel-btn.primary {
+  /* Violet-only gradient — the previous violet→magenta diagonal made the
+     left edge read as a stray pink strip on a button this short/wide
+     (135° gradient line + low aspect ratio puts the off-axis interpolation
+     at the left edge). Magenta is a landing-page co-accent anyway; the
+     dashboard reads cleaner with a single brand color. */
   border: 1px solid transparent; color: #fff;
-  background: linear-gradient(135deg, #7c5cff 0%, #ff3d9a 110%);
-  box-shadow: 0 8px 22px -10px rgba(124,92,255,.6);
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-h) 100%);
+  box-shadow: 0 8px 22px -10px rgba(124,92,255,.55);
 }
-.intel-btn.primary:hover { transform: translateY(-1px) }
+.intel-btn.primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 26px -10px rgba(124,92,255,.7);
+}
 .intel-btn.ghost {
   background: transparent; border: 1px solid var(--bdr); color: var(--t2);
 }

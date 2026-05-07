@@ -291,6 +291,101 @@ input, select, textarea { font-family:var(--sans) }
 .page-tab.active { color: var(--t1); background: var(--bg-3) }
 .tab-count { font-size: 13px; font-family: var(--mono); background: var(--bg-2); color: var(--t3); padding: 1px 5px; border-radius: 4px }
 .head-spacer { flex: 1 }
+
+/* ────────────────────────────────────────────────────────────
+   AUTO-SAVE BADGE — Profile page
+   Compact inline status that replaces the manual "Save profile"
+   button. Five visual states (idle / pending / saving / saved /
+   error), each with its own accent color and motion treatment.
+   Sits in the page-head row next to the page title, so the user
+   sees the persistence state without breaking gaze from the form.
+   ──────────────────────────────────────────────────────────── */
+.auto-save {
+  display: inline-flex; align-items: center; gap: 7px;
+  margin-left: 14px;
+  padding: 4px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--bdr);
+  background: var(--bg-2);
+  font-family: var(--mono); font-size: 11.5px; font-weight: 600;
+  letter-spacing: .04em;
+  color: var(--t3);
+  white-space: nowrap;
+  transition: color .15s, background .15s, border-color .15s;
+}
+.auto-save > svg { flex-shrink: 0 }
+/* Reset native button look when badge is interactive (error → retry) */
+button.auto-save { cursor: pointer; font: inherit; }
+
+/* Idle — minimal, just enough to remind the user autosave is on */
+.auto-save-idle { color: var(--t4) }
+.auto-save-glyph {
+  position: relative;
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--t4);
+}
+.auto-save-glyph::after {
+  content: ''; position: absolute; inset: -3px;
+  border-radius: 50%; border: 1px solid var(--t4); opacity: .35;
+}
+
+/* Pending — amber breathing dot says "we're going to save very soon" */
+.auto-save-pending {
+  color: #f5c463;
+  background: rgba(245,196,99,.06);
+  border-color: rgba(245,196,99,.22);
+}
+.auto-save-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: #f5c463;
+  box-shadow: 0 0 0 0 rgba(245,196,99,.55);
+  animation: auto-save-pulse 1.2s ease-out infinite;
+}
+@keyframes auto-save-pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(245,196,99,.55) }
+  70%  { box-shadow: 0 0 0 6px rgba(245,196,99,0) }
+  100% { box-shadow: 0 0 0 0 rgba(245,196,99,0) }
+}
+
+/* Saving — spinner with cyan accent, the "doing it right now" state */
+.auto-save-saving {
+  color: var(--accent2);
+  background: var(--accent2-d, rgba(34,229,255,.08));
+  border-color: var(--accent2-b, rgba(34,229,255,.32));
+}
+
+/* Saved — green check, fades back to idle after ~1.8s */
+.auto-save-saved {
+  color: var(--good);
+  background: rgba(61,255,154,.06);
+  border-color: rgba(61,255,154,.30);
+  animation: auto-save-saved-in .25s cubic-bezier(.22,1,.36,1) both;
+}
+@keyframes auto-save-saved-in {
+  from { opacity: 0; transform: translateY(-3px) scale(.96) }
+  to   { opacity: 1; transform: none }
+}
+.auto-save-saved svg { color: var(--good) }
+
+/* Error — clickable to retry */
+.auto-save-error {
+  color: #ff8094;
+  background: rgba(255, 90, 110, .07);
+  border-color: rgba(255, 90, 110, .30);
+}
+.auto-save-error:hover {
+  color: #ffb1bd;
+  background: rgba(255, 90, 110, .12);
+  border-color: rgba(255, 90, 110, .50);
+}
+.auto-save-error svg { color: #ff8094 }
+
+/* Light theme — the badge stays legible on light backgrounds */
+:root[data-theme="light"] .auto-save-idle    { background: rgba(20,20,40,.04) }
+:root[data-theme="light"] .auto-save-pending { background: rgba(201,135,0,.07); color: #b87600 }
+:root[data-theme="light"] .auto-save-pending .auto-save-dot { background: #c98700 }
+:root[data-theme="light"] .auto-save-saved   { background: rgba(15,184,107,.08); color: #0fb86b }
+:root[data-theme="light"] .auto-save-saved svg { color: #0fb86b }
 .head-search {
   display: flex; align-items: center; gap: 9px;
   background: var(--bg-2); border: 1px solid var(--bdr); border-radius: 9px;
@@ -1014,16 +1109,51 @@ input, select, textarea { font-family:var(--sans) }
   display: flex; align-items: center; gap: 12px;
 }
 .profile-link-mono {
-  width: 36px; height: 36px;
+  position: relative; isolation: isolate;
+  width: 38px; height: 38px;
   flex-shrink: 0;
-  border-radius: 9px;
+  border-radius: 10px;
   display: inline-flex; align-items: center; justify-content: center;
   font-family: var(--mono);
   font-size: 12px; font-weight: 700;
   letter-spacing: .02em;
   text-transform: uppercase;
-  box-shadow: 0 1px 0 rgba(255,255,255,.05) inset, 0 4px 10px -6px rgba(0,0,0,.4);
+  box-shadow:
+    0 1px 0 rgba(255,255,255,.10) inset,
+    0 4px 10px -6px rgba(0,0,0,.40);
+  overflow: hidden;
   user-select: none;
+  transition: transform .14s cubic-bezier(.22,1,.36,1), box-shadow .14s;
+}
+/* Soft brand-color halo behind the chip so the icon "lifts" off the
+   surface — pseudo-element rather than another shadow so the radial
+   stays sharp at small sizes. */
+.profile-link-mono::after {
+  content: ''; position: absolute; inset: -2px;
+  border-radius: inherit; z-index: -1;
+  background: inherit; filter: blur(8px) saturate(1.2);
+  opacity: .25; pointer-events: none;
+}
+.profile-link-row:hover .profile-link-mono {
+  transform: translateY(-1px) scale(1.04);
+  box-shadow:
+    0 1px 0 rgba(255,255,255,.14) inset,
+    0 8px 18px -8px rgba(0,0,0,.55);
+}
+/* When a real Simple Icons glyph is rendered, drop the text padding and
+   center the SVG. White-on-brand-color is what Simple Icons returns when
+   we ask for `/white`, so it reads cleanly on every brand chip. */
+.profile-link-mono.has-logo { font-size: 0 }
+.profile-link-mono img {
+  width: 60%; height: 60%;
+  object-fit: contain;
+  filter: drop-shadow(0 1px 0 rgba(0,0,0,.20));
+  pointer-events: none;
+  animation: profile-logo-in .35s cubic-bezier(.22,1,.36,1) both;
+}
+@keyframes profile-logo-in {
+  from { opacity: 0; transform: scale(.7) rotate(-6deg) }
+  to   { opacity: 1; transform: none }
 }
 .profile-link-row-body {
   flex: 1;
@@ -2218,17 +2348,139 @@ input, select, textarea { font-family:var(--sans) }
   color: var(--t3); cursor: pointer; transition: all .12s;
 }
 .rcard-add:hover { background: var(--bg-3); color: var(--t1) }
+/* Empty-state "Add a search filter" row keeps the simple flex layout */
 .saved-filter {
   display: flex; align-items: center; gap: 8px;
-  font-size: 15px; color: var(--t2); padding: 4px 0;
+  font-size: 14px; color: var(--t2); padding: 8px 4px;
+  border-radius: 8px; transition: background .12s, color .12s;
 }
-.saved-filter > span { flex: 1 }
+.saved-filter:hover { background: var(--bg-2); color: var(--t1) }
+.saved-filter > span { flex: 1; min-width: 0 }
 .saved-filter-edit {
   display: flex; align-items: center; justify-content: center;
   width: 22px; height: 22px; border-radius: 5px; border: 1px solid transparent;
   color: var(--t4); cursor: pointer; transition: all .12s;
 }
 .saved-filter-edit:hover { border-color: var(--bdr); color: var(--t2); background: var(--bg-3) }
+
+/* ────────────────────────────────────────────────────────────
+   SAVED-SEARCH command-palette pill
+   Each saved title becomes a numbered, single-line pill:
+   numbered shortcut prefix | accent spine | title + location |
+   hover-revealed edit/delete actions. The title ellipsizes
+   instead of wrapping, so the rail stays compact regardless
+   of how long the role name gets.
+   ──────────────────────────────────────────────────────────── */
+.ss-row {
+  position: relative; isolation: isolate;
+  display: grid;
+  grid-template-columns: 22px 1px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 10px;
+  border-radius: 9px;
+  border: 1px solid transparent;
+  background: var(--bg-2);
+  color: var(--t1);
+  font-family: inherit;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color .14s, background .14s, transform .14s;
+  overflow: hidden;
+  animation: ss-row-in .35s cubic-bezier(.22,1,.36,1) both;
+}
+.ss-row + .ss-row { margin-top: 6px }
+.ss-row:nth-child(2) { animation-delay: 30ms }
+.ss-row:nth-child(3) { animation-delay: 60ms }
+.ss-row:nth-child(4) { animation-delay: 90ms }
+@keyframes ss-row-in {
+  from { opacity: 0; transform: translateX(-6px) }
+  to   { opacity: 1; transform: none }
+}
+/* Subtle scanning gradient on the row background — barely visible at rest,
+   bright on hover so the row feels "armed" before clicking. */
+.ss-row::before {
+  content: ''; position: absolute; inset: 0;
+  background: linear-gradient(90deg,
+    rgba(124,92,255,.0)  0%,
+    rgba(124,92,255,.04) 50%,
+    rgba(124,92,255,.0)  100%);
+  opacity: 0; transition: opacity .18s;
+  pointer-events: none; z-index: -1;
+}
+.ss-row:hover {
+  border-color: var(--accent-b);
+  background: var(--bg-3);
+  transform: translateX(1px);
+}
+.ss-row:hover::before { opacity: 1 }
+.ss-row:active { transform: translateX(1px) scale(.995) }
+
+.ss-num {
+  font-family: var(--mono); font-size: 10.5px; font-weight: 700;
+  letter-spacing: .14em;
+  color: var(--t4);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  transition: color .14s;
+}
+.ss-row:hover .ss-num { color: var(--accent-h) }
+
+.ss-spine {
+  align-self: stretch;
+  width: 2px; border-radius: 2px;
+  background: var(--bdr);
+  transition: background .14s, box-shadow .14s;
+}
+.ss-row:hover .ss-spine {
+  background: linear-gradient(180deg, var(--accent-h) 0%, var(--accent) 100%);
+  box-shadow: 0 0 8px var(--accent);
+}
+
+.ss-body { min-width: 0; display: flex; flex-direction: column; gap: 1px }
+.ss-title {
+  font-size: 13.5px; font-weight: 500; color: var(--t1);
+  letter-spacing: -.005em;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  line-height: 1.25;
+}
+.ss-loc {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-family: var(--mono); font-size: 10.5px; color: var(--t4);
+  letter-spacing: .03em;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ss-loc svg { color: var(--accent-h); flex-shrink: 0 }
+
+.ss-actions {
+  display: flex; gap: 2px;
+  opacity: 0;
+  transform: translateX(4px);
+  transition: opacity .14s, transform .14s;
+  flex-shrink: 0;
+}
+.ss-row:hover .ss-actions,
+.ss-row:focus-visible .ss-actions { opacity: 1; transform: none }
+.ss-act {
+  display: flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px;
+  border-radius: 6px;
+  color: var(--t3); cursor: pointer;
+  transition: color .12s, background .12s;
+}
+.ss-act:hover { color: var(--t1); background: var(--bg-1) }
+.ss-act-del:hover { color: #ff6b80; background: rgba(255, 107, 128, .10) }
+
+/* Light-theme tone-down — keep the spine color bright but soften the pill */
+:root[data-theme="light"] .ss-row {
+  background: rgba(106,61,255,.04);
+  border-color: rgba(106,61,255,.10);
+}
+:root[data-theme="light"] .ss-row:hover {
+  background: rgba(106,61,255,.08);
+  border-color: rgba(106,61,255,.30);
+}
 
 /* ── PLACEHOLDER / EMPTY STATE ── */
 .placeholder-page {

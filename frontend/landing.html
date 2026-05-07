@@ -993,55 +993,43 @@ em, i, cite, var { font-style: normal }
     overflow: visible;
     background: transparent;
   }
-  .scr-rail {
-    /* On mobile the rail becomes a sticky page-style header so the visitor
-       always knows where they are in the seven-phase sequence. */
-    position: sticky; top: 64px;
-    z-index: 10;
-    background: linear-gradient(180deg, rgba(7,7,13,.92) 0%, rgba(7,7,13,.78) 100%);
-    backdrop-filter: blur(14px) saturate(140%);
-    -webkit-backdrop-filter: blur(14px) saturate(140%);
-    padding: 10px 12px; gap: 4px;
-    flex-wrap: wrap;
-    border-top: 1px solid var(--bdr);
-    border-bottom: 1px solid var(--bdr);
-    margin-bottom: 18px;
-  }
-  .scr-rail-cell {
-    flex: 0 0 calc(33.333% - 4px);
-    padding: 6px 8px;
-    border-bottom: 1px solid var(--bdr);
-  }
-  .scr-rail-cell::after { display: none }   /* no progress underline on mobile */
-  .scr-rail-num { font-size: 9px }
-  .scr-rail-lbl { font-size: 12.5px }
+  /* Rail hidden on mobile — its 7 cells flex-wrapping to 3 rows ate too
+     much sticky chrome under the fixed nav, and each card now announces
+     its own phase number via the ::before pill below. */
+  .scr-rail { display: none }
 
   .scr-stage {
     padding: 0 14px; min-height: 0;
-    display: flex; flex-direction: column; gap: 22px;
+    display: flex; flex-direction: column; gap: 18px;
+    align-items: stretch; justify-content: flex-start;
     overflow: visible;
+    counter-reset: scr-phase;
   }
   /* Each phase becomes a labelled card, full-state, all visible. */
   .scr-frame {
     position: relative; inset: auto;
+    display: block;                  /* override desktop flex centering */
     opacity: 1; transform: none;
     pointer-events: auto;
     background: linear-gradient(165deg, rgba(255,255,255,.03) 0%, rgba(0,0,0,.25) 100%);
     border: 1px solid var(--bdr);
     border-radius: 14px;
-    padding: 38px 16px 20px;
+    padding: 44px 14px 18px;
+    overflow: hidden;
+    width: 100%; max-width: 100%;
   }
   .scr-frame::before {
     content: 'Phase ' counter(scr-phase) ' · ' attr(data-label);
-    position: absolute; top: 12px; left: 16px;
+    position: absolute; top: 12px; left: 14px; right: 14px;
     font-family: var(--mono); font-size: 10.5px; font-weight: 700;
     letter-spacing: .14em; text-transform: uppercase;
     color: var(--accent-h);
     padding: 4px 9px; border-radius: 6px;
     background: var(--accent-d); border: 1px solid var(--accent-b);
     counter-increment: scr-phase;
+    width: fit-content; max-width: 100%;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
-  .scr-stage { counter-reset: scr-phase }
   .scr-meta { display: none }
 
   /* Phase-internal layout adjustments for the narrower card. */
@@ -1049,6 +1037,12 @@ em, i, cite, var { font-style: normal }
   .ph1-doc { min-height: 260px; padding: 18px 18px }
   .ph1-doc-name { font-size: 16px }
   .ph1-doc-bullet { font-size: 9px }
+  .ph1-doc-hl { display: none }      /* progress=1 leaves the bar parked at 95% — looks broken on a static card */
+  .ph1-extract-row { font-size: 11.5px; gap: 10px }
+  .ph1-extract-k { width: 70px }
+  .ph1-skill-chip { font-size: 11px; padding: 3px 9px }
+  .ph1-score-num { font-size: 44px }
+  .ph1-score-meta { font-size: 10.5px }
   .ph2-grid { grid-template-columns: repeat(2, 1fr); gap: 6px }
   .ph2-src { padding: 9px 12px; font-size: 11.5px }
   .ph2-counter-num { font-size: 38px }
@@ -1201,7 +1195,13 @@ function activeSliceIndex(p) {
 
 function Scrubber() {
   const sectionRef = useRef(null);
-  const [progress, setProgress] = useState(0);
+  // Mobile must initialize at end-state (progress=1) on the very first
+  // render — otherwise React paints every phase at 0% (empty doc, empty
+  // grids, score=0) for the brief moment before useEffect runs, which
+  // looked like a "broken" demo on a phone.
+  const [progress, setProgress] = useState(() =>
+    typeof window !== 'undefined' && window.innerWidth <= 720 ? 1 : 0
+  );
   const [data, setData] = useState(null);
   const [dataErr, setDataErr] = useState(null);
   const isMobile = useIsMobile();

@@ -138,7 +138,7 @@ for _ln in ("uvicorn", "uvicorn.error", "uvicorn.access"):
 
 import uvicorn
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
+from fastapi.responses import FileResponse, StreamingResponse, JSONResponse, HTMLResponse
 
 from pipeline.config import OUTPUT_DIR, RESOURCES_DIR, DATA_DIR, DB_PATH
 
@@ -242,14 +242,38 @@ def root():
 
 @app.get("/app")
 def dashboard():
-    return FileResponse("frontend/index.html")
+    # Cache-bust the in-browser-Babel JSX import. Without a versioned URL,
+    # browsers will hold onto a stale `app.jsx` across server restarts even
+    # when the response sets no-cache, because their previously-cached
+    # entry was permissive. Stamping the script tag with the file mtime
+    # guarantees the browser sees a fresh URL the moment the JSX changes
+    # and is forced to refetch.
+    index_path = Path("frontend/index.html")
+    jsx_path   = Path("frontend/app.jsx")
+    html = index_path.read_text(encoding="utf-8")
+    if jsx_path.exists():
+        v = int(jsx_path.stat().st_mtime)
+        html = html.replace('/frontend/app.jsx"', f'/frontend/app.jsx?v={v}"')
+    return HTMLResponse(html, headers={
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        "Pragma":        "no-cache",
+        "Expires":       "0",
+    })
 
 @app.get("/frontend/{filename}")
 def frontend_static(filename: str):
     p = Path("frontend") / filename
     if not p.exists() or not p.is_file():
         raise HTTPException(404, "Not found")
-    return FileResponse(p)
+    # No build step — `app.jsx` is transpiled by in-browser Babel on every
+    # load. Without `no-cache` headers browsers serve a stale copy across
+    # restarts, so a developer's edit can sit invisible behind the cache
+    # for hours. Force revalidation on every request.
+    return FileResponse(p, headers={
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        "Pragma":        "no-cache",
+        "Expires":       "0",
+    })
 
 _OUTPUT_FILE_BLOCKED_SUFFIXES = {
     # Anything that looks like a database, key store, or raw config — these

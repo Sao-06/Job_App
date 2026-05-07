@@ -2962,14 +2962,34 @@ function JobsPage({ state, refresh, setPage }) {
               <span className="rcard-add" onClick={() => setPage('profile')} title="Add search role"><Icon name="plus" size={13}/></span>
             </div>
             {state?.profile?.target_titles?.slice(0,4).map((t, i) => (
-              <div key={i} className="saved-filter">
-                <Icon name="bookmark" size={13} color="var(--accent-h)"/>
-                <span onClick={() => { setQuery(t); setTab('recommended'); }} style={{ cursor:'pointer' }}>{t} · {state?.location || 'US'}</span>
-                <div style={{ display:'flex', gap:4 }}>
-                  <span className="saved-filter-edit" onClick={() => setPage('profile')} title="Edit titles"><Icon name="pencil" size={11}/></span>
-                  <span className="saved-filter-edit" onClick={() => removeSearch(t)} title="Remove"><Icon name="trash-2" size={11}/></span>
-                </div>
-              </div>
+              <button
+                key={i}
+                type="button"
+                className="ss-row"
+                onClick={() => { setQuery(t); setTab('recommended'); }}
+                title={`Apply this search · ${t} in ${state?.location || 'US'}`}
+              >
+                <span className="ss-num">{String(i + 1).padStart(2, '0')}</span>
+                <span className="ss-spine" aria-hidden="true"/>
+                <span className="ss-body">
+                  <span className="ss-title">{t}</span>
+                  <span className="ss-loc">
+                    <Icon name="map-pin" size={9}/>{state?.location || 'US'}
+                  </span>
+                </span>
+                <span className="ss-actions" onClick={(e) => e.stopPropagation()}>
+                  <span
+                    className="ss-act"
+                    onClick={(e) => { e.stopPropagation(); setPage('profile'); }}
+                    title="Edit titles"
+                  ><Icon name="pencil" size={11}/></span>
+                  <span
+                    className="ss-act ss-act-del"
+                    onClick={(e) => { e.stopPropagation(); removeSearch(t); }}
+                    title="Remove"
+                  ><Icon name="trash-2" size={11}/></span>
+                </span>
+              </button>
             ))}
             {!state?.profile?.target_titles?.length && (
               <div className="saved-filter" onClick={() => setPage('profile')} style={{ cursor:'pointer' }}>
@@ -4374,6 +4394,64 @@ const SEARCH_PREF_FIELDS = [
   ['search_threshold',          'threshold',          Number.isFinite],
 ];
 
+/* Inline status pill for the Profile page autosave loop. Replaces the
+   old "Unsaved changes" + "Save profile" button pair. Five states map to
+   four visual presentations: pending (debounce queued, amber dot pulse),
+   saving (spinner), saved (green check, fades after 1.8s), error
+   (clickable retry), and idle (rendered as a tiny mono "Auto-save"
+   marker so the user knows the feature is active). */
+function AutoSaveBadge({ status, dirty, error, onRetry }) {
+  // 'idle' display when nothing has happened yet AND form is clean.
+  // If dirty but status hasn't latched to 'pending' yet (very brief),
+  // treat it as pending so there's no flash of "saved" while a save
+  // is being scheduled.
+  const effective = (status === 'idle' && dirty) ? 'pending' : status;
+  if (effective === 'idle') {
+    return (
+      <span className="auto-save auto-save-idle" title="Profile changes save automatically as you type">
+        <span className="auto-save-glyph" aria-hidden="true"/>
+        <span>Auto-save on</span>
+      </span>
+    );
+  }
+  if (effective === 'pending') {
+    return (
+      <span className="auto-save auto-save-pending" title="Changes will save shortly">
+        <span className="auto-save-dot" aria-hidden="true"/>
+        <span>Auto-saving…</span>
+      </span>
+    );
+  }
+  if (effective === 'saving') {
+    return (
+      <span className="auto-save auto-save-saving" title="Persisting changes">
+        <span className="spin" style={{ width:10, height:10, borderWidth:1.5 }}/>
+        <span>Saving</span>
+      </span>
+    );
+  }
+  if (effective === 'saved') {
+    return (
+      <span className="auto-save auto-save-saved" title="All changes saved">
+        <Icon name="check" size={11}/>
+        <span>Saved</span>
+      </span>
+    );
+  }
+  // error
+  return (
+    <button
+      type="button"
+      className="auto-save auto-save-error"
+      onClick={onRetry}
+      title={error ? `Save failed: ${error} — click to retry` : 'Click to retry'}
+    >
+      <Icon name="alert-circle" size={11}/>
+      <span>Save failed — retry</span>
+    </button>
+  );
+}
+
 function ProfilePage({ state, refresh, setPage }) {
   const p = state?.profile;
   const resumes = state?.resumes || [];
@@ -4387,6 +4465,12 @@ function ProfilePage({ state, refresh, setPage }) {
   const [dirty, setDirty]           = useState(false);
   const [activeTab, setActiveTab]   = useState('personal');
   const [extractError, setExtractError] = useState('');
+  // Auto-save UX status: 'idle' | 'pending' | 'saving' | 'saved' | 'error'.
+  // Drives the inline status pill in the page head; the user no longer
+  // clicks a Save button, so they need a clear ambient signal that work
+  // is being persisted.
+  const [autoSaveStatus, setAutoSaveStatus] = useState('idle');
+  const [autoSaveError,  setAutoSaveError]  = useState('');
 
   useEffect(() => {
     if (!dirty) {
@@ -4405,26 +4489,107 @@ function ProfilePage({ state, refresh, setPage }) {
   const addRow = (key, row) => { setForm(prev => ({ ...prev, [key]: [...prev[key], row] })); setDirty(true); };
   const removeRow = (key, index) => { setForm(prev => ({ ...prev, [key]: prev[key].filter((_, i) => i !== index) })); setDirty(true); };
 
-  const saveProfile = async () => {
+  // Always-current `form` reference for the autosave loop. `performSave`
+  // captures a snapshot at its start and re-reads the ref AFTER awaiting
+  // the network — that lets us tell "no edits arrived during save"
+  // (clear dirty) from "user kept typing" (leave dirty for next pass).
+  const formRef         = useRef(form);
+  formRef.current       = form;
+  const inFlightRef     = useRef(null);   // Promise of in-flight save, await-able
+  const saveTimerRef    = useRef(null);   // setTimeout handle for debounce
+  const savedTimerRef   = useRef(null);   // setTimeout handle for "Saved" pill fade
+
+  const performSave = useCallback(async () => {
+    const snapshot = formRef.current;
     setSaving(true);
+    setAutoSaveStatus('saving');
+    setAutoSaveError('');
     try {
-      const titles = splitList(form.target_titles).filter(Boolean);
-      await api.post('/api/profile', formToProfile(form));
+      const titles = splitList(snapshot.target_titles).filter(Boolean);
+      await api.post('/api/profile', formToProfile(snapshot));
       // Only fields the user actually edited this session get pushed to
       // /api/config — fields where the corresponding form key is still
       // unset (undefined) leave the previously-saved value intact.
       const cfg = { job_titles: titles.join(', ') };
       for (const [src, dst, ok] of SEARCH_PREF_FIELDS) {
-        if (ok(form[src])) cfg[dst] = form[src];
+        if (ok(snapshot[src])) cfg[dst] = snapshot[src];
       }
       await api.post('/api/config', cfg);
-      setDirty(false);
+      // Only mark clean if the form is exactly what we just persisted.
+      // If the user kept editing during the await, formRef.current has
+      // moved on — leave dirty=true so the debounce schedules another
+      // pass.
+      if (formRef.current === snapshot) {
+        setDirty(false);
+        setAutoSaveStatus('saved');
+        clearTimeout(savedTimerRef.current);
+        savedTimerRef.current = setTimeout(() => {
+          setAutoSaveStatus(s => s === 'saved' ? 'idle' : s);
+        }, 1800);
+      } else {
+        // User kept editing during the await — the still-running debounce
+        // will fire another save shortly. Surface that we're queued, not
+        // done.
+        setAutoSaveStatus('pending');
+      }
       await refresh?.();
     } catch (e) {
-      alert(e.message || 'Failed to save profile');
+      setAutoSaveStatus('error');
+      setAutoSaveError(e.message || 'Save failed');
+      // Don't alert — autosave failures are ambient. The status pill
+      // shows a retry affordance.
     } finally {
       setSaving(false);
     }
+  }, [refresh]);
+
+  // Debounced autosave. Every edit pushes `dirty=true` and resets the
+  // 700ms timer; the save fires once the user stops typing. The cleanup
+  // cancels any pending fire if the component unmounts mid-debounce.
+  useEffect(() => {
+    if (!dirty) return;
+    setAutoSaveStatus(s => s === 'saving' ? s : 'pending');
+    clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      inFlightRef.current = performSave();
+    }, 700);
+    return () => clearTimeout(saveTimerRef.current);
+  }, [form, dirty, performSave]);
+
+  // Flush pending edits on unmount — fire-and-forget. If the user
+  // navigates to another page while typing, the most recent draft still
+  // gets persisted (the POST completes after unmount). A ref-indirection
+  // captures the latest `dirty` + `performSave` so the empty-deps effect
+  // below doesn't close over stale values.
+  const flushRef = useRef();
+  flushRef.current = () => {
+    if (dirty) {
+      clearTimeout(saveTimerRef.current);
+      performSave();
+    }
+  };
+  useEffect(() => () => {
+    flushRef.current?.();
+    clearTimeout(saveTimerRef.current);
+    clearTimeout(savedTimerRef.current);
+  }, []);
+
+  // saveProfile retained for explicit-save callers (syncSearch).
+  // Cancels the debounce, awaits any in-flight save, then performs a
+  // fresh save synchronously so the caller can rely on persistence.
+  const saveProfile = async () => {
+    clearTimeout(saveTimerRef.current);
+    if (inFlightRef.current) {
+      try { await inFlightRef.current; } catch (_) {/* surfaced via status pill */}
+    }
+    if (formRef.current && dirty) {
+      inFlightRef.current = performSave();
+      try { await inFlightRef.current; } catch (_) {/* surfaced */}
+    }
+  };
+
+  const retryAutoSave = () => {
+    inFlightRef.current = performSave();
   };
 
   const rerunExtraction = async () => {
@@ -4515,15 +4680,12 @@ function ProfilePage({ state, refresh, setPage }) {
             <span className="spin" style={{ width:11, height:11, borderWidth:1.5 }}/> Re-scraping resume…
           </span>
         )}
-        {dirty && !showExtractingBanner && (
-          <span style={{ marginLeft:14, fontSize:14.5, color:'var(--warn)' }}>● Unsaved changes</span>
+        {!showExtractingBanner && (
+          <AutoSaveBadge status={autoSaveStatus} dirty={dirty} error={autoSaveError} onRetry={retryAutoSave}/>
         )}
         <div className="head-spacer"/>
         <button className="btn-ghost" onClick={rerunExtraction} disabled={showExtractingBanner || !hasPrimary}>
           <Icon name="scan-text" size={13}/> {showExtractingBanner ? 'Extracting…' : 'Re-scrape resume'}
-        </button>
-        <button className="btn-ghost" onClick={saveProfile} disabled={saving} style={{ marginLeft:8 }}>
-          <Icon name="save" size={13}/> {saving ? 'Saving...' : 'Save profile'}
         </button>
         <button className="lp-btn-p" onClick={syncSearch} disabled={saving} style={{ marginLeft:8, padding:'6px 14px', fontSize:15.5 }}>
           <Icon name="search" size={13}/> Explore jobs
@@ -4633,7 +4795,7 @@ function ProfilePage({ state, refresh, setPage }) {
                    value={form.search_threshold ?? state?.threshold ?? 75}
                    onChange={v => updateField('search_threshold', parseInt(v))}/>
                  <div className="set-helper" style={{ marginTop:6 }}>
-                   Click <strong>Save profile</strong> to apply these to your next <em>agent</em> run.
+                   Edits save automatically — these apply to your next <em>agent</em> run.
                  </div>
                </div>
             </div>
@@ -4796,7 +4958,7 @@ function SearchPrefsCard({ form, state, updateField }) {
         options={_CITIZENSHIP_OPTIONS}
       />
       <div className="set-helper" style={{ marginTop:8 }}>
-        Click <strong>Save profile</strong> at the top right to apply.
+        Changes save automatically — applied on your next discovery run.
       </div>
     </div>
   );
@@ -4824,6 +4986,10 @@ function ProfileInput({ label, value, onChange, textarea=false, type='text', pla
 // `scalar: true` items are stored as flat keys on the profile dict
 // (linkedin/github/website) for back-compat; everything else lives
 // under profile.links[key].
+// `slug` matches the Simple Icons CDN slug (https://simpleicons.org/) so we
+// can render each row's real brand glyph via `cdn.simpleicons.org/<slug>/white`.
+// `mono` stays as the deterministic fallback when the CDN errors or the slug
+// isn't covered by Simple Icons (e.g. niche specialty directories).
 const PROFILE_LINK_GROUPS = [
   {
     id: 'universal', name: 'Universal',
@@ -4831,9 +4997,9 @@ const PROFILE_LINK_GROUPS = [
     icon: 'globe',
     defaultOpen: true,
     items: [
-      { key: 'linkedin', label: 'LinkedIn',          mono: 'in', color: '#0A66C2', hint: 'linkedin.com/in/your-handle',     scalar: true },
-      { key: 'website',  label: 'Personal website',  mono: 'WW', color: 'var(--accent)', hint: 'https://your-name.dev',     scalar: true },
-      { key: 'twitter',  label: 'Twitter / X',       mono: '𝕏',  color: '#0F1419', hint: 'x.com/your-handle' },
+      { key: 'linkedin', label: 'LinkedIn',          slug: 'linkedin', mono: 'in', color: '#0A66C2', hint: 'linkedin.com/in/your-handle',     scalar: true },
+      { key: 'website',  label: 'Personal website',                    mono: 'WW', color: 'var(--accent)', hint: 'https://your-name.dev',     scalar: true },
+      { key: 'twitter',  label: 'Twitter / X',       slug: 'x',        mono: '𝕏',  color: '#0F1419', hint: 'x.com/your-handle' },
     ],
   },
   {
@@ -4841,10 +5007,10 @@ const PROFILE_LINK_GROUPS = [
     description: 'Code repos, Q&A reputation, and interview-prep proof.',
     icon: 'terminal',
     items: [
-      { key: 'github',        label: 'GitHub',         mono: 'GH', color: '#1F2328', hint: 'github.com/your-handle',                scalar: true },
-      { key: 'gitlab',        label: 'GitLab',         mono: 'GL', color: '#FC6D26', hint: 'gitlab.com/your-handle' },
-      { key: 'stackoverflow', label: 'Stack Overflow', mono: 'SO', color: '#F58025', hint: 'stackoverflow.com/users/123/your-handle' },
-      { key: 'leetcode',      label: 'LeetCode',       mono: 'LC', color: '#FFA116', hint: 'leetcode.com/u/your-handle' },
+      { key: 'github',        label: 'GitHub',         slug: 'github',        mono: 'GH', color: '#1F2328', hint: 'github.com/your-handle',                scalar: true },
+      { key: 'gitlab',        label: 'GitLab',         slug: 'gitlab',        mono: 'GL', color: '#FC6D26', hint: 'gitlab.com/your-handle' },
+      { key: 'stackoverflow', label: 'Stack Overflow', slug: 'stackoverflow', mono: 'SO', color: '#F58025', hint: 'stackoverflow.com/users/123/your-handle' },
+      { key: 'leetcode',      label: 'LeetCode',       slug: 'leetcode',      mono: 'LC', color: '#FFA116', hint: 'leetcode.com/u/your-handle' },
     ],
   },
   {
@@ -4852,9 +5018,9 @@ const PROFILE_LINK_GROUPS = [
     description: 'For data scientists, ML/AI engineers, and applied researchers.',
     icon: 'cpu',
     items: [
-      { key: 'kaggle',         label: 'Kaggle',           mono: 'KG', color: '#20BEFF', hint: 'kaggle.com/your-handle' },
-      { key: 'huggingface',    label: 'Hugging Face',     mono: 'HF', color: '#FFD21E', hint: 'huggingface.co/your-handle' },
-      { key: 'paperswithcode', label: 'Papers With Code', mono: 'PC', color: '#21CBCE', hint: 'paperswithcode.com/author/your-handle' },
+      { key: 'kaggle',         label: 'Kaggle',           slug: 'kaggle',         mono: 'KG', color: '#20BEFF', hint: 'kaggle.com/your-handle' },
+      { key: 'huggingface',    label: 'Hugging Face',     slug: 'huggingface',    mono: 'HF', color: '#FFD21E', hint: 'huggingface.co/your-handle' },
+      { key: 'paperswithcode', label: 'Papers With Code', slug: 'paperswithcode', mono: 'PC', color: '#21CBCE', hint: 'paperswithcode.com/author/your-handle' },
     ],
   },
   {
@@ -4862,10 +5028,10 @@ const PROFILE_LINK_GROUPS = [
     description: 'UI/UX, illustration, 3D — the portfolio sites recruiters open first.',
     icon: 'palette',
     items: [
-      { key: 'dribbble',   label: 'Dribbble',   mono: 'DR', color: '#EA4C89', hint: 'dribbble.com/your-handle' },
-      { key: 'behance',    label: 'Behance',    mono: 'BE', color: '#1769FF', hint: 'behance.net/your-handle' },
-      { key: 'artstation', label: 'ArtStation', mono: 'AS', color: '#13AFF0', hint: 'artstation.com/your-handle' },
-      { key: 'sketchfab',  label: 'Sketchfab',  mono: 'SF', color: '#1CAAD9', hint: 'sketchfab.com/your-handle' },
+      { key: 'dribbble',   label: 'Dribbble',   slug: 'dribbble',   mono: 'DR', color: '#EA4C89', hint: 'dribbble.com/your-handle' },
+      { key: 'behance',    label: 'Behance',    slug: 'behance',    mono: 'BE', color: '#1769FF', hint: 'behance.net/your-handle' },
+      { key: 'artstation', label: 'ArtStation', slug: 'artstation', mono: 'AS', color: '#13AFF0', hint: 'artstation.com/your-handle' },
+      { key: 'sketchfab',  label: 'Sketchfab',  slug: 'sketchfab',  mono: 'SF', color: '#1CAAD9', hint: 'sketchfab.com/your-handle' },
     ],
   },
   {
@@ -4873,9 +5039,9 @@ const PROFILE_LINK_GROUPS = [
     description: 'Long-form writing, newsletters, video essays.',
     icon: 'feather',
     items: [
-      { key: 'medium',   label: 'Medium',     mono: 'MD', color: '#1A8917', hint: 'medium.com/@your-handle' },
-      { key: 'substack', label: 'Substack',   mono: 'SS', color: '#FF6719', hint: 'your-handle.substack.com' },
-      { key: 'youtube',  label: 'YouTube',    mono: 'YT', color: '#FF0000', hint: 'youtube.com/@your-handle' },
+      { key: 'medium',   label: 'Medium',     slug: 'medium',   mono: 'MD', color: '#1A8917', hint: 'medium.com/@your-handle' },
+      { key: 'substack', label: 'Substack',   slug: 'substack', mono: 'SS', color: '#FF6719', hint: 'your-handle.substack.com' },
+      { key: 'youtube',  label: 'YouTube',    slug: 'youtube',  mono: 'YT', color: '#FF0000', hint: 'youtube.com/@your-handle' },
     ],
   },
   {
@@ -4883,10 +5049,10 @@ const PROFILE_LINK_GROUPS = [
     description: 'Citations, identifiers, and peer-network sites for researchers.',
     icon: 'graduation-cap',
     items: [
-      { key: 'google_scholar', label: 'Google Scholar', mono: 'GS', color: '#4285F4', hint: 'scholar.google.com/citations?user=…' },
-      { key: 'orcid',          label: 'ORCID',          mono: 'OR', color: '#A6CE39', hint: 'orcid.org/0000-0000-0000-0000' },
-      { key: 'researchgate',   label: 'ResearchGate',   mono: 'RG', color: '#00CCBB', hint: 'researchgate.net/profile/Your-Name' },
-      { key: 'academia',       label: 'Academia.edu',   mono: 'AE', color: '#41637E', hint: 'your-university.academia.edu/YourName' },
+      { key: 'google_scholar', label: 'Google Scholar', slug: 'googlescholar', mono: 'GS', color: '#4285F4', hint: 'scholar.google.com/citations?user=…' },
+      { key: 'orcid',          label: 'ORCID',          slug: 'orcid',         mono: 'OR', color: '#A6CE39', hint: 'orcid.org/0000-0000-0000-0000' },
+      { key: 'researchgate',   label: 'ResearchGate',   slug: 'researchgate',  mono: 'RG', color: '#00CCBB', hint: 'researchgate.net/profile/Your-Name' },
+      { key: 'academia',       label: 'Academia.edu',   slug: 'academia',      mono: 'AE', color: '#41637E', hint: 'your-university.academia.edu/YourName' },
     ],
   },
   {
@@ -4894,10 +5060,10 @@ const PROFILE_LINK_GROUPS = [
     description: 'Photography, film, and short-form video.',
     icon: 'camera',
     items: [
-      { key: 'instagram', label: 'Instagram',  mono: 'IG', color: '#E4405F', hint: 'instagram.com/your-handle' },
-      { key: '500px',     label: '500px',      mono: '5P', color: '#0099E5', hint: '500px.com/p/your-handle' },
-      { key: 'flickr',    label: 'Flickr',     mono: 'FL', color: '#FF0084', hint: 'flickr.com/photos/your-handle' },
-      { key: 'vimeo',     label: 'Vimeo',      mono: 'VM', color: '#1AB7EA', hint: 'vimeo.com/your-handle' },
+      { key: 'instagram', label: 'Instagram',  slug: 'instagram', mono: 'IG', color: '#E4405F', hint: 'instagram.com/your-handle' },
+      { key: '500px',     label: '500px',      slug: '500px',     mono: '5P', color: '#0099E5', hint: '500px.com/p/your-handle' },
+      { key: 'flickr',    label: 'Flickr',     slug: 'flickr',    mono: 'FL', color: '#FF0084', hint: 'flickr.com/photos/your-handle' },
+      { key: 'vimeo',     label: 'Vimeo',      slug: 'vimeo',     mono: 'VM', color: '#1AB7EA', hint: 'vimeo.com/your-handle' },
     ],
   },
   {
@@ -4905,8 +5071,8 @@ const PROFILE_LINK_GROUPS = [
     description: 'Catalog, tracks, and producer credits.',
     icon: 'music',
     items: [
-      { key: 'soundcloud', label: 'SoundCloud', mono: 'SC', color: '#FF5500', hint: 'soundcloud.com/your-handle' },
-      { key: 'bandcamp',   label: 'Bandcamp',   mono: 'BC', color: '#629AA9', hint: 'your-handle.bandcamp.com' },
+      { key: 'soundcloud', label: 'SoundCloud', slug: 'soundcloud', mono: 'SC', color: '#FF5500', hint: 'soundcloud.com/your-handle' },
+      { key: 'bandcamp',   label: 'Bandcamp',   slug: 'bandcamp',   mono: 'BC', color: '#629AA9', hint: 'your-handle.bandcamp.com' },
     ],
   },
   {
@@ -4914,9 +5080,9 @@ const PROFILE_LINK_GROUPS = [
     description: 'Founders, investors, BD — where deal flow happens.',
     icon: 'briefcase',
     items: [
-      { key: 'wellfound',   label: 'Wellfound (AngelList)', mono: 'WF', color: '#000000', hint: 'wellfound.com/u/your-handle' },
-      { key: 'crunchbase',  label: 'Crunchbase',            mono: 'CB', color: '#146AFF', hint: 'crunchbase.com/person/your-handle' },
-      { key: 'producthunt', label: 'Product Hunt',          mono: 'PH', color: '#DA552F', hint: 'producthunt.com/@your-handle' },
+      { key: 'wellfound',   label: 'Wellfound (AngelList)', slug: 'wellfound',   mono: 'WF', color: '#000000', hint: 'wellfound.com/u/your-handle' },
+      { key: 'crunchbase',  label: 'Crunchbase',            slug: 'crunchbase',  mono: 'CB', color: '#146AFF', hint: 'crunchbase.com/person/your-handle' },
+      { key: 'producthunt', label: 'Product Hunt',          slug: 'producthunt', mono: 'PH', color: '#DA552F', hint: 'producthunt.com/@your-handle' },
     ],
   },
   {
@@ -4924,10 +5090,14 @@ const PROFILE_LINK_GROUPS = [
     description: 'Field-specific directories — fill what applies.',
     icon: 'badge-check',
     items: [
-      { key: 'doximity',   label: 'Doximity (healthcare)',   mono: 'DX', color: '#00A0DF', hint: 'doximity.com/pub/your-handle' },
-      { key: 'muckrack',   label: 'Muck Rack (journalism)',  mono: 'MR', color: '#2E3A89', hint: 'muckrack.com/your-handle' },
-      { key: 'imdb',       label: 'IMDb (film/TV)',          mono: 'IM', color: '#F5C518', hint: 'imdb.com/name/nm0000000' },
-      { key: 'martindale', label: 'Martindale (legal)',      mono: 'ML', color: '#BF1E2E', hint: 'martindale.com/attorney/your-name' },
+      // No `slug` for Doximity / Muck Rack / Martindale — Simple Icons
+      // doesn't carry them, so the rendered chip falls back to the
+      // letter monogram, which is still visually distinct because the
+      // brand color stays.
+      { key: 'doximity',   label: 'Doximity (healthcare)',                    mono: 'DX', color: '#00A0DF', hint: 'doximity.com/pub/your-handle' },
+      { key: 'muckrack',   label: 'Muck Rack (journalism)',                   mono: 'MR', color: '#2E3A89', hint: 'muckrack.com/your-handle' },
+      { key: 'imdb',       label: 'IMDb (film/TV)',          slug: 'imdb',    mono: 'IM', color: '#F5C518', hint: 'imdb.com/name/nm0000000' },
+      { key: 'martindale', label: 'Martindale (legal)',                       mono: 'ML', color: '#BF1E2E', hint: 'martindale.com/attorney/your-name' },
     ],
   },
 ];
@@ -5023,14 +5193,28 @@ function ProfileLinksCard({ form, updateField }) {
 }
 
 function ProfileLinkRow({ item, value, onChange }) {
+  // Try the real brand glyph from Simple Icons (free, CDN-hosted, ~3000
+  // brands). On 404 / network failure we fall back to the letter monogram
+  // so a missing icon never leaves an empty chip. Personal-website rows
+  // have no slug — they always render the monogram.
+  const [logoFailed, setLogoFailed] = useState(false);
+  const showLogo = !!item.slug && !logoFailed;
   return (
     <label className="profile-link-row">
       <span
-        className="profile-link-mono"
+        className={'profile-link-mono' + (showLogo ? ' has-logo' : '')}
         style={{ background: item.color, color: _readableMonoText(item.color) }}
         aria-hidden="true"
       >
-        {item.mono}
+        {showLogo ? (
+          <img
+            src={`https://cdn.simpleicons.org/${item.slug}/white`}
+            alt=""
+            loading="lazy"
+            draggable="false"
+            onError={() => setLogoFailed(true)}
+          />
+        ) : item.mono}
       </span>
       <span className="profile-link-row-body">
         <span className="profile-link-row-label">{item.label}</span>

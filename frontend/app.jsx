@@ -1295,6 +1295,130 @@ function NarrativePullQuote({ profile }) {
 }
 
 
+/* ── Home — Career Cockpit HUD strip ──────────────────────────────────────
+   Aviation-instrument-style telemetry panel that sits between the home hero
+   and the Resume Intelligence dossier. Surfaces session-live state, a
+   time-of-day greeting (mirrors the hero eyebrow but at desktop fidelity),
+   the streak, pipeline progress, and a ticking wall clock. The accent hue
+   shifts with local time. Mobile hides this strip — the hero already
+   foregrounds the same data in a stacked layout there. */
+function CockpitStrip({ state, done, apps, jobs, matches }) {
+  const [now, setNow] = useState(() => new Date());
+  const startedRef = useRef(Date.now());
+  const [sessionMs, setSessionMs] = useState(0);
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      setNow(new Date());
+      setSessionMs(Date.now() - startedRef.current);
+    }, 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  const hr = now.getHours();
+  const greet = hr < 5  ? 'Burning the midnight oil'
+              : hr < 12 ? 'Good morning'
+              : hr < 17 ? 'Good afternoon'
+              : hr < 21 ? 'Good evening'
+                        : 'Up late';
+  const tod = hr < 5  ? 'midnight'
+            : hr < 12 ? 'morning'
+            : hr < 17 ? 'afternoon'
+            : hr < 21 ? 'evening'
+                      : 'nightfall';
+  const firstName = (state?.profile?.name || '').split(' ')[0] || 'Explorer';
+  const phaseDone = done?.size || 0;
+  const streak    = Math.max(1, phaseDone + ((apps?.length || 0) > 0 ? 2 : 0));
+  const jobCount  = jobs?.length || 0;
+
+  const note = matches > 0
+    ? <>You have <strong>{matches}</strong> high-fit role{matches === 1 ? '' : 's'} waiting on your move.</>
+    : phaseDone >= 7
+      ? <>Cycle complete — review the tracker, then rerun discovery.</>
+      : phaseDone > 0
+        ? <>Atlas finished phase <strong>{phaseDone}/7</strong> — keep the momentum.</>
+        : jobCount > 0
+          ? <>{jobCount} role{jobCount === 1 ? '' : 's'} in the queue. Score them next.</>
+          : <>Ready when you are. Kick off discovery to begin.</>;
+
+  const pad = (n) => String(n).padStart(2, '0');
+  const sStr = (() => {
+    const s = Math.floor(sessionMs / 1000);
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    return h > 0 ? `${pad(h)}:${pad(m)}:${pad(sec)}` : `${pad(m)}:${pad(sec)}`;
+  })();
+  const clock   = `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+  const weekday = ['SUN','MON','TUE','WED','THU','FRI','SAT'][now.getDay()];
+  const month   = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'][now.getMonth()];
+  const day     = pad(now.getDate());
+
+  return (
+    <section className={'cockpit-strip cockpit-' + tod} aria-label="Career cockpit">
+      <div className="cockpit-grid">
+        <div className="cockpit-zone cockpit-status">
+          <span className="cockpit-tick">Status</span>
+          <div className="cockpit-status-line">
+            <span className="cockpit-led" aria-hidden="true"/>
+            <span>SESSION ACTIVE</span>
+          </div>
+          <div className="cockpit-readout">
+            <span className="cockpit-readout-lbl">Uptime</span>
+            <span className="cockpit-readout-num">{sStr}</span>
+          </div>
+        </div>
+
+        <div className="cockpit-divider" aria-hidden="true"/>
+
+        <div className="cockpit-zone cockpit-greeting">
+          <span className="cockpit-tick">Today</span>
+          <h2 className="cockpit-greet">{greet}, <em>{firstName}</em>.</h2>
+          <p className="cockpit-note">{note}</p>
+        </div>
+
+        <div className="cockpit-divider cockpit-divider--telemetry" aria-hidden="true"/>
+
+        <div className="cockpit-zone cockpit-telemetry">
+          <span className="cockpit-tick">Telemetry</span>
+          <div className="cockpit-stat-row">
+            <div className="cockpit-stat">
+              <span className="cockpit-stat-num">
+                <Icon name="flame" size={14}/>{streak}
+              </span>
+              <span className="cockpit-stat-lbl">Day streak</span>
+            </div>
+            <div className="cockpit-stat">
+              <span className="cockpit-stat-num">{phaseDone}<i>/7</i></span>
+              <span className="cockpit-stat-lbl">Phases</span>
+            </div>
+            <div className="cockpit-stat">
+              <span className="cockpit-stat-num">{matches}</span>
+              <span className="cockpit-stat-lbl">High-fit</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="cockpit-divider" aria-hidden="true"/>
+
+        <div className="cockpit-zone cockpit-time">
+          <span className="cockpit-tick">Local</span>
+          <div className="cockpit-clock">
+            {clock}
+            <span className="cockpit-clock-dot" aria-hidden="true"/>
+          </div>
+          <div className="cockpit-date">
+            <span>{weekday}</span>
+            <span className="cockpit-date-sep">/</span>
+            <span>{month} {day}</span>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+
 function Dashboard({ state, setPage, refresh }) {
   const jobs       = state?.scored_summary?.jobs || [];
   const apps       = state?.applications || [];
@@ -1437,6 +1561,15 @@ function Dashboard({ state, setPage, refresh }) {
           </div>
         </div>
       </section>
+
+      {/* ── Career Cockpit HUD strip — desktop-only telemetry band ──── */}
+      <CockpitStrip
+        state={state}
+        done={done}
+        apps={apps}
+        jobs={jobs}
+        matches={matches}
+      />
 
       {/* ── Resume Intelligence + Mission Control row ──────────────── */}
       <section className="dossier-row">

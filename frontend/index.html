@@ -3712,6 +3712,232 @@ code { font-family: var(--mono); font-size: 14px; background: var(--bg-3); paddi
 .hrc-lbl { font-family: var(--mono); font-size: 12px; letter-spacing: .12em; color: var(--t3); text-transform: uppercase; margin-top: 6px }
 .hrc-sub { font-size: 13px; color: var(--t3); margin-top: 4px; text-align: center }
 
+/* ────────────────────────────────────────────────────────────────────────
+   COCKPIT HUD STRIP
+   Aviation-instrument-inspired status panel between the home hero and
+   the Resume Intelligence dossier row. Surfaces session-live state, a
+   time-aware greeting, telemetry (streak / phases / high-fit), and a
+   ticking wall clock. The accent hue shifts with the user's local time
+   of day. Mobile (<760px) hides the strip — the hero already prioritises
+   the same content there in a stacked layout.
+   ──────────────────────────────────────────────────────────────────────── */
+.cockpit-strip {
+  position: relative; isolation: isolate; overflow: hidden;
+  border-radius: 14px; border: 1px solid var(--bdr2);
+  background:
+    repeating-linear-gradient(
+      0deg,
+      rgba(255,255,255,0)    0px,
+      rgba(255,255,255,0)    3px,
+      rgba(255,255,255,.014) 3px,
+      rgba(255,255,255,.014) 4px
+    ),
+    radial-gradient(120% 240% at 50% -60%, var(--cock-tint, rgba(167,139,255,.16)) 0%, transparent 60%),
+    linear-gradient(180deg, var(--bg-2) 0%, var(--bg-1) 100%);
+  margin-top: 14px;
+  animation: rise-in .55s cubic-bezier(.16,1,.3,1) .12s both;
+}
+/* Glowing top accent bar — hue follows time-of-day. */
+.cockpit-strip::before {
+  content: ''; position: absolute; left: 0; right: 0; top: 0; height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--cock-accent, var(--accent-h)) 18%,
+    var(--cock-accent, var(--accent-h)) 82%,
+    transparent 100%
+  );
+  box-shadow: 0 0 18px 0 var(--cock-accent, var(--accent-h));
+  opacity: .85; pointer-events: none;
+}
+/* Time-of-day hue accents. */
+.cockpit-midnight  { --cock-accent: #22e5ff; --cock-tint: rgba(34,229,255,.12) }
+.cockpit-morning   { --cock-accent: #ffd23d; --cock-tint: rgba(255,210, 61,.13) }
+.cockpit-afternoon { --cock-accent: #a78bff; --cock-tint: rgba(167,139,255,.16) }
+.cockpit-evening   { --cock-accent: #ff7da8; --cock-tint: rgba(255,125,168,.13) }
+.cockpit-nightfall { --cock-accent: #5a8aff; --cock-tint: rgba( 90,138,255,.14) }
+
+.cockpit-grid {
+  position: relative; z-index: 1;
+  display: grid;
+  grid-template-columns:
+    minmax(170px, 1fr) auto
+    minmax(280px, 2fr) auto
+    minmax(240px, 1.3fr) auto
+    minmax(170px, 1fr);
+  align-items: stretch;
+  padding: 14px 22px;
+}
+.cockpit-zone {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 4px 14px;
+  min-width: 0;
+}
+.cockpit-zone:first-child { padding-left: 4px }
+.cockpit-zone:last-child  { padding-right: 4px; align-items: flex-end; text-align: right }
+
+.cockpit-tick {
+  font-family: var(--mono); font-size: 9.5px; font-weight: 700;
+  letter-spacing: .22em; color: var(--t4);
+  text-transform: uppercase;
+  position: relative;
+  padding-left: 12px;
+}
+.cockpit-tick::before {
+  content: ''; position: absolute; left: 0; top: 50%;
+  width: 7px; height: 1px;
+  background: var(--cock-accent, var(--accent-h));
+  transform: translateY(-50%);
+  box-shadow: 0 0 6px var(--cock-accent, var(--accent-h));
+}
+.cockpit-zone:last-child .cockpit-tick { padding-left: 0; padding-right: 12px }
+.cockpit-zone:last-child .cockpit-tick::before { left: auto; right: 0 }
+
+/* Vertical instrument-style divider. Thin gradient line with notched caps. */
+.cockpit-divider {
+  position: relative; width: 1px; margin: 6px 0;
+  background: linear-gradient(180deg,
+    transparent 0%, var(--bdr2) 18%, var(--bdr2) 82%, transparent 100%);
+}
+.cockpit-divider::before,
+.cockpit-divider::after {
+  content: ''; position: absolute;
+  left: -2px; width: 5px; height: 1px;
+  background: var(--bdr2);
+}
+.cockpit-divider::before { top: 14px }
+.cockpit-divider::after  { bottom: 14px }
+
+/* ── ZONE: STATUS ─────────────────────────────────────── */
+.cockpit-status-line {
+  display: inline-flex; align-items: center; gap: 9px;
+  font-family: var(--mono); font-size: 12.5px; font-weight: 700;
+  letter-spacing: .14em; color: var(--t1);
+  margin-top: 1px;
+}
+.cockpit-led {
+  width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0;
+  background: var(--good);
+  box-shadow: 0 0 0 0 rgba(61,255,154,.7);
+  animation: cockpit-led 1.6s ease-in-out infinite;
+}
+@keyframes cockpit-led {
+  0%,100% { box-shadow: 0 0 0 0 rgba(61,255,154,.7) }
+  50%     { box-shadow: 0 0 0 6px rgba(61,255,154,0) }
+}
+.cockpit-readout {
+  display: inline-flex; align-items: baseline; gap: 8px;
+  margin-top: 2px;
+}
+.cockpit-readout-lbl {
+  font-family: var(--mono); font-size: 9.5px; font-weight: 600;
+  letter-spacing: .18em; color: var(--t4); text-transform: uppercase;
+}
+.cockpit-readout-num {
+  font-family: var(--mono); font-size: 17px; font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--t2); letter-spacing: .04em;
+}
+
+/* ── ZONE: GREETING ───────────────────────────────────── */
+.cockpit-greet {
+  font-family: var(--serif); font-weight: 500;
+  font-size: 22px; line-height: 1.12;
+  letter-spacing: -.02em; color: var(--t1);
+  margin: 1px 0 0;
+}
+.cockpit-greet em {
+  font-style: normal; font-weight: 600;
+  background: linear-gradient(105deg, var(--cock-accent, var(--accent-h)) 0%, var(--t1) 80%);
+  background-clip: text; -webkit-background-clip: text; color: transparent;
+}
+.cockpit-note {
+  font-size: 13px; line-height: 1.5; color: var(--t3);
+  margin: 0; max-width: 480px;
+}
+.cockpit-note strong { color: var(--t2); font-weight: 600 }
+
+/* ── ZONE: TELEMETRY ──────────────────────────────────── */
+.cockpit-stat-row {
+  display: flex; gap: 22px; align-items: flex-end;
+  margin-top: 1px;
+}
+.cockpit-stat {
+  display: flex; flex-direction: column; gap: 2px; align-items: flex-start;
+  min-width: 0;
+}
+.cockpit-stat-num {
+  display: inline-flex; align-items: baseline; gap: 5px;
+  font-family: var(--mono); font-size: 24px; font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--t1); letter-spacing: -.01em;
+  line-height: 1;
+}
+.cockpit-stat-num i {
+  font-style: normal; font-size: 13px; color: var(--t4); font-weight: 500;
+}
+.cockpit-stat-num svg { color: #fbbf24; transform: translateY(-1px) }
+.cockpit-stat-lbl {
+  font-family: var(--mono); font-size: 9px; font-weight: 600;
+  letter-spacing: .18em; color: var(--t4); text-transform: uppercase;
+}
+
+/* ── ZONE: TIME ───────────────────────────────────────── */
+.cockpit-clock {
+  font-family: var(--mono); font-size: 26px; font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--t1); letter-spacing: .02em;
+  line-height: 1; margin-top: 2px;
+  display: inline-flex; align-items: center; gap: 9px;
+}
+.cockpit-clock-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--cock-accent, var(--accent-h));
+  box-shadow: 0 0 8px var(--cock-accent, var(--accent-h));
+  animation: cockpit-tick-blink 1s steps(2,end) infinite;
+}
+@keyframes cockpit-tick-blink {
+  0%,100% { opacity: 1 } 50% { opacity: .25 }
+}
+.cockpit-date {
+  display: inline-flex; gap: 8px;
+  font-family: var(--mono); font-size: 11px; font-weight: 600;
+  letter-spacing: .14em; color: var(--t3); text-transform: uppercase;
+}
+.cockpit-date-sep { color: var(--t4) }
+
+/* ── RESPONSIVE ───────────────────────────────────────── */
+/* At narrower desktop widths, drop the telemetry zone (still in hero). */
+@media (max-width: 1180px) {
+  .cockpit-grid {
+    grid-template-columns:
+      minmax(160px, 1fr) auto
+      minmax(220px, 1.4fr) auto
+      minmax(160px, 1fr);
+  }
+  .cockpit-telemetry,
+  .cockpit-divider--telemetry { display: none }
+  .cockpit-note { display: none }
+}
+/* Mobile already foregrounds this content in the hero; don't duplicate. */
+@media (max-width: 760px) {
+  .cockpit-strip { display: none }
+}
+
+/* Light theme — soften the scanlines and tint */
+:root[data-theme="light"] .cockpit-strip {
+  background:
+    repeating-linear-gradient(
+      0deg,
+      rgba(20,20,40,0)   0px,
+      rgba(20,20,40,0)   3px,
+      rgba(20,20,40,.02) 3px,
+      rgba(20,20,40,.02) 4px
+    ),
+    radial-gradient(120% 240% at 50% -60%, var(--cock-tint, rgba(106,61,255,.12)) 0%, transparent 60%),
+    linear-gradient(180deg, var(--bg-1) 0%, var(--bg-2) 100%);
+}
+
 /* ── DOSSIER ROW: Resume Intelligence + Mission Control ─────────────────── */
 .dossier-row {
   display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr); gap: 18px;

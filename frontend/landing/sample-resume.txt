@@ -1,0 +1,44 @@
+Aisha Rahman
+aisha.rahman@mit.edu | (617) 555-0142 | Cambridge, MA | linkedin.com/in/aisha-rahman
+
+EDUCATION
+Massachusetts Institute of Technology, Cambridge, MA
+B.S. Electrical Engineering and Computer Science, GPA 4.7/5.0          Expected May 2025
+Coursework: Digital Systems, VLSI, Computer Architecture, Embedded Systems, ML for Hardware
+
+EXPERIENCE
+Apple Inc., Cupertino, CA
+IC Design Intern                                                       Jun 2024 - Aug 2024
+- Designed RF amplifier prototypes that improved SNR by 6 dB across 5 test devices.
+- Wrote 2,400 lines of SystemVerilog for a low-power memory controller, reducing leakage 18%.
+- Automated regression tests in Python, cutting verification time from 4 hours to 22 minutes.
+- Presented results to a 12-engineer review board; design taped out in Q4 silicon.
+
+NVIDIA, Santa Clara, CA
+ASIC Verification Intern                                               Jun 2023 - Aug 2023
+- Built UVM testbench covering 94% of an H100 datapath module across 320 directed tests.
+- Triaged 47 silicon bugs against pre-tape-out RTL; root-caused 11 to incorrect FSM encoding.
+- Optimized a CUDA matmul kernel from 1.2 TFLOPS to 1.8 TFLOPS on Ampere by tiling shared memory.
+
+MIT Lincoln Laboratory, Lexington, MA
+Undergraduate Researcher                                               Jan 2023 - May 2023
+- Engineered a 5-stage RISC-V pipeline in Verilog; synthesized at 240 MHz on Xilinx Artix-7.
+- Co-authored paper on radiation-hardened SRAM cells (accepted at ISSCC 2024 student session).
+
+PROJECTS
+SatelliteLink (CubeSat ground station, MIT EECS)
+- Implemented FEC decoder in Python + C; recovered 12 dB of link margin in lab testing.
+- Maintained Python 3.11 service running on Raspberry Pi at the Cambridge ground station.
+
+SKILLS
+Languages: Python, C, C++, SystemVerilog, Verilog, VHDL, MATLAB, CUDA, Bash
+Tools: Cadence Genus, Synopsys VCS, Vivado, Xilinx ISE, Quartus, KiCad, Git, Linux
+Methodologies: UVM, OOP, Statistical Signal Processing, FPGA prototyping, ATPG
+Hardware: PCB design, oscilloscope debug, JTAG, I2C, SPI, UART
+
+LEADERSHIP
+MIT Solar Electric Vehicle Team                                        2022 - Present
+- Lead 6-person motor controller subteam; raced 1,650 mi at American Solar Challenge 2024.
+
+LANGUAGES
+English (native), Bengali (native), Mandarin (conversational)

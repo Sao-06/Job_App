@@ -6721,7 +6721,6 @@ function SettingsPage({ state, refresh, setPage }) {
               <select className="set-select" value={cfg.mode} onChange={e => update({ mode: e.target.value })}>
                 <option value="anthropic">Anthropic Claude (High quality){isPro ? '' : ' — Pro'}</option>
                 <option value="ollama">Local Ollama (Free/Private)</option>
-                <option value="demo">Demo mode (Offline/Template)</option>
               </select>
             </div>
             {planError && (
@@ -6964,7 +6963,6 @@ function PlansPage({ state, setPage }) {
             </div>
             <div className="plan-tag">Bring your own local LLM</div>
             <ul className="plan-features">
-              <li><Icon name="check" size={13}/> Demo mode (offline, template-based)</li>
               <li><Icon name="check" size={13}/> Local Ollama — private, free, your hardware</li>
               <li><Icon name="check" size={13}/> Full 7-phase pipeline</li>
               <li><Icon name="check" size={13}/> Excel tracker + run reports</li>
@@ -8173,12 +8171,12 @@ function DevPage({ state: globalState, refresh: globalRefresh }) {
               <div className="sc-col">
                 <div className="sc-col-h"><Icon name="cpu" size={11}/> LLM provider — this session only</div>
                 <div className="sc-radio-row">
-                  {['anthropic', 'ollama', 'demo'].map(m => (
+                  {['anthropic', 'ollama'].map(m => (
                     <button
                       key={m}
                       className={'sc-radio' + (globalState?.mode === m ? ' on' : '')}
                       onClick={() => saveSessionConfig({ mode: m })}>
-                      {m === 'anthropic' ? 'Claude' : m === 'ollama' ? 'Ollama' : 'Demo'}
+                      {m === 'anthropic' ? 'Claude' : 'Ollama'}
                     </button>
                   ))}
                 </div>

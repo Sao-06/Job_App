@@ -211,12 +211,14 @@ em, i, cite, var { font-style: normal }
 @keyframes scroll-hint-bob { 0%, 100% { transform: translate(-50%, 0); opacity: .55 } 50% { transform: translate(-50%, 6px); opacity: .9 } }
 
 /* ── SCRUBBER ─────────────────────────────────────────────────────────── */
-/* The whole demo is a single section pinned for ~600vh of scroll. Inside,
-   everything reads off one progress value (0..1). Each phase has a slice of
-   that range; intra-phase progress drives the moment-to-moment animation. */
+/* The whole demo is a single section pinned for ~1400vh of scroll. Inside,
+   everything reads off one progress value (0..1). Each phase gets ~200vh of
+   scroll travel, which on a 1080-tall viewport feels like 2-3s of attention
+   per phase even when scrolling aggressively — short enough not to bore,
+   long enough that visitors can't accidentally skim past the punchline. */
 .scrubber {
   position: relative;
-  height: 700vh;          /* total scroll travel; tune for desired pacing */
+  height: 1400vh;         /* total scroll travel; tune for desired pacing */
   background: var(--bg);
 }
 .scrubber-pin {
@@ -687,6 +689,217 @@ em, i, cite, var { font-style: normal }
   align-self: flex-start;
 }
 
+/* ── RECAP ───────────────────────────────────────────────────────────── */
+/* Sits directly under the Scrubber. Translates the visitor's "I just watched
+   this thing run" feeling into the four numbers that anchor the pitch, then
+   names each phase they actually saw. Same dark palette as the scrubber so
+   it reads as a continuation, not a new page. */
+.recap {
+  position: relative; isolation: isolate;
+  padding: 90px 40px 70px;
+  background:
+    radial-gradient(80% 60% at 50% 0%, rgba(124,92,255,.10) 0%, transparent 60%),
+    var(--bg);
+  border-top: 1px solid var(--bdr);
+}
+.recap-inner { max-width: 1180px; margin: 0 auto }
+.recap-eyebrow {
+  display: inline-flex; align-items: center; gap: 9px;
+  font-family: var(--mono); font-size: 11.5px; font-weight: 600;
+  color: var(--t2); letter-spacing: .14em; text-transform: uppercase;
+  padding: 6px 12px; border-radius: 999px;
+  background: rgba(255,255,255,.03); border: 1px solid var(--bdr);
+  margin-bottom: 18px;
+}
+.recap-eyebrow-num {
+  font-family: var(--serif); font-size: 15px;
+  background: linear-gradient(105deg, #a78bff 0%, #22e5ff 110%);
+  background-clip: text; -webkit-background-clip: text; color: transparent;
+  letter-spacing: -.02em; text-transform: none; font-weight: 600;
+}
+.recap-h {
+  font-family: var(--serif); font-weight: 400;
+  font-size: clamp(34px, 4.4vw, 54px); line-height: 1.04;
+  letter-spacing: -.035em; color: var(--t1);
+  max-width: 740px; margin-bottom: 14px;
+}
+.recap-h em {
+  background: linear-gradient(105deg, #a78bff 0%, #ff3d9a 60%, #22e5ff 110%);
+  background-clip: text; -webkit-background-clip: text; color: transparent;
+  font-weight: 500;
+}
+.recap-sub {
+  font-size: 16.5px; line-height: 1.65; color: var(--t2);
+  max-width: 640px; margin-bottom: 36px;
+}
+.recap-sub strong { color: var(--t1); font-weight: 600 }
+
+.recap-stats {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px;
+  margin-bottom: 44px;
+}
+.recap-stat {
+  position: relative; isolation: isolate;
+  padding: 22px 22px 20px;
+  border-radius: 14px;
+  background: linear-gradient(165deg, rgba(255,255,255,.03) 0%, rgba(255,255,255,.01) 70%);
+  border: 1px solid var(--bdr);
+  overflow: hidden;
+}
+.recap-stat::before {
+  content: ''; position: absolute; inset: -1px;
+  border-radius: inherit; pointer-events: none;
+  background: var(--stat-glow, radial-gradient(60% 80% at 0% 0%, rgba(124,92,255,.14), transparent 60%));
+  z-index: -1;
+}
+.recap-stat-n {
+  font-family: var(--serif); font-weight: 500;
+  font-size: 44px; line-height: 1;
+  color: var(--t1); letter-spacing: -.04em;
+  font-variant-numeric: tabular-nums;
+  background: var(--stat-grad, linear-gradient(105deg, #a78bff 0%, #22e5ff 100%));
+  background-clip: text; -webkit-background-clip: text; color: transparent;
+  margin-bottom: 8px;
+}
+.recap-stat-n-unit {
+  font-family: var(--mono); font-size: 18px; font-weight: 600;
+  margin-left: 2px; vertical-align: 2px;
+}
+.recap-stat-l {
+  font-family: var(--mono); font-size: 11.5px; font-weight: 600;
+  color: var(--t3); letter-spacing: .12em; text-transform: uppercase;
+}
+
+.recap-phases {
+  display: grid; grid-template-columns: repeat(7, 1fr); gap: 10px;
+}
+.recap-phase {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 14px 14px 16px;
+  background: rgba(255,255,255,.02);
+  border: 1px solid var(--bdr);
+  border-radius: 10px;
+  transition: transform .2s, border-color .2s, background .2s;
+}
+.recap-phase:hover {
+  transform: translateY(-3px);
+  border-color: var(--accent-b);
+  background: rgba(124,92,255,.04);
+}
+.recap-phase-num {
+  font-family: var(--mono); font-size: 10px; font-weight: 700;
+  letter-spacing: .14em; color: var(--accent-h);
+  text-transform: uppercase;
+}
+.recap-phase-t {
+  font-family: var(--sans); font-size: 14px; font-weight: 600;
+  color: var(--t1); letter-spacing: -.005em;
+}
+.recap-phase-d {
+  font-family: var(--sans); font-size: 12.5px; line-height: 1.5; color: var(--t3);
+}
+
+/* ── PROVIDERS ───────────────────────────────────────────────────────── */
+.providers {
+  position: relative;
+  padding: 80px 40px 100px;
+  background:
+    radial-gradient(60% 50% at 50% 100%, rgba(34,229,255,.08) 0%, transparent 60%),
+    var(--bg);
+  border-top: 1px solid var(--bdr);
+}
+.providers-inner { max-width: 980px; margin: 0 auto }
+.providers-h {
+  font-family: var(--serif); font-weight: 400;
+  font-size: clamp(30px, 3.4vw, 42px); line-height: 1.04;
+  letter-spacing: -.03em; color: var(--t1);
+  max-width: 640px; margin-bottom: 12px;
+}
+.providers-h em {
+  background: linear-gradient(105deg, #a78bff 0%, #22e5ff 110%);
+  background-clip: text; -webkit-background-clip: text; color: transparent;
+  font-weight: 500;
+}
+.providers-sub {
+  font-size: 15.5px; line-height: 1.6; color: var(--t3);
+  max-width: 600px; margin-bottom: 32px;
+}
+
+.provider-row {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+}
+.provider-card {
+  position: relative; overflow: hidden;
+  padding: 26px 28px 24px;
+  border-radius: 16px;
+  background: linear-gradient(165deg, rgba(255,255,255,.04) 0%, rgba(0,0,0,.3) 100%);
+  border: 1px solid var(--bdr2);
+  display: flex; flex-direction: column; gap: 14px;
+  transition: transform .2s, border-color .2s;
+}
+.provider-card:hover {
+  transform: translateY(-4px);
+  border-color: var(--accent-b);
+}
+.provider-card.recommended {
+  border-color: var(--accent-b);
+  background: linear-gradient(165deg, rgba(124,92,255,.08) 0%, rgba(0,0,0,.3) 100%);
+  box-shadow: 0 24px 60px -28px rgba(124,92,255,.5);
+}
+.provider-tag {
+  position: absolute; top: 16px; right: 16px;
+  font-family: var(--mono); font-size: 10px; font-weight: 700;
+  letter-spacing: .14em; text-transform: uppercase;
+  padding: 3px 9px; border-radius: 999px;
+  background: var(--accent-d); color: var(--accent-h);
+  border: 1px solid var(--accent-b);
+}
+.prov-eyebrow {
+  font-family: var(--mono); font-size: 11px; font-weight: 600;
+  color: var(--t3); letter-spacing: .14em; text-transform: uppercase;
+}
+.prov-name {
+  font-family: var(--serif); font-weight: 500;
+  font-size: 28px; line-height: 1.1;
+  letter-spacing: -.03em; color: var(--t1);
+}
+.prov-name em {
+  background: linear-gradient(105deg, #a78bff 0%, #ff3d9a 60%, #22e5ff 110%);
+  background-clip: text; -webkit-background-clip: text; color: transparent;
+  font-weight: 600;
+}
+.prov-models {
+  font-family: var(--mono); font-size: 12px; color: var(--t4);
+  letter-spacing: .04em;
+}
+.prov-list {
+  display: flex; flex-direction: column; gap: 8px;
+  margin-top: 4px;
+}
+.prov-li {
+  display: grid; grid-template-columns: 18px 1fr; gap: 10px; align-items: flex-start;
+  font-size: 14px; color: var(--t2); line-height: 1.5;
+}
+.prov-li-mark {
+  width: 18px; height: 18px; border-radius: 5px;
+  background: var(--good-d); color: var(--good);
+  display: inline-flex; align-items: center; justify-content: center;
+  margin-top: 1px;
+}
+.prov-cost {
+  margin-top: auto; padding-top: 12px;
+  border-top: 1px solid var(--bdr);
+  display: flex; align-items: baseline; gap: 8px;
+  font-family: var(--mono);
+}
+.prov-cost-n {
+  font-family: var(--serif); font-size: 28px; font-weight: 500;
+  letter-spacing: -.02em; color: var(--t1);
+}
+.prov-cost-l {
+  font-size: 12.5px; color: var(--t3);
+}
+
 /* ── FINAL CTA + FOOTER ──────────────────────────────────────────────── */
 .cta {
   position: relative;
@@ -748,6 +961,9 @@ em, i, cite, var { font-style: normal }
   .ph3-score-num { grid-column: 1; justify-self: end }
   .ph5-form { grid-template-columns: 1fr }
   .ph6-row  { grid-template-columns: 28px 1.6fr 1.6fr 60px 80px }
+  .recap-stats   { grid-template-columns: repeat(2, 1fr) }
+  .recap-phases  { grid-template-columns: repeat(2, 1fr) }
+  .provider-row  { grid-template-columns: 1fr }
 }
 
 @media (max-width: 720px) {
@@ -766,6 +982,10 @@ em, i, cite, var { font-style: normal }
   .scr-stage { padding: 24px 14px; min-height: 460px }
   .scr-frame { position: relative; inset: auto }
   .ph6-table { font-size: 10px }
+  .recap     { padding: 60px 18px 50px }
+  .providers { padding: 50px 18px 70px }
+  .recap-stats { grid-template-columns: 1fr 1fr }
+  .recap-phases { grid-template-columns: 1fr }
   .cta { padding: 80px 20px 60px }
 }
 </style>
@@ -1280,6 +1500,153 @@ function Phase7Report({ data, p }) {
   );
 }
 
+/* ══════════════════════════════════════════════════════════════════════
+   RECAP — sits directly under the scrubber. Anchors what the visitor just
+   watched in four numbers and seven one-line phase summaries. Static
+   content (framework facts, not run-specific) so no data dependency on the
+   scrubber's JSON.
+   ══════════════════════════════════════════════════════════════════════ */
+function Recap() {
+  const stats = [
+    { n: '20',  unit: '+',  l: 'Job sources',    grad: 'linear-gradient(105deg, #a78bff 0%, #22e5ff 100%)' },
+    { n: '7',                l: 'Pipeline phases', grad: 'linear-gradient(105deg, #22e5ff 0%, #a78bff 100%)' },
+    { n: '0',   prefix: '$', l: 'Keys to start',   grad: 'linear-gradient(105deg, #4ade80 0%, #22e5ff 100%)' },
+    { n: '~4',  unit: 'm',   l: 'Full run',        grad: 'linear-gradient(105deg, #ff3d9a 0%, #a78bff 100%)' },
+  ];
+  const phases = [
+    { n: 1, t: 'Resume scan',      d: 'Heuristic regex pulls every field. The LLM verifies and adds a critique.' },
+    { n: 2, t: 'Discovery',        d: '20+ sources hit in parallel. Deduplicated by URL and (company, title).' },
+    { n: 3, t: 'Scoring',          d: 'Fast keyword pass, then an LLM rubric for the top picks. Cents, not dollars.' },
+    { n: 4, t: 'Tailoring',        d: 'Bullets rewritten for each posting. Diff is human-readable, not a black box.' },
+    { n: 5, t: 'Submission',       d: 'Greenhouse via Playwright when allowed. Manual queue for boards that aren\'t.' },
+    { n: 6, t: 'Tracker',          d: 'Excel workbook, 17 columns, color-coded status. Auto-deduped against last run.' },
+    { n: 7, t: 'Run report',       d: 'Plain-language summary, top picks, manual queue, next steps. Optional email.' },
+  ];
+  return (
+    <section className="recap" id="recap">
+      <div className="recap-inner">
+        <div className="recap-eyebrow">
+          <span className="recap-eyebrow-num">02</span>
+          <span>Recap</span>
+        </div>
+        <h2 className="recap-h">
+          What you just watched is <em>the actual production code.</em>
+        </h2>
+        <p className="recap-sub">
+          Same scanner. Same scorer. Same tailor. Your run will look like that against
+          your own resume — only the names, scores, and bullets change. Every number
+          on this page came out of <strong>frontend/landing/demo-run.json</strong>,
+          which a build script regenerates by running the real pipeline.
+        </p>
+
+        <div className="recap-stats">
+          {stats.map(s => (
+            <div key={s.l} className="recap-stat" style={{ '--stat-grad': s.grad }}>
+              <div className="recap-stat-n" style={{ background: s.grad, WebkitBackgroundClip: 'text', backgroundClip: 'text', color: 'transparent' }}>
+                {s.prefix}{s.n}{s.unit && <span className="recap-stat-n-unit">{s.unit}</span>}
+              </div>
+              <div className="recap-stat-l">{s.l}</div>
+            </div>
+          ))}
+        </div>
+
+        <div className="recap-phases">
+          {phases.map(p => (
+            <div key={p.n} className="recap-phase">
+              <span className="recap-phase-num">Phase {p.n}</span>
+              <span className="recap-phase-t">{p.t}</span>
+              <span className="recap-phase-d">{p.d}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   PROVIDERS — what the demo deliberately didn't show: which engine is
+   actually doing the LLM work, and what it costs you. Two cards, no Demo
+   row (that mode was retired in this same redesign).
+   ══════════════════════════════════════════════════════════════════════ */
+function Providers() {
+  const ollama = {
+    eyebrow: 'Local · free · private',
+    name:    <>Local <em>Ollama</em></>,
+    models:  'llama · mistral · qwen · gemma',
+    list: [
+      'Resume text never leaves your network',
+      'Drop-in swap of any model you have pulled',
+      'Full pipeline runs on your hardware',
+    ],
+    cost: '$0',
+    costL: '/ forever',
+    recommended: true,
+  };
+  const claude = {
+    eyebrow: 'Cloud · highest quality',
+    name:    <>Anthropic <em>Claude</em></>,
+    models:  'opus · sonnet · haiku',
+    list: [
+      'Tool-use forces strict JSON — no parse failures',
+      'Adaptive thinking on extraction & tailoring',
+      'Cents per resume run on Opus',
+    ],
+    cost: '$4',
+    costL: '/ month · BYO API key',
+  };
+  return (
+    <section className="providers" id="providers">
+      <div className="providers-inner">
+        <div className="recap-eyebrow">
+          <span className="recap-eyebrow-num">03</span>
+          <span>Pick your engine</span>
+        </div>
+        <h2 className="providers-h">
+          Free <em>locally.</em> Pro for cloud.
+        </h2>
+        <p className="providers-sub">
+          Every LLM-touching step in the pipeline calls the same provider interface,
+          so you can switch mid-run without losing state.
+        </p>
+
+        <div className="provider-row">
+          <ProviderCard c={ollama}/>
+          <ProviderCard c={claude}/>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ProviderCard({ c }) {
+  return (
+    <div className={'provider-card' + (c.recommended ? ' recommended' : '')}>
+      {c.recommended && <span className="provider-tag">Recommended</span>}
+      <span className="prov-eyebrow">{c.eyebrow}</span>
+      <span className="prov-name">{c.name}</span>
+      <span className="prov-models">{c.models}</span>
+      <div className="prov-list">
+        {c.list.map((li, i) => (
+          <div key={i} className="prov-li">
+            <span className="prov-li-mark">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                   strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="20 6 9 17 4 12"/>
+              </svg>
+            </span>
+            <span>{li}</span>
+          </div>
+        ))}
+      </div>
+      <div className="prov-cost">
+        <span className="prov-cost-n">{c.cost}</span>
+        <span className="prov-cost-l">{c.costL}</span>
+      </div>
+    </div>
+  );
+}
+
 /* ── FINAL CTA ───────────────────────────────────────────────────────── */
 function FinalCTA() {
   return (
@@ -1316,6 +1683,8 @@ function App() {
       <Nav/>
       <Hero/>
       <Scrubber/>
+      <Recap/>
+      <Providers/>
       <FinalCTA/>
       <Footer/>
     </>

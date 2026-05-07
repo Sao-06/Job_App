@@ -260,9 +260,17 @@ def dashboard():
         "Expires":       "0",
     })
 
-@app.get("/frontend/{filename}")
-def frontend_static(filename: str):
-    p = Path("frontend") / filename
+@app.get("/frontend/{filepath:path}")
+def frontend_static(filepath: str):
+    # `:path` lets one-segment names (`app.jsx`) AND nested ones
+    # (`landing/demo-run.json`) both resolve. Sandbox the result back into
+    # the frontend/ tree to block any `..` traversal attempt.
+    base = Path("frontend").resolve()
+    p = (base / filepath).resolve()
+    try:
+        p.relative_to(base)
+    except ValueError:
+        raise HTTPException(404, "Not found")
     if not p.exists() or not p.is_file():
         raise HTTPException(404, "Not found")
     # No build step — `app.jsx` is transpiled by in-browser Babel on every
@@ -925,6 +933,10 @@ def _load_session_state(session_id: str) -> dict:
     # exact prior default — users who actually customized it keep their list.
     if str(state.get("whitelist") or "").strip() == _LEGACY_WHITELIST_DEFAULT:
         state["whitelist"] = ""
+    # `mode='demo'` was retired — coerce stale state forward to the new
+    # default so every poll of /api/state returns a still-valid mode.
+    if state.get("mode") == "demo":
+        state["mode"] = "ollama"
     return state
 
 
@@ -2172,6 +2184,11 @@ def load_demo_resume(request: Request):
 async def update_config(req: Request):
     auth_user = _require_auth_user(req)
     body = await req.json()
+    # Mode whitelist — `demo` was retired in favor of always-on Ollama (or
+    # Anthropic for Pro). The DemoProvider class still exists as Ollama's
+    # internal-fallback, but is no longer user-selectable.
+    if body.get("mode") not in (None, "ollama", "anthropic"):
+        raise HTTPException(400, f"Invalid mode: {body.get('mode')!r} (expected 'ollama' or 'anthropic')")
     # Plan gates — devs bypass all of them.
     plan = (auth_user or {}).get("plan_tier") or "free"
     is_dev = _is_underlying_dev_request(req)

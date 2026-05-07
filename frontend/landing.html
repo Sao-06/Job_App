@@ -4,7 +4,7 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
 <title>Jobs AI — Autonomous Job Application Platform</title>
-<meta name="description" content="Drop your resume once. Jobs AI scans it, verifies it with AI, scores 20+ job sources against your profile, tailors every application, and tracks the results."/>
+<meta name="description" content="Drop a resume. We scan it, score 20 sources against your profile, and tailor every application — automatically. Watch a real run."/>
 
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
@@ -23,11 +23,6 @@
   --surface:   #1c1c2e;
   --bdr:       rgba(255,255,255,.06);
   --bdr2:      rgba(255,255,255,.13);
-  /* Text tones — brightened for readability.  Previous values had t2 at
-     #9999b6 (~67% L) and t3 at #6a6a86 (~45% L), which felt muted on the
-     near-black landing background.  The new ramp keeps the same relative
-     hierarchy but bumps each step closer to white so all secondary copy
-     passes WCAG AA. */
   --t1:        #f6f7ff;
   --t2:        #c8c8df;
   --t3:        #9da0bd;
@@ -44,38 +39,24 @@
   --warn:      #fbbf24;
   --warn-d:    rgba(251,191,36,.10);
   --bad:       #f87171;
-  --bad-d:     rgba(248,113,113,.12);
-  --mono:  'JetBrains Mono', ui-monospace, monospace;
-  --sans:  'Inter', system-ui, -apple-system, sans-serif;
-  /* Headlines were Literata italic; user found that hard to read, so the
-     "serif" token now resolves to Inter and italic styling is normalised
-     globally below. The variable name is kept so existing selectors don't
-     need to be rewired. */
-  --serif: 'Inter', system-ui, -apple-system, sans-serif;
+  --mono:      'JetBrains Mono', ui-monospace, monospace;
+  --sans:      'Inter', system-ui, -apple-system, sans-serif;
+  --serif:     'Inter', system-ui, -apple-system, sans-serif;
 }
 *,*::before,*::after { box-sizing: border-box; margin: 0; padding: 0 }
-html { scroll-behavior: smooth; font-size: 16px; font-optical-sizing: auto }
+html { scroll-behavior: smooth; font-size: 16px }
 body {
   font-family: var(--sans); background: var(--bg); color: var(--t1);
   -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
   letter-spacing: -.005em; overflow-x: hidden;
 }
-/* Solid letters, never cursive — neutralise the browser-default italic on
-   <em>/<i>/<cite>/<var>/<address>/<dfn> so unstyled or markdown-inserted
-   tags can't sneak a slant in. */
-em, i, cite, var, address, dfn { font-style: normal }
+em, i, cite, var { font-style: normal }
 ::-webkit-scrollbar { width: 6px; height: 6px }
 ::-webkit-scrollbar-track { background: transparent }
 ::-webkit-scrollbar-thumb { background: rgba(255,255,255,.10); border-radius: 3px }
 
-/* ── grain overlay applied to atmospheric sections ────────────────────── */
-.grain {
-  position: absolute; inset: 0; pointer-events: none; opacity: .35; mix-blend-mode: overlay; z-index: 0;
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 .35 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
-}
-
-/* ── NAV ──────────────────────────────────────────────────────────────── */
+/* ── NAV ─────────────────────────────────────────────────────────────── */
 .nav {
   position: fixed; top: 0; left: 0; right: 0; z-index: 100; height: 64px;
   display: flex; align-items: center; justify-content: space-between;
@@ -83,10 +64,7 @@ em, i, cite, var, address, dfn { font-style: normal }
   background: rgba(7,7,13,.75); backdrop-filter: blur(20px) saturate(140%);
   border-bottom: 1px solid var(--bdr);
 }
-.brand {
-  display: inline-flex; align-items: center; gap: 10px;
-  cursor: pointer; user-select: none; text-decoration: none;
-}
+.brand { display: inline-flex; align-items: center; gap: 10px; cursor: pointer; user-select: none; text-decoration: none }
 .brand-glyph {
   width: 28px; height: 28px; border-radius: 7px; flex-shrink: 0;
   display: inline-flex; align-items: center; justify-content: center;
@@ -95,10 +73,9 @@ em, i, cite, var, address, dfn { font-style: normal }
 }
 .brand-name {
   font-family: var(--serif); font-size: 22px; line-height: 1; letter-spacing: -.3px;
-  color: var(--t1);
+  color: var(--t1); font-weight: 600;
 }
 .brand-name em {
-  font-style: normal;
   background: linear-gradient(105deg, #ffffff 0%, #a78bff 50%, #22e5ff 100%);
   background-clip: text; -webkit-background-clip: text; color: transparent;
 }
@@ -116,16 +93,9 @@ em, i, cite, var, address, dfn { font-style: normal }
   background: linear-gradient(135deg, #7c5cff 0%, #ff3d9a 100%);
   box-shadow: 0 8px 22px -8px rgba(255,61,154,.55), inset 0 1px 0 rgba(255,255,255,.18);
   transition: transform .15s, box-shadow .15s;
-  position: relative; overflow: hidden; isolation: isolate;
   margin-left: 6px;
 }
-.nav-cta::after {
-  content: ''; position: absolute; top: 0; left: -65%; width: 42%; height: 100%;
-  background: linear-gradient(110deg, transparent 0%, rgba(255,255,255,.4) 50%, transparent 100%);
-  transform: skewX(-18deg); transition: left .55s cubic-bezier(.16,1,.3,1);
-}
 .nav-cta:hover { transform: translateY(-1px); box-shadow: 0 14px 28px -8px rgba(255,61,154,.6), inset 0 1px 0 rgba(255,255,255,.22) }
-.nav-cta:hover::after { left: 130% }
 
 /* ── HERO ─────────────────────────────────────────────────────────────── */
 .hero {
@@ -137,25 +107,23 @@ em, i, cite, var, address, dfn { font-style: normal }
               var(--bg);
 }
 .hero-orbs { position: absolute; inset: 0; pointer-events: none; z-index: 0 }
-.hero-orb {
-  position: absolute; border-radius: 50%; filter: blur(80px); opacity: .55;
-}
+.hero-orb { position: absolute; border-radius: 50%; filter: blur(80px); opacity: .55 }
 .hero-orb-1 { width: 520px; height: 520px; left: -120px; top: -180px;
   background: radial-gradient(circle, #a78bff 0%, transparent 70%);
-  animation: orb-drift-1 18s ease-in-out infinite; }
+  animation: orb-drift-1 18s ease-in-out infinite }
 .hero-orb-2 { width: 440px; height: 440px; right: -80px; top: 80px;
   background: radial-gradient(circle, #ff3d9a 0%, transparent 70%);
-  animation: orb-drift-2 22s ease-in-out infinite; }
+  animation: orb-drift-2 22s ease-in-out infinite }
 .hero-orb-3 { width: 360px; height: 360px; right: 30%; bottom: -120px;
   background: radial-gradient(circle, #22e5ff 0%, transparent 70%); opacity: .4;
-  animation: orb-drift-3 24s ease-in-out infinite; }
+  animation: orb-drift-3 24s ease-in-out infinite }
 @keyframes orb-drift-1 { 0%, 100% { transform: translate(0,0) } 50% { transform: translate(60px, 50px) } }
 @keyframes orb-drift-2 { 0%, 100% { transform: translate(0,0) } 50% { transform: translate(-50px, 80px) } }
 @keyframes orb-drift-3 { 0%, 100% { transform: translate(0,0) } 50% { transform: translate(-70px, -40px) } }
 
 .hero-inner {
-  position: relative; z-index: 2; max-width: 1240px; margin: 0 auto; width: 100%;
-  display: grid; grid-template-columns: 1fr 1fr; gap: 80px; align-items: center;
+  position: relative; z-index: 2; max-width: 880px; margin: 0 auto; width: 100%;
+  text-align: center;
 }
 .hero-eyebrow {
   display: inline-flex; align-items: center; gap: 9px;
@@ -166,10 +134,10 @@ em, i, cite, var, address, dfn { font-style: normal }
   margin-bottom: 28px;
 }
 .hero-eyebrow-num {
-  font-family: var(--serif); font-size: 17px; font-style: normal;
+  font-family: var(--serif); font-size: 17px;
   background: linear-gradient(105deg, #a78bff 0%, #22e5ff 110%);
   background-clip: text; -webkit-background-clip: text; color: transparent;
-  letter-spacing: -.02em; text-transform: none;
+  letter-spacing: -.02em; text-transform: none; font-weight: 600;
 }
 .hero-eyebrow-pulse {
   width: 8px; height: 8px; border-radius: 50%; background: var(--good);
@@ -180,21 +148,21 @@ em, i, cite, var, address, dfn { font-style: normal }
 
 .hero-h1 {
   font-family: var(--serif); font-weight: 400;
-  font-size: clamp(46px, 5.6vw, 84px); line-height: .98;
-  letter-spacing: -.045em; color: var(--t1); margin-bottom: 22px;
+  font-size: clamp(46px, 6vw, 88px); line-height: .98;
+  letter-spacing: -.045em; color: var(--t1); margin-bottom: 24px;
 }
 .hero-h1 em {
-  font-style: normal;
   background: linear-gradient(105deg, #ffffff 0%, #a78bff 35%, #ff3d9a 70%, #22e5ff 100%);
   background-clip: text; -webkit-background-clip: text; color: transparent;
+  font-weight: 500;
 }
 .hero-sub {
-  font-size: 18.5px; line-height: 1.65; color: var(--t2);
-  max-width: 480px; margin-bottom: 32px; font-weight: 400;
+  font-size: 19px; line-height: 1.55; color: var(--t2);
+  max-width: 600px; margin: 0 auto 32px; font-weight: 400;
 }
 .hero-sub strong { color: var(--t1); font-weight: 600 }
 
-.hero-cta-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center }
+.hero-cta-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: center }
 .btn-cta {
   display: inline-flex; align-items: center; gap: 9px;
   padding: 14px 26px; border-radius: 11px;
@@ -204,17 +172,11 @@ em, i, cite, var, address, dfn { font-style: normal }
   box-shadow: 0 14px 38px -10px rgba(124,92,255,.65),
               0 0 0 1px rgba(255,255,255,.05) inset,
               0 1px 0 rgba(255,255,255,.18) inset;
-  position: relative; overflow: hidden; isolation: isolate;
+  position: relative; overflow: hidden;
   transition: transform .18s, box-shadow .18s;
 }
-.btn-cta::after {
-  content: ''; position: absolute; top: 0; left: -65%; width: 42%; height: 100%;
-  background: linear-gradient(110deg, transparent 0%, rgba(255,255,255,.5) 50%, transparent 100%);
-  transform: skewX(-18deg); transition: left .65s cubic-bezier(.16,1,.3,1);
-}
 .btn-cta:hover { transform: translateY(-2px); box-shadow: 0 22px 50px -12px rgba(255,61,154,.6), 0 0 0 1px rgba(255,255,255,.08) inset, 0 1px 0 rgba(255,255,255,.24) inset }
-.btn-cta:hover::after { left: 135% }
-.btn-arrow { transition: transform .25s cubic-bezier(.16,1,.3,1) }
+.btn-cta .btn-arrow { transition: transform .25s cubic-bezier(.16,1,.3,1) }
 .btn-cta:hover .btn-arrow { transform: translateX(4px) }
 .btn-ghost {
   display: inline-flex; align-items: center; gap: 8px;
@@ -226,8 +188,10 @@ em, i, cite, var, address, dfn { font-style: normal }
 .btn-ghost:hover { background: rgba(255,255,255,.04); border-color: var(--accent-b) }
 
 .hero-reassure {
-  margin-top: 22px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-  font-family: var(--mono); font-size: 12.5px; color: var(--t3);
+  margin-top: 26px;
+  display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  font-family: var(--mono); font-size: 12px; color: var(--t3);
+  letter-spacing: .04em;
 }
 .hero-reassure .dot {
   width: 7px; height: 7px; border-radius: 50%; background: var(--good);
@@ -236,853 +200,621 @@ em, i, cite, var, address, dfn { font-style: normal }
 }
 @keyframes hr-pulse { 50% { box-shadow: 0 0 0 8px rgba(74,222,128,0) } }
 
-/* ── HERO PREVIEW: Resume Intelligence dossier card ───────────────────── */
-.hero-preview {
-  position: relative;
-  perspective: 1400px;
-}
-.dossier-preview {
-  position: relative;
-  border-radius: 22px; padding: 22px 24px 24px;
-  background: linear-gradient(165deg, rgba(255,255,255,.04) 0%, rgba(255,255,255,.01) 60%, rgba(0,0,0,.4) 100%);
-  border: 1px solid var(--bdr2);
-  box-shadow:
-    0 50px 100px -30px rgba(0,0,0,.7),
-    0 0 0 1px rgba(255,255,255,.04) inset,
-    0 1px 0 rgba(255,255,255,.06) inset;
-  /* Resting tilt as a fallback before the rAF loop kicks in. The JS
-     interactive parallax replaces this transform once it starts running. */
-  transform: perspective(1400px) rotateY(-7deg) rotateX(4deg);
-  transform-style: preserve-3d;
-  overflow: hidden;
-  /* CSS vars set by the cursor-tracking script: 0..1 across the viewport. */
-  --mx: .5;
-  --my: .5;
-  will-change: transform;
-}
-.dossier-preview::after {
-  /* Static atmospheric glow */
-  content: ''; position: absolute; inset: 0; pointer-events: none;
-  background: radial-gradient(120% 70% at 100% 0%, rgba(124,92,255,.10), transparent 55%);
-}
-.dossier-preview::before {
-  /* Cursor-tracking spotlight — the card "reflects" light from the mouse.
-     Position is driven by --mx / --my so it tracks even when the JS lerp
-     is in transit. */
-  content: ''; position: absolute; inset: 0; pointer-events: none;
-  background: radial-gradient(
-    260px 200px at calc(var(--mx) * 100%) calc(var(--my) * 100%),
-    rgba(255,255,255,.10) 0%,
-    rgba(167,139,255,.06) 35%,
-    transparent 70%
-  );
-  mix-blend-mode: screen;
-  transition: background-position .15s linear;
-  z-index: 1;
-}
-@media (prefers-reduced-motion: reduce) {
-  .dossier-preview { transform: rotateY(-4deg) rotateX(2deg) }
-  .dossier-preview::before { display: none }
-}
-
-.dp-eyebrow {
-  display: flex; align-items: center; gap: 9px; padding-bottom: 14px;
-  border-bottom: 1px solid var(--bdr); margin-bottom: 18px;
-  font-family: var(--mono); font-size: 11px; color: var(--t3);
-  text-transform: uppercase; letter-spacing: .08em; font-weight: 600;
-}
-.dp-num {
-  font-family: var(--serif); font-size: 18px; font-style: normal;
-  background: linear-gradient(105deg, #a78bff 0%, #ff3d9a 60%, #22e5ff 110%);
-  background-clip: text; -webkit-background-clip: text; color: transparent;
-}
-.dp-grow { flex: 1 }
-.dp-chip {
-  display: inline-flex; align-items: center; gap: 5px;
-  padding: 4px 9px; border-radius: 999px;
-  font-family: var(--mono); font-size: 10.5px; font-weight: 600;
-  color: var(--good); background: var(--good-d); border: 1px solid var(--good-b);
-  letter-spacing: .04em; text-transform: uppercase;
-}
-
-.dp-grid {
-  display: grid; grid-template-columns: 130px 1fr; gap: 18px; align-items: start;
-}
-.dp-ring-wrap { position: relative; width: 130px; height: 130px; flex-shrink: 0 }
-.dp-ring-num {
-  position: absolute; inset: 0; display: flex; flex-direction: column;
-  align-items: center; justify-content: center; pointer-events: none;
-}
-.dp-ring-n {
-  font-family: var(--serif); font-size: 50px; line-height: 1;
-  color: var(--good); letter-spacing: -.045em; font-weight: 400;
-}
-.dp-ring-u {
-  font-family: var(--mono); font-size: 10.5px; color: var(--t3);
-  letter-spacing: .12em; margin-top: 5px; text-transform: uppercase;
-}
-
-.dp-body { min-width: 0; display: flex; flex-direction: column; gap: 11px }
-.dp-verdict {
-  font-family: var(--serif); font-size: 27px; line-height: 1;
-  color: var(--good); letter-spacing: -.025em;
-}
-.dp-sub { font-size: 13px; color: var(--t2); line-height: 1.5 }
-
-.dp-tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; margin-top: 4px }
-.dp-tile {
-  background: rgba(255,255,255,.03); border: 1px solid var(--bdr);
-  border-radius: 9px; padding: 9px 10px;
-}
-.dp-tile-v {
-  font-family: var(--mono); font-size: 18px; font-weight: 700;
-  letter-spacing: -.01em;
-}
-.dp-tile.good .dp-tile-v { color: var(--good) }
-.dp-tile.warn .dp-tile-v { color: var(--warn) }
-.dp-tile-l {
-  font-size: 9.5px; font-weight: 600; color: var(--t2);
-  text-transform: uppercase; letter-spacing: .06em; margin-top: 2px;
-}
-
-.dp-bullet {
-  display: flex; align-items: flex-start; gap: 7px;
-  padding: 7px 10px; border-radius: 8px;
-  font-size: 12px; line-height: 1.5;
-  background: var(--good-d); border: 1px solid var(--good-b); color: var(--good);
-}
-.dp-bullet.bad { background: var(--bad-d); border-color: rgba(248,113,113,.32); color: var(--bad) }
-.dp-bullet-ic {
-  display: inline-flex; width: 14px; height: 14px; border-radius: 50%;
-  align-items: center; justify-content: center;
-  background: rgba(255,255,255,.12); color: inherit; font-size: 10px;
-  flex-shrink: 0; margin-top: 1px;
-}
-
-/* ── animation primitives ────────────────────────────────────────────── */
-@keyframes hero-in {
-  from { opacity: 0; transform: translateY(28px) }
-  to   { opacity: 1; transform: none }
-}
-.anim       { animation: hero-in .7s cubic-bezier(.16,1,.3,1) both }
-.anim.d-1   { animation-delay: .05s }
-.anim.d-2   { animation-delay: .15s }
-.anim.d-3   { animation-delay: .25s }
-.anim.d-4   { animation-delay: .35s }
-.anim.d-5   { animation-delay: .50s }
-
-.sr { opacity: 0; transform: translateY(32px); transition: opacity .8s cubic-bezier(.16,1,.3,1), transform .8s cubic-bezier(.16,1,.3,1) }
-.sr.visible { opacity: 1; transform: none }
-.sr.d-1 { transition-delay: .08s }
-.sr.d-2 { transition-delay: .16s }
-.sr.d-3 { transition-delay: .24s }
-
-/* ── TICKER (sources marquee) ────────────────────────────────────────── */
-.ticker {
-  position: relative; overflow: hidden;
-  border-top: 1px solid var(--bdr); border-bottom: 1px solid var(--bdr);
-  background: linear-gradient(90deg, var(--bg) 0%, var(--bg1) 50%, var(--bg) 100%);
-  padding: 24px 0;
-}
-.ticker::before, .ticker::after {
-  content: ''; position: absolute; top: 0; bottom: 0; width: 140px;
-  pointer-events: none; z-index: 1;
-}
-.ticker::before { left: 0;  background: linear-gradient(90deg, var(--bg), transparent) }
-.ticker::after  { right: 0; background: linear-gradient(270deg, var(--bg), transparent) }
-.ticker-track {
-  display: flex; gap: 64px; white-space: nowrap;
-  animation: ticker-scroll 44s linear infinite;
-  will-change: transform;
-}
-@keyframes ticker-scroll {
-  from { transform: translateX(0) }
-  to   { transform: translateX(-50%) }
-}
-.ticker-item {
-  font-family: var(--serif); font-size: 22px; font-style: normal;
-  color: var(--t2); letter-spacing: -.015em;
-}
-.ticker-dot {
-  display: inline-flex; align-items: center; color: var(--accent-h);
-  font-size: 22px;
-}
-
-/* ── STATS BAND ──────────────────────────────────────────────────────── */
-.stats {
-  position: relative; padding: 100px 40px;
-  background: var(--bg1);
-  border-top: 1px solid var(--bdr); border-bottom: 1px solid var(--bdr);
-}
-.stats-inner {
-  max-width: 1100px; margin: 0 auto;
-  display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px;
-  background: var(--bdr); border-radius: 18px; overflow: hidden;
-  border: 1px solid var(--bdr2);
-}
-.stat {
-  background: var(--bg2); padding: 44px 32px; text-align: center;
-  position: relative;
-}
-.stat::after {
-  content: ''; position: absolute; inset: 0; pointer-events: none;
-  background: radial-gradient(140% 80% at 50% 0%, var(--stat-glow, rgba(124,92,255,.10)), transparent 60%);
-}
-.stat-n {
-  position: relative; z-index: 1;
-  font-family: var(--serif); font-size: clamp(48px, 6vw, 72px);
-  line-height: 1; letter-spacing: -.05em;
-  background: linear-gradient(135deg, var(--stat-c-from, #a78bff) 0%, var(--stat-c-to, #22e5ff) 100%);
-  background-clip: text; -webkit-background-clip: text; color: transparent;
-}
-.stat-n-unit {
-  font-family: var(--mono); font-size: 18px; color: var(--t3); font-weight: 600;
-  margin-left: 2px; letter-spacing: 0;
-}
-.stat-l {
-  position: relative; z-index: 1;
-  font-family: var(--mono); font-size: 12px; color: var(--t2); margin-top: 14px;
-  text-transform: uppercase; letter-spacing: .12em; font-weight: 600;
-}
-
-/* ── SECTION primitives ───────────────────────────────────────────────── */
-.section { padding: 110px 40px; position: relative }
-.section.alt { background: var(--bg1); border-top: 1px solid var(--bdr); border-bottom: 1px solid var(--bdr) }
-.section-inner { max-width: 1180px; margin: 0 auto; position: relative }
-
-.eyebrow {
+.hero-scroll-hint {
+  position: absolute; bottom: 28px; left: 50%; transform: translateX(-50%);
   display: inline-flex; align-items: center; gap: 8px;
-  font-family: var(--mono); font-size: 12.5px; font-weight: 600;
-  color: var(--t3); letter-spacing: .1em; text-transform: uppercase;
-  margin-bottom: 18px;
+  color: var(--t4); font-family: var(--mono); font-size: 11px;
+  letter-spacing: .14em; text-transform: uppercase;
+  animation: scroll-hint-bob 2.4s ease-in-out infinite;
+  z-index: 3;
 }
-.eyebrow-num {
-  font-family: var(--serif); font-size: 22px; font-style: normal;
-  background: linear-gradient(105deg, #a78bff 0%, #ff3d9a 60%, #22e5ff 110%);
-  background-clip: text; -webkit-background-clip: text; color: transparent;
-  letter-spacing: -.02em; text-transform: none;
-}
-.eyebrow-sep { color: var(--t4) }
+@keyframes scroll-hint-bob { 0%, 100% { transform: translate(-50%, 0); opacity: .55 } 50% { transform: translate(-50%, 6px); opacity: .9 } }
 
-.section-h {
-  font-family: var(--serif); font-weight: 400;
-  font-size: clamp(38px, 4.4vw, 60px); line-height: 1.05;
-  letter-spacing: -.04em; color: var(--t1); margin-bottom: 18px;
-  max-width: 740px;
-}
-.section-h em {
-  font-style: normal;
-  background: linear-gradient(105deg, #ffffff 0%, #a78bff 35%, #ff3d9a 70%, #22e5ff 100%);
-  background-clip: text; -webkit-background-clip: text; color: transparent;
-}
-.section-p {
-  font-size: 17.5px; line-height: 1.65; color: var(--t2);
-  max-width: 600px; margin-bottom: 8px;
-}
-.section-p strong { color: var(--t1); font-weight: 600 }
-
-/* feature split ─────────────────────────────────────────────────────── */
-.split {
-  display: grid; grid-template-columns: 1fr 1.05fr; gap: 80px; align-items: center;
-  margin-top: 16px;
-}
-.split.flip { direction: rtl }
-.split.flip > * { direction: ltr }
-
-.feature-visual {
-  position: relative; padding: 22px 24px;
-  border-radius: 18px; border: 1px solid var(--bdr2);
-  background: linear-gradient(165deg, rgba(255,255,255,.025) 0%, rgba(255,255,255,.005) 60%, rgba(0,0,0,.3) 100%);
-  box-shadow: 0 30px 60px -28px rgba(0,0,0,.6), 0 0 0 1px rgba(255,255,255,.03) inset;
-}
-.feature-visual::after {
-  content: ''; position: absolute; inset: 0; pointer-events: none; border-radius: inherit;
-  background: radial-gradient(120% 70% at 100% 0%, rgba(124,92,255,.10), transparent 55%);
-}
-
-/* ── RESUME INTELLIGENCE feature visual ─────────────────────────────── */
-.fv-resume { display: flex; flex-direction: column; gap: 14px; position: relative; z-index: 1 }
-.fv-resume-top {
-  display: flex; align-items: center; justify-content: space-between;
-  padding-bottom: 12px; border-bottom: 1px solid var(--bdr);
-}
-.fv-r-title { font-family: var(--mono); font-size: 13px; font-weight: 600; color: var(--t2); letter-spacing: .04em }
-.fv-r-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: center }
-.fv-r-score { display: flex; flex-direction: column; align-items: center; gap: 4px }
-.fv-r-num {
-  font-family: var(--serif); font-size: 78px; line-height: 1; letter-spacing: -.05em;
-  background: linear-gradient(135deg, var(--good) 0%, var(--cyan) 100%);
-  background-clip: text; -webkit-background-clip: text; color: transparent;
-}
-.fv-r-verdict { font-family: var(--serif); font-size: 26px; font-style: normal; color: var(--good) }
-.fv-r-meta { font-family: var(--mono); font-size: 11px; color: var(--t3); letter-spacing: .08em; text-transform: uppercase }
-.fv-r-tiles { display: flex; flex-direction: column; gap: 6px }
-.fv-r-tile {
-  display: flex; align-items: baseline; gap: 8px;
-  padding: 7px 11px; border-radius: 9px; background: rgba(255,255,255,.03);
-  border: 1px solid var(--bdr);
-}
-.fv-r-tile-v {
-  font-family: var(--mono); font-size: 17px; font-weight: 700; min-width: 50px;
-}
-.fv-r-tile-v.good { color: var(--good) }
-.fv-r-tile-v.warn { color: var(--warn) }
-.fv-r-tile-l { font-size: 12.5px; color: var(--t2); flex: 1 }
-.fv-r-tile-h { font-family: var(--mono); font-size: 10.5px; color: var(--t4) }
-.fv-r-bullet {
-  display: flex; align-items: flex-start; gap: 8px; padding: 9px 12px;
-  border-radius: 9px; font-size: 13px; line-height: 1.5; margin-top: 6px;
-}
-.fv-r-bullet.good { background: var(--good-d); border: 1px solid var(--good-b); color: var(--good) }
-.fv-r-bullet.bad  { background: var(--bad-d);  border: 1px solid rgba(248,113,113,.32); color: var(--bad) }
-
-/* ── DISCOVERY feature visual: source grid ──────────────────────────── */
-.source-grid {
-  display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;
-  position: relative; z-index: 1;
-}
-.source-chip {
-  display: flex; flex-direction: column; gap: 4px;
-  padding: 12px 14px; border-radius: 11px;
-  background: rgba(255,255,255,.025); border: 1px solid var(--bdr);
-  transition: border-color .15s, transform .15s, background .15s;
-}
-.source-chip:hover { border-color: var(--bdr2); transform: translateY(-2px); background: rgba(255,255,255,.04) }
-.source-chip.kind-board  { --src-c: var(--accent-h) }
-.source-chip.kind-ats    { --src-c: var(--cyan) }
-.source-chip.kind-aggr   { --src-c: #fbbf24 }
-.source-chip.kind-gov    { --src-c: var(--pink) }
-.source-name {
-  font-size: 13px; font-weight: 600; color: var(--t1); letter-spacing: -.005em;
-}
-.source-meta {
-  font-family: var(--mono); font-size: 10px; color: var(--src-c, var(--t3));
-  letter-spacing: .08em; text-transform: uppercase; font-weight: 600;
-}
-.discovery-foot {
-  margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--bdr);
-  display: flex; align-items: center; justify-content: space-between;
-  position: relative; z-index: 1;
-}
-.discovery-stat { font-family: var(--mono); font-size: 12px; color: var(--t3); letter-spacing: .04em }
-.discovery-stat strong { font-family: var(--serif); font-size: 22px; color: var(--t1); margin-right: 6px }
-
-/* ── PROVIDER CARDS ──────────────────────────────────────────────────── */
-.provider-grid {
-  display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px;
-  margin-top: 56px;
-}
-.provider-card {
-  position: relative; overflow: hidden; isolation: isolate;
-  padding: 28px 26px;
-  border-radius: 16px; border: 1px solid var(--bdr);
-  background: var(--bg2);
-  transition: transform .2s, border-color .2s;
-}
-.provider-card:hover { transform: translateY(-4px); border-color: var(--bdr2) }
-.provider-card::after {
-  content: ''; position: absolute; inset: 0; pointer-events: none;
-  background: radial-gradient(140% 80% at 0% 0%, var(--prov-glow, rgba(124,92,255,.12)), transparent 55%);
-  opacity: .9;
-}
-.provider-card.recommended {
-  border-color: var(--accent-b);
-  box-shadow: 0 30px 60px -25px rgba(124,92,255,.3);
-}
-.provider-card.recommended::before {
-  content: 'Recommended';
-  position: absolute; top: 14px; right: 14px;
-  font-family: var(--mono); font-size: 10px; font-weight: 700;
-  letter-spacing: .12em; text-transform: uppercase;
-  padding: 4px 10px; border-radius: 999px;
-  background: var(--accent); color: #fff;
-  z-index: 2;
-}
-.prov-eyebrow {
-  font-family: var(--mono); font-size: 11px; font-weight: 600;
-  letter-spacing: .1em; text-transform: uppercase; color: var(--prov-c, var(--accent-h));
-  margin-bottom: 12px; position: relative; z-index: 1;
-}
-.prov-name {
-  font-family: var(--serif); font-size: 30px; line-height: 1;
-  color: var(--t1); letter-spacing: -.025em; margin-bottom: 8px;
-  position: relative; z-index: 1;
-}
-.prov-name em { font-style: normal; color: var(--prov-c, var(--accent-h)) }
-.prov-tag {
-  font-family: var(--mono); font-size: 11.5px; color: var(--t3);
-  letter-spacing: .04em; margin-bottom: 18px;
-  position: relative; z-index: 1;
-}
-.prov-list { display: flex; flex-direction: column; gap: 7px; position: relative; z-index: 1 }
-.prov-li {
-  display: flex; align-items: flex-start; gap: 8px;
-  font-size: 14px; line-height: 1.5; color: var(--t2);
-}
-.prov-li-mark {
-  width: 16px; height: 16px; border-radius: 50%;
-  display: inline-flex; align-items: center; justify-content: center;
-  background: var(--prov-c-d, var(--accent-d)); color: var(--prov-c, var(--accent-h));
-  flex-shrink: 0; margin-top: 2px; font-size: 10px; font-weight: 700;
-}
-
-.provider-card.anthropic { --prov-glow: rgba(255,159,108,.18); --prov-c: #ff9f6c; --prov-c-d: rgba(255,159,108,.14) }
-.provider-card.ollama    { --prov-glow: rgba(34,229,255,.18);   --prov-c: var(--cyan);  --prov-c-d: rgba(34,229,255,.14) }
-.provider-card.demo      { --prov-glow: rgba(110,231,183,.16);  --prov-c: var(--good); --prov-c-d: var(--good-d) }
-
-/* ── PHASES grid ────────────────────────────────────────────────────── */
-.phases-grid {
-  display: grid; grid-template-columns: repeat(7, 1fr); gap: 8px;
-  margin-top: 48px; counter-reset: phase;
-}
-@media (max-width: 1100px) { .phases-grid { grid-template-columns: repeat(4, 1fr) } }
-@media (max-width: 720px)  { .phases-grid { grid-template-columns: repeat(2, 1fr) } }
-
-.phase-card {
-  position: relative; padding: 22px 18px 18px;
-  border-radius: 13px; border: 1px solid var(--bdr);
-  background: var(--bg2);
-  transition: transform .15s, border-color .15s, background .15s;
-}
-.phase-card:hover { transform: translateY(-3px); border-color: var(--bdr2); background: var(--bg3) }
-.phase-card::before {
-  counter-increment: phase;
-  content: counter(phase, decimal-leading-zero);
-  display: block;
-  font-family: var(--serif); font-size: 38px; line-height: 1; font-style: normal;
-  background: linear-gradient(135deg, var(--accent-h) 0%, var(--cyan) 100%);
-  background-clip: text; -webkit-background-clip: text; color: transparent;
-  letter-spacing: -.04em; margin-bottom: 14px;
-}
-.phase-name {
-  font-family: var(--sans); font-size: 14.5px; font-weight: 600;
-  color: var(--t1); letter-spacing: -.01em; margin-bottom: 6px;
-}
-.phase-desc {
-  font-size: 12.5px; line-height: 1.55; color: var(--t3);
-}
-.phase-time {
-  display: inline-block; margin-top: 12px;
-  font-family: var(--mono); font-size: 10.5px; font-weight: 600;
-  color: var(--accent-h); background: var(--accent-d);
-  padding: 3px 9px; border-radius: 6px; letter-spacing: .06em;
-}
-
-/* ── REVIEWS ────────────────────────────────────────────────────────── */
-.reviews-grid {
-  display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-top: 56px;
-}
-.review-card {
+/* ── SCRUBBER ─────────────────────────────────────────────────────────── */
+/* The whole demo is a single section pinned for ~600vh of scroll. Inside,
+   everything reads off one progress value (0..1). Each phase has a slice of
+   that range; intra-phase progress drives the moment-to-moment animation. */
+.scrubber {
   position: relative;
-  padding: 26px 26px 22px;
-  border-radius: 16px; border: 1px solid var(--bdr);
-  background: var(--bg2);
-  transition: border-color .15s, transform .15s;
-}
-.review-card:hover { border-color: var(--bdr2); transform: translateY(-2px) }
-.review-quote-mark {
-  font-family: var(--serif); font-size: 60px; line-height: 1;
-  color: rgba(124,92,255,.32); position: absolute; top: 6px; left: 18px;
-  pointer-events: none;
-}
-.review-stars { display: flex; gap: 2px; color: var(--warn); margin-bottom: 14px; padding-top: 6px }
-.review-quote {
-  font-family: var(--serif); font-size: 17.5px; line-height: 1.5;
-  color: var(--t1); margin-bottom: 18px; letter-spacing: -.012em;
-  position: relative; z-index: 1;
-}
-.review-author { display: flex; align-items: center; gap: 10px }
-.review-av {
-  width: 38px; height: 38px; border-radius: 50%;
-  display: inline-flex; align-items: center; justify-content: center;
-  font-size: 13px; font-weight: 700; color: #fff; flex-shrink: 0;
-  background: linear-gradient(135deg, var(--accent), var(--pink));
-}
-.review-name { font-size: 14px; font-weight: 600; color: var(--t1) }
-.review-role { font-family: var(--mono); font-size: 11.5px; color: var(--t3); margin-top: 2px; letter-spacing: .04em }
-
-/* ── CTA band ───────────────────────────────────────────────────────── */
-.cta {
-  position: relative; padding: 140px 40px 130px; text-align: center; overflow: hidden;
+  height: 700vh;          /* total scroll travel; tune for desired pacing */
   background: var(--bg);
 }
-.cta::before {
-  content: ''; position: absolute; inset: 0; pointer-events: none;
+.scrubber-pin {
+  position: sticky; top: 0;
+  height: 100vh; width: 100%;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+  background: radial-gradient(60% 60% at 50% 50%, #0e0e1f 0%, #07070d 80%);
+}
+
+.scr-rail {
+  flex-shrink: 0;
+  display: flex; align-items: stretch; justify-content: stretch;
+  padding: 18px 32px 0; gap: 0;
+  font-family: var(--mono);
+}
+.scr-rail-cell {
+  flex: 1; min-width: 0;
+  display: flex; flex-direction: column; align-items: flex-start; gap: 6px;
+  padding: 10px 14px;
+  border-bottom: 2px solid rgba(255,255,255,.05);
+  position: relative;
+  cursor: pointer;
+  transition: opacity .25s;
+  opacity: .35;
+}
+.scr-rail-cell.on { opacity: 1 }
+.scr-rail-cell.done { opacity: .65 }
+.scr-rail-cell::after {
+  content: ''; position: absolute; left: 0; bottom: -2px; height: 2px;
+  width: var(--p, 0%);
+  background: linear-gradient(90deg, var(--accent-h), var(--cyan));
+  transition: width .15s linear;
+}
+.scr-rail-num {
+  font-size: 10.5px; letter-spacing: .18em; font-weight: 600; color: var(--t4);
+  text-transform: uppercase;
+}
+.scr-rail-cell.on .scr-rail-num { color: var(--accent-h) }
+.scr-rail-lbl {
+  font-family: var(--sans); font-size: 14.5px; font-weight: 500; color: var(--t2);
+  letter-spacing: -.005em;
+}
+.scr-rail-cell.on .scr-rail-lbl { color: var(--t1) }
+
+.scr-stage {
+  flex: 1; position: relative;
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px 32px 32px;
+  overflow: hidden;
+}
+.scr-frame {
+  position: absolute; inset: 24px 32px 32px;
+  display: flex; align-items: center; justify-content: center;
+  opacity: 0;
+  transform: translateY(18px);
+  transition: opacity .35s ease, transform .35s ease;
+  pointer-events: none;
+}
+.scr-frame.active {
+  opacity: 1; transform: none;
+  pointer-events: auto;
+}
+
+.scr-meta {
+  position: absolute; left: 32px; bottom: 18px;
+  font-family: var(--mono); font-size: 11px; color: var(--t4);
+  letter-spacing: .12em; text-transform: uppercase;
+  display: inline-flex; align-items: center; gap: 8px;
+}
+.scr-meta-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--good); animation: pulse-soft 1.6s ease-in-out infinite }
+
+/* ── Phase 1 — Resume scan ───────────────────────────────────────────── */
+.ph1 {
+  display: grid; grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr); gap: 32px;
+  width: 100%; max-width: 1100px; align-items: stretch;
+}
+.ph1-doc {
+  position: relative;
+  background: linear-gradient(180deg, #f4f4f8 0%, #e8e8f0 100%);
+  border-radius: 6px;
+  padding: 22px 24px;
+  font-family: 'Times New Roman', Times, serif;
+  color: #15151c;
+  font-size: 11px; line-height: 1.45;
+  box-shadow: 0 30px 60px -20px rgba(0,0,0,.7), 0 0 0 1px rgba(255,255,255,.04);
+  min-height: 420px;
+  overflow: hidden;
+}
+.ph1-doc-name { font-size: 18px; font-weight: 700; margin-bottom: 2px; letter-spacing: -.01em }
+.ph1-doc-contact { font-size: 10px; color: #555; margin-bottom: 12px }
+.ph1-doc-h { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; margin-top: 10px; margin-bottom: 4px; padding-bottom: 2px; border-bottom: 1px solid #ccc }
+.ph1-doc-row { font-size: 10.5px; margin: 2px 0 }
+.ph1-doc-row b { font-weight: 600 }
+.ph1-doc-bullet { font-size: 9.5px; padding-left: 12px; position: relative; margin: 2px 0; color: #333 }
+.ph1-doc-bullet::before { content: '•'; position: absolute; left: 4px; color: #888 }
+
+.ph1-doc-hl {
+  /* highlight overlay sweeping down the doc as the scanner reads */
+  position: absolute; left: 0; right: 0; height: 32px;
+  background: linear-gradient(180deg, transparent 0%, rgba(124,92,255,.22) 50%, transparent 100%);
+  border-top: 1px solid rgba(124,92,255,.45);
+  border-bottom: 1px solid rgba(124,92,255,.45);
+  pointer-events: none;
+  transition: top .15s linear;
+  mix-blend-mode: multiply;
+}
+
+.ph1-out {
+  display: flex; flex-direction: column; gap: 12px;
+  align-self: center;
+}
+.ph1-out-h {
+  font-family: var(--mono); font-size: 11px; letter-spacing: .14em;
+  text-transform: uppercase; color: var(--t4); font-weight: 600;
+  margin-bottom: 2px;
+}
+.ph1-extract {
+  background: rgba(255,255,255,.03);
+  border: 1px solid var(--bdr); border-radius: 12px;
+  padding: 14px 16px;
+}
+.ph1-extract-row {
+  display: flex; gap: 14px; padding: 5px 0;
+  font-family: var(--mono); font-size: 12.5px;
+  border-bottom: 1px dashed var(--bdr);
+}
+.ph1-extract-row:last-child { border-bottom: none }
+.ph1-extract-k {
+  color: var(--t4); width: 80px; flex-shrink: 0;
+  letter-spacing: .04em;
+}
+.ph1-extract-v { color: var(--t1); font-weight: 500; min-width: 0; word-break: break-word }
+.ph1-extract-v em {
+  display: inline-block;
+  background: linear-gradient(90deg, var(--accent-d), transparent);
+  padding: 0 4px; border-radius: 3px;
+  color: var(--accent-h);
+}
+
+.ph1-skills {
+  display: flex; flex-wrap: wrap; gap: 5px;
+}
+.ph1-skill-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 4px 10px; border-radius: 999px;
+  font-family: var(--mono); font-size: 11.5px; font-weight: 500;
+  background: var(--accent-d); border: 1px solid var(--accent-b);
+  color: var(--accent-h);
+  transform: scale(0); opacity: 0;
+  transition: transform .35s cubic-bezier(.34, 1.56, .64, 1), opacity .25s;
+}
+.ph1-skill-chip.in { transform: scale(1); opacity: 1 }
+
+.ph1-score-row {
+  display: grid; grid-template-columns: auto 1fr; gap: 16px; align-items: center;
+  padding-top: 10px; border-top: 1px solid var(--bdr);
+}
+.ph1-score-num {
+  font-family: var(--serif); font-size: 56px; font-weight: 500; line-height: 1;
+  color: var(--good); letter-spacing: -.04em; font-variant-numeric: tabular-nums;
+}
+.ph1-score-meta {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 4px 18px;
+  font-family: var(--mono); font-size: 11px; color: var(--t3);
+}
+.ph1-score-meta b { color: var(--t1); font-weight: 600 }
+
+/* ── Phase 2 — Discovery ─────────────────────────────────────────────── */
+.ph2 {
+  width: 100%; max-width: 1100px;
+  display: flex; flex-direction: column; gap: 22px; align-items: center;
+}
+.ph2-counter {
+  font-family: var(--mono); font-size: 12px; letter-spacing: .14em;
+  text-transform: uppercase; color: var(--t3); font-weight: 600;
+  display: inline-flex; align-items: baseline; gap: 14px;
+}
+.ph2-counter-num {
+  font-family: var(--serif); font-size: 48px; font-weight: 500;
+  color: var(--accent-h); letter-spacing: -.03em;
+  font-variant-numeric: tabular-nums;
+  text-transform: none;
+}
+.ph2-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 8px;
+  width: 100%;
+}
+.ph2-src {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 11px 14px; border-radius: 9px;
+  background: rgba(255,255,255,.03);
+  border: 1px solid var(--bdr);
+  font-family: var(--mono); font-size: 12px;
+  color: var(--t3);
+  transition: all .35s cubic-bezier(.16,1,.3,1);
+  opacity: .35; transform: translateY(6px);
+}
+.ph2-src.lit {
+  opacity: 1; transform: none;
+  background: var(--accent-d); border-color: var(--accent-b);
+  color: var(--t1);
+  box-shadow: 0 4px 14px -4px rgba(124,92,255,.4);
+}
+.ph2-src-name { font-weight: 600 }
+.ph2-src-n {
+  font-family: var(--mono); font-size: 11px; color: var(--accent-h);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  opacity: 0; transition: opacity .25s;
+}
+.ph2-src.lit .ph2-src-n { opacity: 1 }
+
+.ph2-dedupe-row {
+  display: inline-flex; align-items: center; gap: 16px;
+  font-family: var(--mono); font-size: 13px; color: var(--t3);
+  padding: 10px 18px; border-radius: 999px;
+  background: rgba(255,255,255,.03); border: 1px solid var(--bdr);
+}
+.ph2-dedupe-row b { color: var(--t1); font-weight: 600; font-variant-numeric: tabular-nums }
+.ph2-dedupe-arrow {
+  display: inline-flex; align-items: center;
+  color: var(--t4);
+}
+
+/* ── Phase 3 — Scoring ───────────────────────────────────────────────── */
+.ph3 { width: 100%; max-width: 720px; display: flex; flex-direction: column; gap: 8px }
+.ph3-row {
+  display: grid; grid-template-columns: 1fr 220px auto; align-items: center; gap: 14px;
+  padding: 12px 16px; border-radius: 11px;
+  background: rgba(255,255,255,.03); border: 1px solid var(--bdr);
+  opacity: 0; transform: translateY(8px);
+  transition: opacity .35s, transform .35s;
+}
+.ph3-row.in { opacity: 1; transform: none }
+.ph3-row-id {
+  display: flex; flex-direction: column; gap: 2px; min-width: 0;
+}
+.ph3-row-title { font-family: var(--sans); font-size: 14px; font-weight: 600; color: var(--t1) }
+.ph3-row-co { font-family: var(--mono); font-size: 11.5px; color: var(--t3) }
+.ph3-bar-wrap {
+  height: 7px; border-radius: 999px; overflow: hidden;
+  background: rgba(255,255,255,.05); position: relative;
+}
+.ph3-bar-fill {
+  position: absolute; inset: 0;
+  background: linear-gradient(90deg, var(--accent-h), var(--cyan));
+  transform-origin: left; transform: scaleX(0);
+  transition: transform .55s cubic-bezier(.16,1,.3,1);
+}
+.ph3-row.in .ph3-bar-fill { transform: scaleX(var(--w, 0)) }
+.ph3-score-num {
+  font-family: var(--mono); font-size: 16px; font-weight: 700;
+  color: var(--accent-h); letter-spacing: -.01em;
+  font-variant-numeric: tabular-nums;
+  min-width: 28px; text-align: right;
+}
+
+/* ── Phase 4 — Tailoring ─────────────────────────────────────────────── */
+.ph4 { width: 100%; max-width: 760px; display: flex; flex-direction: column; gap: 16px }
+.ph4-head {
+  font-family: var(--mono); font-size: 11.5px; letter-spacing: .14em;
+  text-transform: uppercase; color: var(--t3); font-weight: 600;
+  display: inline-flex; align-items: center; gap: 12px;
+  align-self: flex-start;
+}
+.ph4-head em {
+  background: linear-gradient(90deg, var(--accent-h), var(--cyan));
+  background-clip: text; -webkit-background-clip: text; color: transparent;
+  font-weight: 600; text-transform: none; letter-spacing: 0;
+  font-family: var(--sans);
+  font-size: 13px;
+}
+.ph4-card {
+  background: rgba(255,255,255,.03);
+  border: 1px solid var(--bdr); border-radius: 14px;
+  padding: 18px 22px;
+  display: flex; flex-direction: column; gap: 14px;
+}
+.ph4-bullet {
+  display: flex; gap: 12px; padding: 12px 14px; border-radius: 9px;
+  font-size: 14.5px; line-height: 1.6;
+  font-family: var(--sans);
+}
+.ph4-bullet-mark {
+  flex-shrink: 0; width: 22px; height: 22px; border-radius: 6px;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-family: var(--mono); font-size: 12px; font-weight: 700;
+}
+.ph4-bullet.before { background: rgba(248,113,113,.06); border: 1px solid rgba(248,113,113,.18); color: var(--t3) }
+.ph4-bullet.before .ph4-bullet-mark { background: var(--bad); color: #fff }
+.ph4-bullet.after { background: rgba(74,222,128,.06); border: 1px solid var(--good-b); color: var(--t1) }
+.ph4-bullet.after .ph4-bullet-mark { background: var(--good); color: #03161a }
+.ph4-bullet-txt strong { font-weight: 600; color: var(--t1) }
+.ph4-bullet-txt em {
+  background: linear-gradient(180deg, transparent 60%, var(--good-d) 60%);
+  padding: 0 2px; border-radius: 2px;
+  color: var(--good); font-weight: 600;
+}
+.ph4-bullet-cursor {
+  display: inline-block; width: 6px; height: 1em; vertical-align: -2px;
+  background: var(--accent-h); margin-left: 1px;
+  animation: ph4-blink 1s steps(2) infinite;
+}
+@keyframes ph4-blink { 50% { opacity: 0 } }
+.ph4-changes {
+  display: flex; flex-wrap: wrap; gap: 6px; padding-top: 6px;
+  border-top: 1px dashed var(--bdr);
+}
+.ph4-change-chip {
+  font-family: var(--mono); font-size: 11px; padding: 3px 9px; border-radius: 999px;
+  background: var(--accent-d); border: 1px solid var(--accent-b); color: var(--accent-h);
+}
+
+/* ── Phase 5 — Submission ────────────────────────────────────────────── */
+.ph5 { width: 100%; max-width: 760px; display: flex; flex-direction: column; gap: 14px }
+.ph5-window {
+  background: #14141d;
+  border: 1px solid var(--bdr2); border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 28px 60px -20px rgba(0,0,0,.65);
+}
+.ph5-titlebar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 14px; border-bottom: 1px solid var(--bdr);
+  background: rgba(255,255,255,.02);
+}
+.ph5-dots { display: inline-flex; gap: 6px }
+.ph5-dot { width: 11px; height: 11px; border-radius: 50% }
+.ph5-dot:nth-child(1) { background: #ff5f57 }
+.ph5-dot:nth-child(2) { background: #febc2e }
+.ph5-dot:nth-child(3) { background: #28c840 }
+.ph5-url {
+  flex: 1; font-family: var(--mono); font-size: 12px; color: var(--t3);
+  background: rgba(0,0,0,.3); padding: 5px 12px; border-radius: 6px;
+  border: 1px solid var(--bdr);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ph5-form { padding: 18px 22px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px 18px }
+.ph5-field {
+  display: flex; flex-direction: column; gap: 5px;
+  font-family: var(--mono); font-size: 11px; color: var(--t4);
+  letter-spacing: .06em; text-transform: uppercase;
+}
+.ph5-input {
+  font-family: var(--sans); font-size: 13.5px; color: var(--t1);
+  background: rgba(255,255,255,.04); border: 1px solid var(--bdr);
+  border-radius: 7px; padding: 8px 12px;
+  letter-spacing: 0; text-transform: none;
+  min-height: 32px;
+  transition: background .25s, border-color .25s;
+}
+.ph5-input.filled {
+  background: rgba(74,222,128,.05);
+  border-color: var(--good-b);
+}
+.ph5-submit-wrap { grid-column: 1 / -1; display: flex; justify-content: flex-end; padding-top: 8px }
+.ph5-submit-btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 10px 22px; border-radius: 9px;
+  background: var(--accent); color: #fff;
+  font-family: var(--sans); font-size: 14.5px; font-weight: 600;
+  border: 1px solid var(--accent); cursor: default;
+  transition: all .3s;
+}
+.ph5-submit-btn.success { background: var(--good); border-color: var(--good); color: #03161a }
+
+/* ── Phase 6 — Tracker ───────────────────────────────────────────────── */
+.ph6 { width: 100%; max-width: 880px; display: flex; flex-direction: column; gap: 12px }
+.ph6-tab {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 6px 12px; border-radius: 7px 7px 0 0;
+  background: linear-gradient(180deg, #1d6e3d 0%, #155729 100%);
+  color: #d8f5e1; border: 1px solid #2d8b53;
+  font-family: var(--mono); font-size: 11px; font-weight: 600;
+  letter-spacing: .04em; align-self: flex-start;
+}
+.ph6-table {
+  background: #f4f4f8; border-radius: 0 8px 8px 8px;
+  border: 1px solid #c8c8d4;
+  overflow: hidden;
+  font-family: var(--mono); font-size: 11.5px;
+  color: #15151c;
+}
+.ph6-row {
+  display: grid; grid-template-columns: 36px 2fr 2.5fr 60px 1fr;
+  align-items: center;
+  padding: 7px 14px;
+  border-bottom: 1px solid #d8d8e0;
+  background: #fff;
+  opacity: 0; transform: translateY(4px);
+  transition: opacity .25s, transform .25s;
+}
+.ph6-row.in { opacity: 1; transform: none }
+.ph6-row.head {
+  background: #2c2c4a; color: #f6f7ff; font-weight: 600;
+  font-size: 11px; letter-spacing: .04em; text-transform: uppercase;
+  opacity: 1; transform: none;
+}
+.ph6-row.head > * { color: #f6f7ff !important }
+.ph6-row > div { padding: 0 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.ph6-status-pill {
+  display: inline-block;
+  padding: 2px 8px; border-radius: 999px;
+  font-size: 10px; font-weight: 600;
+  font-family: var(--mono);
+}
+.ph6-status-pill.applied  { background: #c5f0d4; color: #15523c }
+.ph6-status-pill.manual   { background: #ffe5b8; color: #6b3e00 }
+.ph6-status-pill.queued   { background: #d8d8e8; color: #45456b }
+
+/* ── Phase 7 — Report ────────────────────────────────────────────────── */
+.ph7 { width: 100%; max-width: 720px; display: flex; flex-direction: column; gap: 12px }
+.ph7-card {
+  background: #07070d;
+  border: 1px solid var(--bdr2); border-radius: 12px;
+  padding: 22px 26px;
+  font-family: var(--mono); font-size: 13.5px; line-height: 1.65;
+  color: var(--t2);
+  box-shadow: 0 24px 50px -20px rgba(0,0,0,.7);
+}
+.ph7-h1 {
+  font-family: var(--serif); font-weight: 500;
+  font-size: 24px; line-height: 1.15; color: var(--t1);
+  letter-spacing: -.025em;
+  margin-bottom: 4px;
+}
+.ph7-h1 em {
+  background: linear-gradient(105deg, var(--accent-h) 0%, var(--cyan) 100%);
+  background-clip: text; -webkit-background-clip: text; color: transparent;
+  font-weight: 600;
+}
+.ph7-pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: var(--mono); font-size: 11px; color: var(--good);
+  background: var(--good-d); border: 1px solid var(--good-b);
+  padding: 4px 10px; border-radius: 999px;
+  margin-bottom: 14px;
+  letter-spacing: .06em; text-transform: uppercase; font-weight: 600;
+}
+.ph7-summary { color: var(--t2); margin-bottom: 18px; font-family: var(--sans); font-size: 14.5px; line-height: 1.65 }
+.ph7-list { list-style: none; padding: 0; display: flex; flex-direction: column; gap: 8px; counter-reset: ph7c }
+.ph7-list li {
+  position: relative;
+  padding: 10px 14px 10px 44px;
+  background: rgba(255,255,255,.03);
+  border: 1px solid var(--bdr); border-radius: 9px;
+  color: var(--t1); font-size: 14px; font-family: var(--sans); line-height: 1.55;
+  counter-increment: ph7c;
+}
+.ph7-list li::before {
+  content: counter(ph7c);
+  position: absolute; left: 12px; top: 12px;
+  width: 22px; height: 22px; border-radius: 6px;
+  background: var(--accent-d); border: 1px solid var(--accent-b);
+  color: var(--accent-h); font-family: var(--mono); font-size: 11.5px; font-weight: 700;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.ph7-cta {
+  display: inline-flex; align-items: center; gap: 8px;
+  margin-top: 14px;
+  padding: 10px 18px; border-radius: 9px;
+  background: linear-gradient(135deg, #7c5cff 0%, #ff3d9a 100%);
+  color: #fff; font-size: 14.5px; font-weight: 600;
+  text-decoration: none;
+  align-self: flex-start;
+}
+
+/* ── FINAL CTA + FOOTER ──────────────────────────────────────────────── */
+.cta {
+  position: relative;
+  padding: 110px 40px 80px; text-align: center; overflow: hidden;
   background:
-    radial-gradient(80% 70% at 30% 30%, rgba(124,92,255,.18) 0%, transparent 60%),
-    radial-gradient(80% 70% at 70% 70%, rgba(255,61,154,.14) 0%, transparent 60%);
+    radial-gradient(80% 60% at 50% 0%, rgba(124,92,255,.18) 0%, transparent 65%),
+    radial-gradient(60% 60% at 50% 100%, rgba(34,229,255,.12) 0%, transparent 60%),
+    var(--bg);
+  border-top: 1px solid var(--bdr);
 }
 .cta-eyebrow {
-  position: relative; z-index: 1;
   display: inline-flex; align-items: center; gap: 8px;
-  font-family: var(--mono); font-size: 12.5px; font-weight: 600;
-  color: var(--t2); letter-spacing: .12em; text-transform: uppercase;
-  padding: 7px 14px; border-radius: 999px;
-  background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.08);
-  margin-bottom: 30px;
+  font-family: var(--mono); font-size: 12px; color: var(--t2);
+  letter-spacing: .14em; text-transform: uppercase; font-weight: 600;
+  padding: 6px 14px; border-radius: 999px;
+  background: rgba(255,255,255,.03); border: 1px solid var(--bdr);
+  margin-bottom: 22px;
 }
 .cta-h {
-  position: relative; z-index: 1;
   font-family: var(--serif); font-weight: 400;
-  font-size: clamp(44px, 5.5vw, 78px); line-height: 1; letter-spacing: -.045em;
-  color: var(--t1); margin-bottom: 18px;
+  font-size: clamp(36px, 4.6vw, 60px); line-height: 1;
+  letter-spacing: -.04em; color: var(--t1); margin-bottom: 18px;
 }
 .cta-h em {
-  font-style: normal;
-  background: linear-gradient(105deg, #ffffff 0%, #a78bff 35%, #ff3d9a 70%, #22e5ff 100%);
+  background: linear-gradient(105deg, #ffffff 0%, #a78bff 50%, #22e5ff 100%);
   background-clip: text; -webkit-background-clip: text; color: transparent;
-}
-.cta-p {
-  position: relative; z-index: 1;
-  font-size: 18px; color: var(--t2); margin-bottom: 38px; line-height: 1.55;
-  max-width: 580px; margin-left: auto; margin-right: auto;
+  font-weight: 500;
 }
 .cta-actions {
-  position: relative; z-index: 1;
-  display: flex; flex-direction: column; align-items: center; gap: 14px;
+  display: inline-flex; flex-direction: column; align-items: center; gap: 14px;
+  margin-top: 14px;
 }
 .cta-signin {
-  font-family: var(--mono); font-size: 13px; color: var(--t3);
-  text-decoration: none; letter-spacing: .04em; transition: color .15s;
+  font-size: 14.5px; color: var(--t3); text-decoration: none;
 }
-.cta-signin em {
-  font-style: normal; color: var(--accent-h);
-  border-bottom: 1px solid rgba(167,139,255,.4);
-  transition: border-color .15s;
-}
-.cta-signin:hover { color: var(--t2) }
-.cta-signin:hover em { border-bottom-color: var(--accent-h) }
+.cta-signin em { color: var(--accent-h); font-weight: 600 }
+.cta-signin:hover em { text-decoration: underline; text-underline-offset: 3px }
 
-/* ── FOOTER ─────────────────────────────────────────────────────────── */
 .footer {
-  background: var(--bg1); border-top: 1px solid var(--bdr);
-  padding: 36px 40px; text-align: center;
-  font-family: var(--mono); font-size: 12.5px; color: var(--t3);
+  padding: 30px 40px;
+  text-align: center; color: var(--t4);
+  font-family: var(--mono); font-size: 12px;
+  border-top: 1px solid var(--bdr);
   letter-spacing: .04em;
 }
 .footer em {
-  font-style: normal; color: var(--accent-h);
+  background: linear-gradient(105deg, #a78bff 0%, #22e5ff 100%);
+  background-clip: text; -webkit-background-clip: text; color: transparent;
+  font-weight: 600;
 }
 
-/* ── RESPONSIVE ─────────────────────────────────────────────────────── */
-@media (max-width: 980px) {
-  .hero-inner { grid-template-columns: 1fr; gap: 60px }
-  .split { grid-template-columns: 1fr; gap: 40px }
-  .split.flip { direction: ltr }
-  .stats-inner { grid-template-columns: repeat(2, 1fr) }
-  .source-grid { grid-template-columns: repeat(3, 1fr) }
-  .provider-grid { grid-template-columns: 1fr }
-  .reviews-grid { grid-template-columns: 1fr }
-  .nav { padding: 0 24px; height: 60px }
-  .nav-link[data-only="lg"] { display: none }
-  .hero, .section { padding-left: 24px; padding-right: 24px }
-}
-@media (max-width: 560px) {
-  .stats-inner { grid-template-columns: 1fr }
-  .source-grid { grid-template-columns: repeat(2, 1fr) }
-  .nav-link[data-only="md"] { display: none }
-  .hero { padding-top: 110px }
+/* ── RESPONSIVE ──────────────────────────────────────────────────────── */
+@media (max-width: 920px) {
+  .ph1  { grid-template-columns: 1fr; gap: 18px }
+  .ph1-doc { min-height: 280px }
+  .ph2-grid { grid-template-columns: repeat(3, 1fr) }
+  .ph3-row  { grid-template-columns: 1fr; gap: 8px }
+  .ph3-bar-wrap { grid-column: 1 }
+  .ph3-score-num { grid-column: 1; justify-self: end }
+  .ph5-form { grid-template-columns: 1fr }
+  .ph6-row  { grid-template-columns: 28px 1.6fr 1.6fr 60px 80px }
 }
 
-/* ── Cursor-follow tilt: cards take JS-set transform every frame, so
-   exclude transform from the CSS transition list to avoid lag, and
-   hint the GPU compositor with will-change. The :hover translateY()
-   rules above are shadowed by the inline transform but kept for
-   reduced-motion users (where the rAF loop is disabled). */
-.fv-resume,
-.provider-card,
-.phase-card,
-.review-card {
-  will-change: transform;
-  transition-property: border-color, background, background-color, box-shadow, opacity, color;
-  transform-origin: center;
-}
-@media (prefers-reduced-motion: reduce) {
-  .fv-resume, .provider-card, .phase-card, .review-card {
-    will-change: auto;
-    transition-property: border-color, background, background-color, box-shadow, opacity, color, transform;
+@media (max-width: 720px) {
+  .nav { padding: 0 16px }
+  .nav-link.hide-on-mobile { display: none }
+  .hero { padding: 110px 18px 60px }
+  .hero-h1 { font-size: clamp(38px, 9vw, 56px) }
+  .hero-sub { font-size: 16px }
+  .scrubber { height: auto }            /* mobile fallback: no pinning */
+  .scrubber-pin {
+    position: relative; height: auto;
+    padding: 28px 0;
   }
+  .scr-rail { padding: 0 14px; flex-wrap: wrap; gap: 4px }
+  .scr-rail-cell { flex-basis: 30%; padding: 6px 8px }
+  .scr-stage { padding: 24px 14px; min-height: 460px }
+  .scr-frame { position: relative; inset: auto }
+  .ph6-table { font-size: 10px }
+  .cta { padding: 80px 20px 60px }
 }
 </style>
 </head>
+
 <body>
 <div id="root"></div>
 
-<script type="text/babel">
-const { useEffect, useRef } = React;
-const LAUNCH_URL = '/app';
+<script type="text/babel" data-presets="env,react">
+const { useState, useEffect, useRef, useMemo } = React;
 
-/* ── scroll-reveal hook ───────────────────────────────────────────── */
-function useReveal(threshold = 0.12) {
-  const ref = useRef(null);
-  useEffect(() => {
-    const el = ref.current; if (!el) return;
-    const obs = new IntersectionObserver(([e]) => {
-      if (e.isIntersecting) { el.classList.add('visible'); obs.disconnect(); }
-    }, { threshold });
-    obs.observe(el);
-    return () => obs.disconnect();
-  }, []);
-  return ref;
-}
-function SR({ children, delay = 0, className = '', as = 'div', style = {} }) {
-  const Tag = as;
-  const ref = useReveal();
-  return <Tag ref={ref} className={`sr${delay ? ` d-${delay}` : ''} ${className}`} style={style}>{children}</Tag>;
-}
+const LAUNCH_URL = "/app";
 
-/* ── icon helpers (inline SVG, no external lib) ───────────────────── */
-function ArrowR({ size = 14 }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
-         strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-      <line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>
-    </svg>
-  );
-}
-function StarSVG() {
-  return (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-      <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
-    </svg>
-  );
-}
+/* ── Tiny SVG icons (avoid lucide bundle for landing page) ─────────────── */
+const ArrowR = ({ size = 16 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+       strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <line x1="5" y1="12" x2="19" y2="12"/>
+    <polyline points="12 5 19 12 12 19"/>
+  </svg>
+);
+const ChevronD = ({ size = 14 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+       strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <polyline points="6 9 12 15 18 9"/>
+  </svg>
+);
 
-/* ── NAV ──────────────────────────────────────────────────────────── */
+/* ── NAV ─────────────────────────────────────────────────────────────── */
 function Nav() {
   return (
-    <nav className="nav">
-      <a className="brand" href="/" aria-label="Jobs AI — home">
-        <span className="brand-glyph" aria-hidden="true">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-            <path d="M4 6h16M4 12h11M4 18h7" stroke="#fff" strokeWidth="2.5" strokeLinecap="round"/>
-            <circle cx="20" cy="18" r="2.5" stroke="#fff" strokeWidth="2" fill="none"/>
+    <nav className="nav" role="navigation" aria-label="Primary">
+      <a href="#" className="brand">
+        <span className="brand-glyph">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="20 6 9 17 4 12"/>
           </svg>
         </span>
-        <span className="brand-name">jobs<em>ai</em></span>
+        <span className="brand-name">Jobs <em>AI</em></span>
       </a>
       <div className="nav-right">
-        <a className="nav-link" data-only="lg" href="#intelligence">Intelligence</a>
-        <a className="nav-link" data-only="lg" href="#sources">Sources</a>
-        <a className="nav-link" data-only="md" href="#providers">AI</a>
-        <a className="nav-link" data-only="md" href="#how">Pipeline</a>
-        <a className="nav-link" href={LAUNCH_URL}>Sign in</a>
-        <a className="nav-cta" href={LAUNCH_URL}>
-          Get started <ArrowR size={13}/>
-        </a>
+        <a className="nav-link hide-on-mobile" href={LAUNCH_URL}>Sign in</a>
+        <a className="nav-cta" href={LAUNCH_URL}>Try it free <ArrowR size={13}/></a>
       </div>
     </nav>
   );
 }
 
-/* ── HERO ────────────────────────────────────────────────────────── */
-/**
- * useParallaxTilt — the dossier card pivots toward the cursor with a
- * lerped rAF loop so it never feels jittery. We also expose normalized
- * mouse position as `--mx` / `--my` CSS vars so the ::before spotlight
- * tracks the cursor without re-rendering React.
- */
-function useParallaxTilt({ rest = { ry: -7, rx: 4 }, max = 9, parallax = 14 } = {}) {
-  const ref = useRef(null);
-  useEffect(() => {
-    const el = ref.current; if (!el) return;
-    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    if (reduce) return;
-
-    const STIFFNESS = 0.085;  // 0..1 — higher = snappier
-    const target = { x: 0, y: 0 };
-    const cur    = { x: 0, y: 0 };
-    let raf = 0;
-    let active = false;
-
-    const onMove = (e) => {
-      // Normalize cursor to viewport center, [-1, 1].
-      target.x = ((e.clientX / window.innerWidth)  * 2) - 1;
-      target.y = ((e.clientY / window.innerHeight) * 2) - 1;
-      // Spotlight position relative to the card itself, 0..1.
-      const r = el.getBoundingClientRect();
-      const px = (e.clientX - r.left) / r.width;
-      const py = (e.clientY - r.top)  / r.height;
-      el.style.setProperty('--mx', String(Math.max(-0.5, Math.min(1.5, px))));
-      el.style.setProperty('--my', String(Math.max(-0.5, Math.min(1.5, py))));
-      if (!active) { active = true; raf = requestAnimationFrame(tick); }
-    };
-    const onLeave = () => {
-      target.x = 0; target.y = 0;
-      el.style.setProperty('--mx', '.5');
-      el.style.setProperty('--my', '.5');
-    };
-
-    const tick = () => {
-      cur.x += (target.x - cur.x) * STIFFNESS;
-      cur.y += (target.y - cur.y) * STIFFNESS;
-      // Resting tilt + cursor influence. Negate X so the card faces the cursor
-      // (rotateY positive means the right edge tucks back).
-      const ry = rest.ry - cur.x * max;
-      const rx = rest.rx - cur.y * max;
-      el.style.transform = `perspective(1400px) rotateY(${ry.toFixed(2)}deg) rotateX(${rx.toFixed(2)}deg)`;
-      // Layered parallax for the *.parallax children (stronger depth).
-      const px = (cur.x * parallax).toFixed(1);
-      const py = (cur.y * parallax * 0.6).toFixed(1);
-      el.querySelectorAll('[data-parallax]').forEach(node => {
-        const depth = parseFloat(node.dataset.parallax) || 1;
-        node.style.transform = `translate3d(${(px * depth)}px, ${(py * depth)}px, 0)`;
-      });
-      // Settle: when the spring is done and the cursor isn't moving, stop the loop.
-      if (Math.abs(target.x - cur.x) < 0.001 && Math.abs(target.y - cur.y) < 0.001) {
-        active = false;
-        return;
-      }
-      raf = requestAnimationFrame(tick);
-    };
-
-    window.addEventListener('mousemove', onMove, { passive: true });
-    window.addEventListener('mouseout', (e) => { if (!e.relatedTarget) onLeave(); });
-    window.addEventListener('blur', onLeave);
-
-    return () => {
-      cancelAnimationFrame(raf);
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('blur', onLeave);
-    };
-  }, [rest.ry, rest.rx, max, parallax]);
-  return ref;
-}
-
-/* ── useCardCursor — lightweight per-card cursor follow ──────────────
-   Card-relative cursor tracking shared across every registered card.
-   One global mousemove listener, one rAF loop. Each card subscribes
-   with its own tilt amplitude + resting orientation. A smoothstep
-   distance-falloff means cards far from the cursor relax to rest, so
-   the page doesn't feel like every panel is twitching at once. */
-const _cursorCards = new Map();
-let _cursorRaf = 0;
-let _cursorLastX = -9999, _cursorLastY = -9999;
-let _cursorInited = false;
-function _initCursorTracker() {
-  if (_cursorInited) return;
-  _cursorInited = true;
-  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-  const tick = () => {
-    _cursorRaf = 0;
-    let still = false;
-    for (const [el, st] of _cursorCards) {
-      const r = el.getBoundingClientRect();
-      const mx = (_cursorLastX - r.left) / r.width;
-      const my = (_cursorLastY - r.top)  / r.height;
-      el.style.setProperty('--mx', mx.toFixed(3));
-      el.style.setProperty('--my', my.toFixed(3));
-      const dx = (mx - 0.5) * 2;
-      const dy = (my - 0.5) * 2;
-      const dist = Math.hypot(dx, dy);
-      const FALLOFF = 2.4;
-      const t = Math.max(0, 1 - dist / FALLOFF);
-      const falloff = t * t * (3 - 2 * t);
-      const tx = Math.max(-1.2, Math.min(1.2, dx)) * falloff;
-      const ty = Math.max(-1.2, Math.min(1.2, dy)) * falloff;
-      st.cx += (tx - st.cx) * st.stiff;
-      st.cy += (ty - st.cy) * st.stiff;
-      const ry = st.restRy + st.cx * st.max;
-      const rx = st.restRx - st.cy * st.max;
-      el.style.transform =
-        `perspective(${st.persp}px) rotateY(${ry.toFixed(2)}deg) rotateX(${rx.toFixed(2)}deg)`;
-      if (Math.abs(tx - st.cx) > 0.0008 || Math.abs(ty - st.cy) > 0.0008) still = true;
-    }
-    if (still) _cursorRaf = requestAnimationFrame(tick);
-  };
-  window.addEventListener('mousemove', (e) => {
-    _cursorLastX = e.clientX;
-    _cursorLastY = e.clientY;
-    if (!_cursorRaf) _cursorRaf = requestAnimationFrame(tick);
-  }, { passive: true });
-}
-function useCardCursor(opts = {}) {
-  const ref = useRef(null);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-    _initCursorTracker();
-    const st = {
-      max:    opts.max    ?? 6,
-      restRy: opts.restRy ?? 0,
-      restRx: opts.restRx ?? 0,
-      persp:  opts.persp  ?? 1400,
-      stiff:  opts.stiff  ?? 0.12,
-      cx: 0, cy: 0,
-    };
-    _cursorCards.set(el, st);
-    // Paint the rest-orientation immediately so cards with non-zero
-    // restRy/restRx (e.g. FvResume's -3°/+2°) show their 3D presence
-    // at idle, before the first mousemove triggers the rAF loop.
-    el.style.transform =
-      `perspective(${st.persp}px) rotateY(${st.restRy}deg) rotateX(${st.restRx}deg)`;
-    return () => { _cursorCards.delete(el); };
-  }, []);
-  return ref;
-}
-
-function HeroPreview() {
-  // Mirror of the new in-app Resume Intelligence dossier card.
-  const score = 84, R = 50, CIRC = 2 * Math.PI * R;
-  const off = CIRC - (CIRC * score / 100);
-  const tiltRef = useParallaxTilt();
-  return (
-    <div ref={tiltRef} className="dossier-preview anim d-5">
-      <div className="dp-eyebrow">
-        <span className="dp-num">01</span>
-        <span>Resume intelligence</span>
-        <span className="dp-grow"/>
-        <span className="dp-chip">
-          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-            <path d="M9 12l2 2 4-4" strokeLinecap="round" strokeLinejoin="round"/>
-            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" strokeLinejoin="round"/>
-          </svg>
-          AI-verified
-        </span>
-      </div>
-      <div className="dp-grid">
-        {/* data-parallax = depth multiplier. Larger = floats more. */}
-        <div className="dp-ring-wrap" data-parallax="1.2">
-          <svg width="130" height="130" viewBox="0 0 130 130">
-            <defs>
-              <linearGradient id="ring-grad" x1="0" y1="0" x2="1" y2="1">
-                <stop offset="0%" stopColor="#4ade80"/>
-                <stop offset="100%" stopColor="#22e5ff"/>
-              </linearGradient>
-            </defs>
-            <circle cx="65" cy="65" r={R} fill="none" stroke="rgba(255,255,255,.06)" strokeWidth="9"/>
-            <circle cx="65" cy="65" r={R} fill="none" stroke="url(#ring-grad)" strokeWidth="9"
-              strokeLinecap="round" strokeDasharray={CIRC} strokeDashoffset={off}
-              transform="rotate(-90 65 65)"/>
-          </svg>
-          <div className="dp-ring-num">
-            <div className="dp-ring-n">{score}</div>
-            <div className="dp-ring-u">/ 100</div>
-          </div>
-        </div>
-        <div className="dp-body" data-parallax="0.6">
-          <div className="dp-verdict">Strong</div>
-          <div className="dp-sub">Top-decile resume — refine specifics.</div>
-          <div className="dp-tiles">
-            <div className="dp-tile good"><div className="dp-tile-v">67%</div><div className="dp-tile-l">Quantified</div></div>
-            <div className="dp-tile good"><div className="dp-tile-v">71%</div><div className="dp-tile-l">Action verbs</div></div>
-            <div className="dp-tile good"><div className="dp-tile-v">8.2</div><div className="dp-tile-l">Skill density</div></div>
-          </div>
-          <div className="dp-bullet">
-            <span className="dp-bullet-ic">✓</span>
-            <span>10 of 14 bullets contain quantified outcomes.</span>
-          </div>
-          <div className="dp-bullet bad">
-            <span className="dp-bullet-ic">!</span>
-            <span>2 bullets start with weak language — replace with strong verbs.</span>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
+/* ── HERO ─────────────────────────────────────────────────────────────── */
 function Hero() {
   return (
     <section className="hero" id="top">
@@ -1090,384 +822,485 @@ function Hero() {
         <div className="hero-orb hero-orb-1"/>
         <div className="hero-orb hero-orb-2"/>
         <div className="hero-orb hero-orb-3"/>
-        <div className="grain"/>
       </div>
       <div className="hero-inner">
-        <div className="hero-left">
-          <div className="hero-eyebrow anim d-1">
-            <span className="hero-eyebrow-num">01</span>
-            <span>Career cockpit</span>
-            <span className="hero-eyebrow-sep">/</span>
-            <span className="hero-eyebrow-pulse"/>
-            <span>session live</span>
-          </div>
-          <h1 className="hero-h1 anim d-2">
-            Your job search,<br/><em>on autopilot.</em>
-          </h1>
-          <p className="hero-sub anim d-3">
-            Drop a resume once. Jobs AI <strong>scans every bullet</strong>, verifies it
-            with the LLM of your choice, scores 20+ job sources against your profile, and
-            tailors every application — automatically.
-          </p>
-          <div className="hero-cta-row anim d-4">
-            <a className="btn-cta" href={LAUNCH_URL}>
-              Get started — it's free <span className="btn-arrow"><ArrowR size={15}/></span>
-            </a>
-            <a className="btn-ghost" href={LAUNCH_URL}>I have an account</a>
-          </div>
-          <div className="hero-reassure anim d-4">
-            <span className="dot"/>
-            <span>NO CREDIT CARD · DEMO MODE WORKS WITHOUT KEYS</span>
-          </div>
+        <div className="hero-eyebrow">
+          <span className="hero-eyebrow-num">01</span>
+          <span>Watch a real run</span>
+          <span className="hero-eyebrow-sep">·</span>
+          <span className="hero-eyebrow-pulse"/>
+          <span>scroll to play</span>
         </div>
-        <div className="hero-preview"><HeroPreview/></div>
+        <h1 className="hero-h1">
+          Your job search,<br/><em>on autopilot.</em>
+        </h1>
+        <p className="hero-sub">
+          Drop a resume. We <strong>scan it</strong>, score 20 sources against your profile,
+          and tailor every application — automatically.
+        </p>
+        <div className="hero-cta-row">
+          <a className="btn-cta" href={LAUNCH_URL}>
+            Try it free <span className="btn-arrow"><ArrowR size={15}/></span>
+          </a>
+          <a className="btn-ghost" href={LAUNCH_URL}>I have an account</a>
+        </div>
+        <div className="hero-reassure">
+          <span className="dot"/>
+          <span>NO CREDIT CARD · LOCAL OLLAMA WORKS WITHOUT KEYS</span>
+        </div>
+      </div>
+      <a href="#scrubber" className="hero-scroll-hint" aria-label="Scroll to demo">
+        <ChevronD/> Scroll to watch the pipeline
+      </a>
+    </section>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   SCRUBBER — single pinned section, scroll-driven progress 0..1
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* Phase boundaries on the 0..1 progress timeline. Each phase gets a slice
+   sized to the screen-time it deserves (Tailoring is the persuasion peak,
+   so it gets the most). Sum is 1.0. */
+const PHASE_SLICES = [
+  { id: 1, label: 'Resume scan',  start: 0.00, end: 0.14 },
+  { id: 2, label: 'Discovery',    start: 0.14, end: 0.28 },
+  { id: 3, label: 'Scoring',      start: 0.28, end: 0.42 },
+  { id: 4, label: 'Tailoring',    start: 0.42, end: 0.60 },
+  { id: 5, label: 'Submission',   start: 0.60, end: 0.72 },
+  { id: 6, label: 'Tracker',      start: 0.72, end: 0.86 },
+  { id: 7, label: 'Report',       start: 0.86, end: 1.00 },
+];
+
+function localProgress(globalP, slice) {
+  if (globalP < slice.start) return 0;
+  if (globalP > slice.end)   return 1;
+  return (globalP - slice.start) / (slice.end - slice.start);
+}
+
+function activeSliceIndex(p) {
+  for (let i = 0; i < PHASE_SLICES.length; i++) {
+    if (p < PHASE_SLICES[i].end) return i;
+  }
+  return PHASE_SLICES.length - 1;
+}
+
+function Scrubber() {
+  const sectionRef = useRef(null);
+  const [progress, setProgress] = useState(0);
+  const [data, setData] = useState(null);
+  const [dataErr, setDataErr] = useState(null);
+  const isMobile = useIsMobile();
+
+  // Load the frozen pipeline output once.
+  useEffect(() => {
+    fetch('/frontend/landing/demo-run.json')
+      .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+      .then(setData)
+      .catch(e => setDataErr(String(e)));
+  }, []);
+
+  // Desktop: scroll-driven. Mobile: auto-play once when scrubber enters viewport.
+  useEffect(() => {
+    if (!sectionRef.current) return undefined;
+    if (isMobile) {
+      // Auto-play: simple ramp 0→1 over 14 s once the section scrolls into view.
+      let raf = 0;
+      let started = 0;
+      let running = false;
+      const obs = new IntersectionObserver(entries => {
+        if (entries[0].isIntersecting && !running) {
+          running = true;
+          started = performance.now();
+          const tick = (now) => {
+            const p = Math.min(1, (now - started) / 14000);
+            setProgress(p);
+            if (p < 1) raf = requestAnimationFrame(tick);
+          };
+          raf = requestAnimationFrame(tick);
+        }
+      }, { threshold: 0.18 });
+      obs.observe(sectionRef.current);
+      return () => { obs.disconnect(); cancelAnimationFrame(raf); };
+    }
+
+    let raf = 0;
+    let pending = false;
+    const onScroll = () => {
+      if (pending) return;
+      pending = true;
+      raf = requestAnimationFrame(() => {
+        pending = false;
+        const el = sectionRef.current;
+        if (!el) return;
+        const rect = el.getBoundingClientRect();
+        const total = el.offsetHeight - window.innerHeight;
+        // -rect.top because rect.top goes negative as we scroll down through the section.
+        const raw = total > 0 ? Math.max(0, Math.min(1, -rect.top / total)) : 0;
+        setProgress(raw);
+      });
+    };
+    onScroll();
+    window.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('resize', onScroll);
+    return () => {
+      window.removeEventListener('scroll', onScroll);
+      window.removeEventListener('resize', onScroll);
+      cancelAnimationFrame(raf);
+    };
+  }, [isMobile]);
+
+  const activeIdx = activeSliceIndex(progress);
+
+  // While loading the JSON, render the structure with dim placeholders so
+  // there's no jarring layout pop when data lands.
+  return (
+    <section className="scrubber" id="scrubber" ref={sectionRef} aria-label="Watch the pipeline run">
+      <div className="scrubber-pin">
+        <div className="scr-rail" role="tablist" aria-label="Pipeline phases">
+          {PHASE_SLICES.map((s, i) => {
+            const lp = localProgress(progress, s);
+            return (
+              <div
+                key={s.id}
+                className={'scr-rail-cell' + (i === activeIdx ? ' on' : (i < activeIdx ? ' done' : ''))}
+                style={{ '--p': `${Math.round(lp * 100)}%` }}
+                role="tab"
+                aria-selected={i === activeIdx}>
+                <span className="scr-rail-num">Phase {s.id}</span>
+                <span className="scr-rail-lbl">{s.label}</span>
+              </div>
+            );
+          })}
+        </div>
+        <div className="scr-stage">
+          {dataErr && (
+            <div className="scr-frame active" style={{ color: 'var(--t3)' }}>
+              <div style={{ textAlign:'center', padding: 30 }}>
+                Demo data couldn't load — refresh the page.<br/>
+                <code style={{ fontFamily:'var(--mono)', fontSize:12, color:'var(--t4)' }}>{dataErr}</code>
+              </div>
+            </div>
+          )}
+          {data && PHASE_SLICES.map((s, i) => (
+            <div key={s.id} className={'scr-frame' + (i === activeIdx ? ' active' : '')} aria-hidden={i !== activeIdx}>
+              <PhaseFrame phase={s.id} progress={localProgress(progress, s)} data={data}/>
+            </div>
+          ))}
+        </div>
+        <div className="scr-meta">
+          <span className="scr-meta-dot"/>
+          <span>Real run · DemoProvider · {data ? data.resume.name : 'loading…'}</span>
+        </div>
       </div>
     </section>
   );
 }
 
-/* ── ROLLING TICKER (sources marquee) ─────────────────────────────── */
-function Ticker() {
-  // Source list × 2 for seamless loop. Mirrors the actual sources/__init__.py registry.
-  const items = [
-    'LinkedIn', 'Indeed', 'Glassdoor', 'Greenhouse', 'Lever', 'Ashby', 'Workable',
-    'Reed', 'Adzuna', 'Findwork', 'Himalayas', 'Jobicy', 'Jooble',
-    'Remotive', 'RemoteOK', 'TheMuse', 'USAJobs', 'Arbeitnow', 'SimplifyJobs',
-  ];
-  const seq = [...items, ...items];
+function useIsMobile() {
+  const [m, setM] = useState(() => typeof window !== 'undefined' && window.innerWidth <= 720);
+  useEffect(() => {
+    const fn = () => setM(window.innerWidth <= 720);
+    window.addEventListener('resize', fn);
+    return () => window.removeEventListener('resize', fn);
+  }, []);
+  return m;
+}
+
+/* ── Phase dispatcher ────────────────────────────────────────────────── */
+function PhaseFrame({ phase, progress, data }) {
+  if (phase === 1) return <Phase1Scan      data={data} p={progress}/>;
+  if (phase === 2) return <Phase2Discovery data={data} p={progress}/>;
+  if (phase === 3) return <Phase3Scoring   data={data} p={progress}/>;
+  if (phase === 4) return <Phase4Tailoring data={data} p={progress}/>;
+  if (phase === 5) return <Phase5Submit    data={data} p={progress}/>;
+  if (phase === 6) return <Phase6Tracker   data={data} p={progress}/>;
+  if (phase === 7) return <Phase7Report    data={data} p={progress}/>;
+  return null;
+}
+
+/* ── Phase 1: Resume scan ────────────────────────────────────────────── */
+function Phase1Scan({ data, p }) {
+  const r = data.resume;
+  // Highlight bar slides down the doc as p goes 0→0.6, then sits at the bottom.
+  const hlTop = `${Math.min(0.95, p / 0.6) * 100}%`;
+  const skillsIn = Math.floor(Math.min(1, p / 0.7) * r.skills.length);
+  const score = Math.round(Math.min(1, Math.max(0, (p - 0.55) / 0.4)) * r.score);
   return (
-    <div className="ticker" aria-hidden="true">
-      <div className="ticker-track">
-        {seq.map((it, i) => (
-          <React.Fragment key={i}>
-            <span className="ticker-item">{it}</span>
-            <span className="ticker-dot">·</span>
-          </React.Fragment>
-        ))}
+    <div className="ph1">
+      <div className="ph1-doc" aria-hidden="true">
+        <div className="ph1-doc-name">{r.name}</div>
+        <div className="ph1-doc-contact">{r.email} · {r.linkedin}</div>
+
+        <div className="ph1-doc-h">Education</div>
+        <div className="ph1-doc-row"><b>MIT</b> — B.S. EECS · Expected May 2025 · GPA 4.7</div>
+
+        <div className="ph1-doc-h">Experience</div>
+        <div className="ph1-doc-row"><b>Apple Inc.</b> — IC Design Intern · Jun–Aug 2024</div>
+        <div className="ph1-doc-bullet">Designed RF amplifier prototypes — improved SNR by 6 dB across 5 devices.</div>
+        <div className="ph1-doc-bullet">Wrote 2,400 lines of SystemVerilog for low-power memory controller.</div>
+        <div className="ph1-doc-row"><b>NVIDIA</b> — ASIC Verification Intern · Jun–Aug 2023</div>
+        <div className="ph1-doc-bullet">Built UVM testbench covering 94% of an H100 datapath module.</div>
+        <div className="ph1-doc-bullet">Optimized CUDA matmul kernel from 1.2 → 1.8 TFLOPS.</div>
+
+        <div className="ph1-doc-h">Skills</div>
+        <div className="ph1-doc-row">Python, C, C++, SystemVerilog, Verilog, VHDL, MATLAB, CUDA, Bash</div>
+
+        <div className="ph1-doc-hl" style={{ top: hlTop }}/>
+      </div>
+
+      <div className="ph1-out">
+        <div className="ph1-out-h">Extracted</div>
+        <div className="ph1-extract">
+          <div className="ph1-extract-row"><span className="ph1-extract-k">Name</span><span className="ph1-extract-v"><em>{r.name}</em></span></div>
+          <div className="ph1-extract-row"><span className="ph1-extract-k">Email</span><span className="ph1-extract-v">{r.email}</span></div>
+          <div className="ph1-extract-row"><span className="ph1-extract-k">School</span><span className="ph1-extract-v">MIT · EECS</span></div>
+          <div className="ph1-extract-row"><span className="ph1-extract-k">Roles</span><span className="ph1-extract-v">{r.experience.length} positions parsed</span></div>
+        </div>
+        <div className="ph1-out-h" style={{ marginTop: 4 }}>Skills · {r.skills.length} hard</div>
+        <div className="ph1-skills">
+          {r.skills.map((s, i) => (
+            <span key={s} className={'ph1-skill-chip' + (i < skillsIn ? ' in' : '')}
+                  style={{ transitionDelay: `${i * 30}ms` }}>{s}</span>
+          ))}
+        </div>
+        <div className="ph1-score-row">
+          <div className="ph1-score-num">{score}</div>
+          <div className="ph1-score-meta">
+            <span>Quantified <b>{r.metrics.quantified_pct}%</b></span>
+            <span>Action verbs <b>{r.metrics.action_verb_pct}%</b></span>
+            <span>Skill density <b>{r.metrics.skill_density}</b></span>
+            <span>Weak phrases <b>{r.metrics.weak_phrases}</b></span>
+          </div>
+        </div>
       </div>
     </div>
   );
 }
 
-/* ── STATS BAND ───────────────────────────────────────────────────── */
-function Stats() {
-  const stats = [
-    { n: '20+',  l: 'Job sources', g: 'rgba(124,92,255,.10)', f: '#a78bff', t: '#22e5ff' },
-    { n: '7',    l: 'Pipeline phases', g: 'rgba(34,229,255,.10)', f: '#22e5ff', t: '#a78bff' },
-    { n: '0',    l: 'API keys to start', u: '$', g: 'rgba(74,222,128,.10)', f: '#4ade80', t: '#22e5ff' },
-    { n: '~4',   l: 'Min. full run', u: 'm', g: 'rgba(255,61,154,.10)', f: '#ff3d9a', t: '#a78bff' },
-  ];
+/* ── Phase 2: Discovery ──────────────────────────────────────────────── */
+function Phase2Discovery({ data, p }) {
+  const sources = data.discovery.sources;
+  const lit = Math.floor(Math.min(1, p / 0.55) * sources.length);
+  const dedupePhase = p > 0.7;
+  const counter = dedupePhase
+    ? Math.round(data.discovery.after_dedupe + (data.discovery.after_filter - data.discovery.after_dedupe) * Math.min(1, (p - 0.85) / 0.12))
+    : Math.round(Math.min(1, p / 0.7) * data.discovery.total_found);
   return (
-    <section className="stats">
-      <SR>
-        <div className="stats-inner">
-          {stats.map(s => (
-            <div key={s.l} className="stat" style={{ '--stat-glow': s.g, '--stat-c-from': s.f, '--stat-c-to': s.t }}>
-              <div className="stat-n">
-                {s.u === '$' ? <span className="stat-n-unit">$</span> : null}
-                {s.n}
-                {s.u && s.u !== '$' ? <span className="stat-n-unit">{s.u}</span> : null}
-              </div>
-              <div className="stat-l">{s.l}</div>
-            </div>
-          ))}
-        </div>
-      </SR>
-    </section>
-  );
-}
-
-/* ── SECTION 02 — Resume intelligence ──────────────────────────────── */
-function ResumeIntelligenceSection() {
-  return (
-    <section className="section" id="intelligence">
-      <div className="section-inner">
-        <div className="split">
-          <SR>
-            <div className="eyebrow">
-              <span className="eyebrow-num">02</span>
-              <span>Resume intelligence</span>
-              <span className="eyebrow-sep">·</span>
-              <span>phase 1</span>
-            </div>
-            <h2 className="section-h">A scan, then an <em>opinion</em>.</h2>
-            <p className="section-p">
-              A deterministic regex pass extracts every contact, skill, role, and project
-              from your resume — never blank, never invented. The results are then handed
-              to your configured AI for verification and a written critique. You see <strong>both</strong>:
-              hard metrics on quantification, action-verb usage, weak phrases, and skill
-              density — plus a 4-paragraph editorial review of where to push.
-            </p>
-            <p className="section-p" style={{ marginTop: 14 }}>
-              <strong>Multi-resume.</strong> Compare versions, mark the primary,
-              and track scores over time as you iterate.
-            </p>
-          </SR>
-          <SR delay={2}>
-            <div className="feature-visual">
-              <FvResume/>
-            </div>
-          </SR>
-        </div>
+    <div className="ph2">
+      <div className="ph2-counter">
+        <span>Jobs found</span>
+        <span className="ph2-counter-num">{counter}</span>
       </div>
-    </section>
-  );
-}
-
-/* ── SECTION 03 — Discovery ───────────────────────────────────────── */
-function DiscoverySection() {
-  // Source matrix mirrors pipeline/sources/registry.py — 4 categories.
-  const sources = [
-    { n: 'LinkedIn',     k: 'board' },
-    { n: 'Indeed',       k: 'board' },
-    { n: 'Glassdoor',    k: 'board' },
-    { n: 'ZipRecruiter', k: 'board' },
-    { n: 'Greenhouse',   k: 'ats' },
-    { n: 'Lever',        k: 'ats' },
-    { n: 'Ashby',        k: 'ats' },
-    { n: 'Workable',     k: 'ats' },
-    { n: 'Reed',         k: 'aggr' },
-    { n: 'Adzuna',       k: 'aggr' },
-    { n: 'Jooble',       k: 'aggr' },
-    { n: 'TheMuse',      k: 'aggr' },
-    { n: 'Findwork',     k: 'aggr' },
-    { n: 'Himalayas',    k: 'aggr' },
-    { n: 'Remotive',     k: 'aggr' },
-    { n: 'Arbeitnow',    k: 'aggr' },
-    { n: 'Jobicy',       k: 'aggr' },
-    { n: 'RemoteOK',     k: 'aggr' },
-    { n: 'USAJobs',      k: 'gov' },
-    { n: 'Simplify',     k: 'aggr' },
-  ];
-  const labels = { board: 'Board', ats: 'ATS', aggr: 'Aggregator', gov: 'Public sector' };
-  return (
-    <section className="section alt" id="sources">
-      <div className="section-inner">
-        <div className="split flip">
-          <SR>
-            <div className="eyebrow">
-              <span className="eyebrow-num">03</span>
-              <span>Discovery</span>
-              <span className="eyebrow-sep">·</span>
-              <span>phase 2 + 3</span>
-            </div>
-            <h2 className="section-h">Twenty sources.<br/><em>One unified queue.</em></h2>
-            <p className="section-p">
-              We hit job boards, ATS portals (Greenhouse, Lever, Ashby, Workable),
-              government job feeds, and remote-job aggregators in parallel. Results
-              are <strong>deduplicated by URL + (company, title)</strong> across all
-              feeds, filtered by your experience level, education, citizenship, and
-              date — then scored 0–100 against your profile.
-            </p>
-            <p className="section-p" style={{ marginTop: 14 }}>
-              Two-stage scoring: a fast keyword-coverage pass, then an LLM rubric for
-              the top N — so you spend cents instead of dollars.
-            </p>
-          </SR>
-          <SR delay={2}>
-            <div className="feature-visual">
-              <div className="source-grid">
-                {sources.map(s => (
-                  <div key={s.n} className={`source-chip kind-${s.k}`}>
-                    <div className="source-name">{s.n}</div>
-                    <div className="source-meta">{labels[s.k]}</div>
-                  </div>
-                ))}
-              </div>
-              <div className="discovery-foot">
-                <div className="discovery-stat"><strong>{sources.length}</strong>parallel sources</div>
-                <div className="discovery-stat" style={{ color: 'var(--good)' }}>● live</div>
-              </div>
-            </div>
-          </SR>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-/* ── SECTION 04 — Providers ───────────────────────────────────────── */
-function ProvidersSection() {
-  const cards = [
-    {
-      cls: 'anthropic',
-      eyebrow: 'Cloud · highest quality',
-      name: <>Anthropic <em>Claude</em></>,
-      tag: 'opus / sonnet / haiku',
-      list: [
-        'Tool-use forces strict JSON — no parse failures',
-        'Adaptive thinking on extraction & tailoring',
-        'Cents per resume run on Opus',
-      ],
-    },
-    {
-      cls: 'ollama',
-      eyebrow: 'Local free · cloud models require Pro',
-      name: <>Local <em>Ollama</em></>,
-      tag: 'llama / mistral / qwen / gemma',
-      tagOn: true,
-      list: [
-        'Zero API cost — local models run on your hardware or server',
-        'Resume text never leaves your network',
-        'Drop-in swap of any model you have pulled',
-        'Cloud-hosted models (name ends in "cloud") require Pro',
-      ],
-      recommended: true,
-    },
-    {
-      cls: 'demo',
-      eyebrow: 'No setup · offline',
-      name: <>Demo <em>mode</em></>,
-      tag: 'pure heuristic',
-      list: [
-        'Works without any API key or daemon',
-        'Same regex scanner powers the heuristic baseline everywhere',
-        'Perfect for kicking the tires before you commit',
-      ],
-    },
-  ];
-  return (
-    <section className="section" id="providers">
-      <div className="section-inner">
-        <SR>
-          <div className="eyebrow">
-            <span className="eyebrow-num">04</span>
-            <span>Provider-agnostic AI</span>
+      <div className="ph2-grid">
+        {sources.map((s, i) => (
+          <div key={s.name} className={'ph2-src' + (i < lit ? ' lit' : '')}
+               style={{ transitionDelay: `${i * 18}ms` }}>
+            <span className="ph2-src-name">{s.name}</span>
+            <span className="ph2-src-n">+{s.found}</span>
           </div>
-          <h2 className="section-h">Pick your engine.<br/><em>Swap anytime.</em></h2>
-          <p className="section-p">
-            Every LLM-touching step in the pipeline — extract, score, tailor,
-            critique — calls the same provider interface. Switch from Anthropic
-            to local Ollama mid-run; the pipeline doesn't care, and your cached
-            resume insights upgrade themselves on the next scan.
-          </p>
-        </SR>
-        <div className="provider-grid">
-          {cards.map((c, i) => (
-            <SR key={c.cls} delay={Math.min(i + 1, 3)}>
-              <ProviderCard c={c}/>
-            </SR>
-          ))}
-        </div>
+        ))}
       </div>
-    </section>
+      <div className="ph2-dedupe-row" style={{ opacity: p > 0.62 ? 1 : 0.3, transition: 'opacity .3s' }}>
+        <span><b>{data.discovery.total_found}</b> found</span>
+        <span className="ph2-dedupe-arrow">→</span>
+        <span><b>{data.discovery.after_dedupe}</b> after dedupe</span>
+        <span className="ph2-dedupe-arrow">→</span>
+        <span style={{ color: 'var(--good)' }}><b>{data.discovery.after_filter}</b> match your filters</span>
+      </div>
+    </div>
   );
 }
 
-/* ── SECTION 05 — Pipeline ─────────────────────────────────────────── */
-function PipelineSection() {
-  const steps = [
-    { t: 'Resume Ingestion',     d: 'Heuristic-first scanner extracts every field, then your AI verifies + corrects.', time: '~15s' },
-    { t: 'Job Discovery',        d: '20+ sources hit in parallel. Deduplicated by URL + (company, title).',           time: '~60s' },
-    { t: 'Relevance Scoring',    d: 'Fast keyword coverage, then LLM rubric for the top-N.',                          time: '~45s' },
-    { t: 'Resume Tailoring',     d: 'Reorders skills, rephrases bullets, runs an ATS gap pass.',                      time: '~2m' },
-    { t: 'Submission',           d: 'Greenhouse via Playwright; simulated for boards we don\'t auto-fill.',           time: '~1m' },
-    { t: 'Excel Tracker',        d: '17 columns, color-coded status, auto-deduped against last run.',                 time: '~3s' },
-    { t: 'Run Report',           d: 'Plain-language summary + top 3 + manual queue + next steps.',                    time: '~5s' },
-  ];
+/* ── Phase 3: Scoring ────────────────────────────────────────────────── */
+function Phase3Scoring({ data, p }) {
+  const jobs = data.scoring.top_jobs;
+  // Stagger row reveal then animate the score bars.
   return (
-    <section className="section alt" id="how">
-      <div className="section-inner">
-        <SR>
-          <div className="eyebrow">
-            <span className="eyebrow-num">05</span>
-            <span>How it runs</span>
+    <div className="ph3">
+      {jobs.map((j, i) => {
+        const rowStart = i / (jobs.length + 1);
+        const rowIn = p > rowStart;
+        return (
+          <div key={`${j.company}-${j.title}`} className={'ph3-row' + (rowIn ? ' in' : '')}
+               style={{ '--w': j.score / 100 }}>
+            <div className="ph3-row-id">
+              <span className="ph3-row-title">{j.title}</span>
+              <span className="ph3-row-co">{j.company} · {j.location}</span>
+            </div>
+            <div className="ph3-bar-wrap"><div className="ph3-bar-fill"/></div>
+            <span className="ph3-score-num">{j.score}</span>
           </div>
-          <h2 className="section-h">Seven phases. <em>One command.</em></h2>
-          <p className="section-p">
-            Run any phase on its own, or hit ▶ Run all and let the agent cascade
-            through automatically. Each phase streams its logs back to the UI in
-            real time — no black box.
-          </p>
-        </SR>
-        <div className="phases-grid">
-          {steps.map((s, i) => (
-            <SR key={s.t} delay={Math.min((i % 4) + 1, 3)}>
-              <PhaseCard s={s}/>
-            </SR>
-          ))}
-        </div>
-      </div>
-    </section>
+        );
+      })}
+    </div>
   );
 }
 
-/* ── SECTION 06 — Reviews ──────────────────────────────────────────── */
-function ReviewsSection() {
-  const reviews = [
-    {
-      q: 'The AI verification on top of the regex scan caught skill gaps I\'d been missing for two years. My response rate went from 5% to 30% in a month.',
-      n: 'Aisha K.', r: 'IC Design Intern, Apple', i: 'AK',
-    },
-    {
-      q: 'Ran it overnight on Ollama against ~80 postings — zero API spend. Woke up to a complete tracker, three auto-submitted apps, and a written critique of my resume.',
-      n: 'Diego R.', r: 'Embedded Systems Engineer', i: 'DR',
-    },
-    {
-      q: 'I used to spend three hours customizing my resume per application. This does it in 20 seconds, with better tailoring than I could write by hand.',
-      n: 'Priya S.', r: 'EE PhD Student, MIT', i: 'PS',
-    },
-    {
-      q: 'The 0–100 score isn\'t a vanity metric — it tracks the four things that actually matter: numbers, action verbs, ATS structure, skill density.',
-      n: 'Marcus T.', r: 'Hardware Engineer', i: 'MT',
-    },
-    {
-      q: 'Greenhouse + Lever + Ashby in one feed is the part I didn\'t know I needed. I\'m seeing roles I would have missed entirely on LinkedIn.',
-      n: 'Yuki L.', r: 'FPGA Design Intern, Intel', i: 'YL',
-    },
-    {
-      q: 'Clean pipeline, transparent logs, no black-box "magic". I can read every phase\'s output and trust what shipped.',
-      n: 'James W.', r: 'Signal Integrity Engineer', i: 'JW',
-    },
-  ];
+/* ── Phase 4: Tailoring (cinematic moment) ───────────────────────────── */
+function Phase4Tailoring({ data, p }) {
+  const t = data.tailoring;
+  const fullAfter = t.after;
+  // Type out the "after" bullet during 0.15..0.75 of the phase.
+  const typeP = Math.max(0, Math.min(1, (p - 0.15) / 0.6));
+  const cutoff = Math.floor(typeP * fullAfter.length);
+  const typed = fullAfter.slice(0, cutoff);
+  const showCursor = p > 0.15 && p < 0.78;
+  const showChanges = p > 0.78;
   return (
-    <section className="section" id="reviews">
-      <div className="section-inner">
-        <SR>
-          <div className="eyebrow">
-            <span className="eyebrow-num">06</span>
-            <span>Reviews</span>
-          </div>
-          <h2 className="section-h">Engineers who've <em>actually used it.</em></h2>
-          <p className="section-p">Real feedback from real job hunters who run this against their own resumes.</p>
-        </SR>
-        <div className="reviews-grid">
-          {reviews.map((r, i) => (
-            <SR key={r.n} delay={Math.min((i % 3) + 1, 3)}>
-              <ReviewCard r={r}/>
-            </SR>
-          ))}
-        </div>
+    <div className="ph4">
+      <div className="ph4-head">
+        <span>Phase 4 · Tailoring</span>
+        <em>{t.company} · {t.title}</em>
       </div>
-    </section>
+      <div className="ph4-card">
+        <div className="ph4-bullet before">
+          <span className="ph4-bullet-mark">−</span>
+          <span className="ph4-bullet-txt">{t.before}</span>
+        </div>
+        <div className="ph4-bullet after">
+          <span className="ph4-bullet-mark">+</span>
+          <span className="ph4-bullet-txt">
+            <strong>Engineered</strong>{typed.replace('Engineered', '')}
+            {showCursor && <span className="ph4-bullet-cursor"/>}
+          </span>
+        </div>
+        {showChanges && (
+          <div className="ph4-changes">
+            {t.diff_changes.map((c, i) => (
+              <span key={i} className="ph4-change-chip">{c}</span>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 
-/* ── CTA ──────────────────────────────────────────────────────────── */
-function CTA() {
+/* ── Phase 5: Submission ─────────────────────────────────────────────── */
+function Phase5Submit({ data, p }) {
+  const fields = [
+    { l: 'Full name',       v: 'Aisha Rahman',          when: 0.05 },
+    { l: 'Email',           v: 'aisha.rahman@mit.edu',  when: 0.12 },
+    { l: 'Phone',           v: '(617) 555-0142',        when: 0.18 },
+    { l: 'LinkedIn',        v: 'linkedin.com/in/…',     when: 0.24 },
+    { l: 'School',          v: 'MIT',                   when: 0.30 },
+    { l: 'Degree',          v: 'B.S. EECS',             when: 0.36 },
+    { l: 'Graduation',      v: 'May 2025',              when: 0.42 },
+    { l: 'Visa sponsorship',v: 'Not required',          when: 0.48 },
+    { l: 'Résumé',          v: 'aisha-rahman.tailored.pdf', when: 0.55 },
+    { l: 'Cover letter',    v: 'NVIDIA-asic-cover.pdf',  when: 0.62 },
+  ];
+  const submitted = p > 0.85;
+  return (
+    <div className="ph5">
+      <div className="ph5-window">
+        <div className="ph5-titlebar">
+          <span className="ph5-dots">
+            <span className="ph5-dot"/><span className="ph5-dot"/><span className="ph5-dot"/>
+          </span>
+          <span className="ph5-url">boards.greenhouse.io/{data.tailoring.company.toLowerCase()}/jobs/asic-design-intern</span>
+        </div>
+        <div className="ph5-form">
+          {fields.map((f, i) => (
+            <div key={i} className="ph5-field">
+              <span>{f.l}</span>
+              <span className={'ph5-input' + (p > f.when ? ' filled' : '')}>
+                {p > f.when ? f.v : ' '}
+              </span>
+            </div>
+          ))}
+          <div className="ph5-submit-wrap">
+            <span className={'ph5-submit-btn' + (submitted ? ' success' : '')}>
+              {submitted ? '✓ Submitted' : 'Submit application'}
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── Phase 6: Tracker ────────────────────────────────────────────────── */
+function Phase6Tracker({ data, p }) {
+  const rows = data.tracker.preview_rows;
+  // Stagger row reveal across the phase.
+  return (
+    <div className="ph6">
+      <div className="ph6-tab">📊 Job_Applications_Tracker_2026-05.xlsx</div>
+      <div className="ph6-table">
+        <div className="ph6-row head">
+          <div>#</div><div>Company</div><div>Title</div><div>Score</div><div>Status</div>
+        </div>
+        {rows.map((r, i) => {
+          const rowStart = 0.05 + (i * 0.16);
+          const rowIn = p > rowStart;
+          const status = (r.status || '').toLowerCase();
+          return (
+            <div key={i} className={'ph6-row' + (rowIn ? ' in' : '')}>
+              <div>{String(i + 1).padStart(2, '0')}</div>
+              <div><b>{r.company}</b></div>
+              <div>{r.title}</div>
+              <div>{r.score}</div>
+              <div><span className={'ph6-status-pill ' + status}>{r.status}</span></div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ── Phase 7: Report ─────────────────────────────────────────────────── */
+function Phase7Report({ data, p }) {
+  const r = data.report;
+  const stepsIn = Math.floor(Math.min(1, Math.max(0, (p - 0.25) / 0.55)) * r.next_steps.length);
+  return (
+    <div className="ph7">
+      <div className="ph7-card">
+        <div className="ph7-pill">Run complete</div>
+        <h3 className="ph7-h1">{r.headline.split(' · ').map((seg, i, arr) => (
+          <React.Fragment key={i}>
+            {i === 0 ? <em>{seg}</em> : seg}
+            {i < arr.length - 1 ? ' · ' : ''}
+          </React.Fragment>
+        ))}</h3>
+        <p className="ph7-summary">{r.summary}</p>
+        <ol className="ph7-list">
+          {r.next_steps.slice(0, stepsIn + 1).map((step, i) => (
+            <li key={i}>{step}</li>
+          ))}
+        </ol>
+        {p > 0.85 && (
+          <a className="ph7-cta" href={LAUNCH_URL}>Run it on your resume <ArrowR size={14}/></a>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ── FINAL CTA ───────────────────────────────────────────────────────── */
+function FinalCTA() {
   return (
     <section className="cta" id="cta">
-      <SR>
-        <div className="cta-eyebrow">
-          <span className="hero-eyebrow-pulse"/>
-          <span>Ready when you are</span>
-        </div>
-        <h2 className="cta-h">Stop reformatting <em>your résumé</em><br/>at 2 a.m.</h2>
-        <p className="cta-p">Demo mode requires zero setup. Swap to Anthropic or Ollama anytime — your insights upgrade themselves.</p>
-        <div className="cta-actions">
-          <a className="btn-cta" href={LAUNCH_URL} style={{ padding: '16px 32px', fontSize: 17 }}>
-            Create your free account <span className="btn-arrow"><ArrowR size={16}/></span>
-          </a>
-          <a className="cta-signin" href={LAUNCH_URL}>
-            Already have an account? <em>Sign in</em>
-          </a>
-        </div>
-      </SR>
+      <div className="cta-eyebrow">
+        <span className="hero-eyebrow-pulse"/>
+        <span>Ready when you are</span>
+      </div>
+      <h2 className="cta-h">Stop reformatting <em>your résumé</em><br/>at 2 a.m.</h2>
+      <div className="cta-actions">
+        <a className="btn-cta" href={LAUNCH_URL} style={{ padding: '16px 32px', fontSize: 17 }}>
+          Create your free account <span className="btn-arrow"><ArrowR size={16}/></span>
+        </a>
+        <a className="cta-signin" href={LAUNCH_URL}>
+          Already have an account? <em>Sign in</em>
+        </a>
+      </div>
     </section>
   );
 }
 
-/* ── FOOTER ───────────────────────────────────────────────────────── */
 function Footer() {
   return (
     <footer className="footer">
@@ -1476,129 +1309,14 @@ function Footer() {
   );
 }
 
-/* ── Cursor-follow card components ─────────────────────────────────
-   Each window-style card subscribes to the shared cursor tracker.
-   Tilt amplitudes hand-tuned per card density: bigger isolated cards
-   tilt more, dense grids tilt less so the page doesn't twitch. */
-function FvResume() {
-  // Strong response + slight rest tilt so it has 3D presence at idle.
-  const ref = useCardCursor({ max: 9, restRy: -3, restRx: 2, stiff: 0.10 });
-  return (
-    <div ref={ref} className="fv-resume">
-      <div className="fv-resume-top">
-        <div className="fv-r-title">Aisha Rahman · resume v3.tex</div>
-        <span className="dp-chip">AI-verified</span>
-      </div>
-      <div className="fv-r-grid">
-        <div className="fv-r-score">
-          <div className="fv-r-num">88</div>
-          <div className="fv-r-verdict">Strong</div>
-          <div className="fv-r-meta">Top-decile signal</div>
-        </div>
-        <div className="fv-r-tiles">
-          <div className="fv-r-tile">
-            <span className="fv-r-tile-v good">67%</span>
-            <span className="fv-r-tile-l">Quantified</span>
-            <span className="fv-r-tile-h">10/15</span>
-          </div>
-          <div className="fv-r-tile">
-            <span className="fv-r-tile-v good">71%</span>
-            <span className="fv-r-tile-l">Action verbs</span>
-            <span className="fv-r-tile-h">target ≥70</span>
-          </div>
-          <div className="fv-r-tile">
-            <span className="fv-r-tile-v good">8.2</span>
-            <span className="fv-r-tile-l">Skill density</span>
-            <span className="fv-r-tile-h">/100w</span>
-          </div>
-          <div className="fv-r-tile">
-            <span className="fv-r-tile-v warn">2</span>
-            <span className="fv-r-tile-l">Weak phrases</span>
-            <span className="fv-r-tile-h">replace</span>
-          </div>
-        </div>
-      </div>
-      <div className="fv-r-bullet good">
-        <strong style={{marginRight:6}}>✓</strong> No clichés or buzzwords — substance over polish.
-      </div>
-      <div className="fv-r-bullet bad">
-        <strong style={{marginRight:6}}>!</strong> "Helped with research" — re-anchor with Engineered/Designed.
-      </div>
-    </div>
-  );
-}
-
-function ProviderCard({ c }) {
-  // Row of 3 — visible response, faster spring so the row feels alive.
-  const ref = useCardCursor({ max: 7, stiff: 0.13 });
-  return (
-    <div ref={ref} className={`provider-card ${c.cls}${c.recommended ? ' recommended' : ''}`}>
-      <div className="prov-eyebrow">{c.eyebrow}</div>
-      <div className="prov-name">{c.name}</div>
-      <div className="prov-tag">{c.tag}</div>
-      <div className="prov-list">
-        {c.list.map((li, j) => (
-          <div key={j} className="prov-li">
-            <span className="prov-li-mark">
-              <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                   strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="20 6 9 17 4 12"/>
-              </svg>
-            </span>
-            <span>{li}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function PhaseCard({ s }) {
-  // Dense 4-col grid — keep the tilt subtle so the section doesn't jitter.
-  const ref = useCardCursor({ max: 4, stiff: 0.14 });
-  return (
-    <div ref={ref} className="phase-card">
-      <div className="phase-name">{s.t}</div>
-      <div className="phase-desc">{s.d}</div>
-      <span className="phase-time">{s.time}</span>
-    </div>
-  );
-}
-
-function ReviewCard({ r }) {
-  const ref = useCardCursor({ max: 5, stiff: 0.13 });
-  return (
-    <div ref={ref} className="review-card">
-      <span className="review-quote-mark" aria-hidden="true">&ldquo;</span>
-      <div className="review-stars">
-        {[0,1,2,3,4].map(j => <StarSVG key={j}/>)}
-      </div>
-      <div className="review-quote">{r.q}</div>
-      <div className="review-author">
-        <div className="review-av">{r.i}</div>
-        <div>
-          <div className="review-name">{r.n}</div>
-          <div className="review-role">{r.r}</div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* ── APP ──────────────────────────────────────────────────────────── */
+/* ── APP ─────────────────────────────────────────────────────────────── */
 function App() {
   return (
     <>
       <Nav/>
       <Hero/>
-      <Ticker/>
-      <Stats/>
-      <ResumeIntelligenceSection/>
-      <DiscoverySection/>
-      <ProvidersSection/>
-      <PipelineSection/>
-      <ReviewsSection/>
-      <CTA/>
+      <Scrubber/>
+      <FinalCTA/>
       <Footer/>
     </>
   );

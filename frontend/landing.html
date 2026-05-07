@@ -211,14 +211,14 @@ em, i, cite, var { font-style: normal }
 @keyframes scroll-hint-bob { 0%, 100% { transform: translate(-50%, 0); opacity: .55 } 50% { transform: translate(-50%, 6px); opacity: .9 } }
 
 /* ── SCRUBBER ─────────────────────────────────────────────────────────── */
-/* The whole demo is a single section pinned for ~1400vh of scroll. Inside,
-   everything reads off one progress value (0..1). Each phase gets ~200vh of
-   scroll travel, which on a 1080-tall viewport feels like 2-3s of attention
-   per phase even when scrolling aggressively — short enough not to bore,
-   long enough that visitors can't accidentally skim past the punchline. */
+/* The whole demo is a single section pinned for ~2400vh of scroll. Each
+   phase gets ~340vh of scroll travel, which at typical wheel speed lingers
+   on each phase for 4–6 seconds — long enough that the typewriter and the
+   counters actually read as motion, not as a flicker. Mobile drops the
+   pin entirely (see the .mobile-stack rules below). */
 .scrubber {
   position: relative;
-  height: 1400vh;         /* total scroll travel; tune for desired pacing */
+  height: 2400vh;         /* total scroll travel; tune for desired pacing */
   background: var(--bg);
 }
 .scrubber-pin {
@@ -966,27 +966,120 @@ em, i, cite, var { font-style: normal }
   .provider-row  { grid-template-columns: 1fr }
 }
 
+/* ── MOBILE ──────────────────────────────────────────────────────────── */
+/* Mobile drops the pinned-sticky scrubber entirely — `position: sticky`
+   with a dynamic-URL-bar viewport on iOS Safari produces janky travel,
+   and a 100vh stage on a 600px screen leaves no room for context above
+   or below. The replacement: each phase renders as its own stacked card
+   showing the *final* state, no animation, no progress tricks. The
+   visitor scrolls past 7 cards naturally — same information, calmer
+   pace, never a frame in mid-transition. */
+
 @media (max-width: 720px) {
   .nav { padding: 0 16px }
   .nav-link.hide-on-mobile { display: none }
   .hero { padding: 110px 18px 60px }
   .hero-h1 { font-size: clamp(38px, 9vw, 56px) }
   .hero-sub { font-size: 16px }
-  .scrubber { height: auto }            /* mobile fallback: no pinning */
-  .scrubber-pin {
-    position: relative; height: auto;
-    padding: 28px 0;
+
+  .scrubber, .scrubber.mobile-stack {
+    height: auto;
+    padding: 32px 0 40px;
   }
-  .scr-rail { padding: 0 14px; flex-wrap: wrap; gap: 4px }
-  .scr-rail-cell { flex-basis: 30%; padding: 6px 8px }
-  .scr-stage { padding: 24px 14px; min-height: 460px }
-  .scr-frame { position: relative; inset: auto }
-  .ph6-table { font-size: 10px }
+  .scrubber-pin, .scrubber.mobile-stack .scrubber-pin {
+    position: relative;
+    height: auto;
+    padding: 0 0 8px;
+    overflow: visible;
+    background: transparent;
+  }
+  .scr-rail {
+    /* On mobile the rail becomes a sticky page-style header so the visitor
+       always knows where they are in the seven-phase sequence. */
+    position: sticky; top: 64px;
+    z-index: 10;
+    background: linear-gradient(180deg, rgba(7,7,13,.92) 0%, rgba(7,7,13,.78) 100%);
+    backdrop-filter: blur(14px) saturate(140%);
+    -webkit-backdrop-filter: blur(14px) saturate(140%);
+    padding: 10px 12px; gap: 4px;
+    flex-wrap: wrap;
+    border-top: 1px solid var(--bdr);
+    border-bottom: 1px solid var(--bdr);
+    margin-bottom: 18px;
+  }
+  .scr-rail-cell {
+    flex: 0 0 calc(33.333% - 4px);
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--bdr);
+  }
+  .scr-rail-cell::after { display: none }   /* no progress underline on mobile */
+  .scr-rail-num { font-size: 9px }
+  .scr-rail-lbl { font-size: 12.5px }
+
+  .scr-stage {
+    padding: 0 14px; min-height: 0;
+    display: flex; flex-direction: column; gap: 22px;
+    overflow: visible;
+  }
+  /* Each phase becomes a labelled card, full-state, all visible. */
+  .scr-frame {
+    position: relative; inset: auto;
+    opacity: 1; transform: none;
+    pointer-events: auto;
+    background: linear-gradient(165deg, rgba(255,255,255,.03) 0%, rgba(0,0,0,.25) 100%);
+    border: 1px solid var(--bdr);
+    border-radius: 14px;
+    padding: 38px 16px 20px;
+  }
+  .scr-frame::before {
+    content: 'Phase ' counter(scr-phase) ' · ' attr(data-label);
+    position: absolute; top: 12px; left: 16px;
+    font-family: var(--mono); font-size: 10.5px; font-weight: 700;
+    letter-spacing: .14em; text-transform: uppercase;
+    color: var(--accent-h);
+    padding: 4px 9px; border-radius: 6px;
+    background: var(--accent-d); border: 1px solid var(--accent-b);
+    counter-increment: scr-phase;
+  }
+  .scr-stage { counter-reset: scr-phase }
+  .scr-meta { display: none }
+
+  /* Phase-internal layout adjustments for the narrower card. */
+  .ph1  { grid-template-columns: 1fr; gap: 18px }
+  .ph1-doc { min-height: 260px; padding: 18px 18px }
+  .ph1-doc-name { font-size: 16px }
+  .ph1-doc-bullet { font-size: 9px }
+  .ph2-grid { grid-template-columns: repeat(2, 1fr); gap: 6px }
+  .ph2-src { padding: 9px 12px; font-size: 11.5px }
+  .ph2-counter-num { font-size: 38px }
+  .ph2-dedupe-row { font-size: 11.5px; padding: 8px 14px; gap: 10px; flex-wrap: wrap; justify-content: center }
+  .ph3-row  { grid-template-columns: 1fr; gap: 10px }
+  .ph3-bar-wrap { grid-column: 1 }
+  .ph3-score-num { grid-column: 1; justify-self: end; font-size: 20px }
+  .ph4-card { padding: 14px 16px }
+  .ph4-bullet { font-size: 13px; padding: 10px 12px }
+  .ph5-form { grid-template-columns: 1fr; gap: 10px }
+  .ph5-window { font-size: 12px }
+  .ph5-url { font-size: 10.5px }
+  .ph6-table { font-size: 10px; overflow-x: auto }
+  .ph6-row { grid-template-columns: 24px 1.4fr 1.6fr 50px 70px; padding: 6px 10px }
+  .ph7-card { padding: 18px 18px }
+  .ph7-h1   { font-size: 20px }
+  .ph7-summary { font-size: 13.5px }
+
   .recap     { padding: 60px 18px 50px }
   .providers { padding: 50px 18px 70px }
   .recap-stats { grid-template-columns: 1fr 1fr }
   .recap-phases { grid-template-columns: 1fr }
   .cta { padding: 80px 20px 60px }
+}
+
+/* Tighter on very small phones: tame the rail label collisions. */
+@media (max-width: 420px) {
+  .scr-rail-cell { flex: 0 0 calc(33.333% - 4px); padding: 4px 6px }
+  .scr-rail-num { font-size: 8.5px; letter-spacing: .12em }
+  .scr-rail-lbl { font-size: 11.5px }
+  .recap-stat-n { font-size: 36px }
 }
 </style>
 </head>
@@ -1121,28 +1214,14 @@ function Scrubber() {
       .catch(e => setDataErr(String(e)));
   }, []);
 
-  // Desktop: scroll-driven. Mobile: auto-play once when scrubber enters viewport.
+  // Desktop: scroll-driven. Mobile: render every phase at its final state
+  // simultaneously — pinned-sticky on iOS Safari with a dynamic URL bar is
+  // unreliable, and stacking 7 cards is calmer for narrow screens anyway.
   useEffect(() => {
     if (!sectionRef.current) return undefined;
     if (isMobile) {
-      // Auto-play: simple ramp 0→1 over 14 s once the section scrolls into view.
-      let raf = 0;
-      let started = 0;
-      let running = false;
-      const obs = new IntersectionObserver(entries => {
-        if (entries[0].isIntersecting && !running) {
-          running = true;
-          started = performance.now();
-          const tick = (now) => {
-            const p = Math.min(1, (now - started) / 14000);
-            setProgress(p);
-            if (p < 1) raf = requestAnimationFrame(tick);
-          };
-          raf = requestAnimationFrame(tick);
-        }
-      }, { threshold: 0.18 });
-      obs.observe(sectionRef.current);
-      return () => { obs.disconnect(); cancelAnimationFrame(raf); };
+      setProgress(1);   // every phase frame reads as "complete" on mobile
+      return undefined;
     }
 
     let raf = 0;
@@ -1176,18 +1255,24 @@ function Scrubber() {
   // While loading the JSON, render the structure with dim placeholders so
   // there's no jarring layout pop when data lands.
   return (
-    <section className="scrubber" id="scrubber" ref={sectionRef} aria-label="Watch the pipeline run">
+    <section
+      className={'scrubber' + (isMobile ? ' mobile-stack' : '')}
+      id="scrubber"
+      ref={sectionRef}
+      aria-label="Watch the pipeline run">
       <div className="scrubber-pin">
         <div className="scr-rail" role="tablist" aria-label="Pipeline phases">
           {PHASE_SLICES.map((s, i) => {
             const lp = localProgress(progress, s);
+            const isOn   = !isMobile && i === activeIdx;
+            const isDone = !isMobile && i  <  activeIdx;
             return (
               <div
                 key={s.id}
-                className={'scr-rail-cell' + (i === activeIdx ? ' on' : (i < activeIdx ? ' done' : ''))}
+                className={'scr-rail-cell' + (isOn ? ' on' : (isDone ? ' done' : ''))}
                 style={{ '--p': `${Math.round(lp * 100)}%` }}
                 role="tab"
-                aria-selected={i === activeIdx}>
+                aria-selected={isOn}>
                 <span className="scr-rail-num">Phase {s.id}</span>
                 <span className="scr-rail-lbl">{s.label}</span>
               </div>
@@ -1203,11 +1288,21 @@ function Scrubber() {
               </div>
             </div>
           )}
-          {data && PHASE_SLICES.map((s, i) => (
-            <div key={s.id} className={'scr-frame' + (i === activeIdx ? ' active' : '')} aria-hidden={i !== activeIdx}>
-              <PhaseFrame phase={s.id} progress={localProgress(progress, s)} data={data}/>
-            </div>
-          ))}
+          {data && PHASE_SLICES.map((s, i) => {
+            // Mobile: every frame is "active" and rendered at progress=1 (end-state).
+            // Desktop: only the active frame is opaque; others fade.
+            const active = isMobile || i === activeIdx;
+            const localP = isMobile ? 1 : localProgress(progress, s);
+            return (
+              <div
+                key={s.id}
+                className={'scr-frame' + (active ? ' active' : '')}
+                data-label={s.label}
+                aria-hidden={!active}>
+                <PhaseFrame phase={s.id} progress={localP} data={data}/>
+              </div>
+            );
+          })}
         </div>
         <div className="scr-meta">
           <span className="scr-meta-dot"/>

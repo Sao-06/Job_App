@@ -4,12 +4,12 @@ pipeline/job_details.py
 On-demand fetcher for the FULL job posting + parsed sections + a
 company summary from Wikipedia.
 
-This is the source of truth for ``GET /api/jobs/{id}/details``. Index
-ingest stays metadata-only (descriptions can run 5-15 KB each, and
-storing them would balloon the SQLite working set well past comfort);
-instead we re-fetch from the upstream source's per-job API on demand
-and cache for 1 h. Repeated views of the same posting hit the in-memory
-cache, never the upstream.
+This is the source of truth for ``GET /api/jobs/{id}/details`` and the
+back-end of Phase 3's ``_ensure_description`` lazy-fetch. ATS detection
+runs URL-first (so a ``gh:simplify/new-grad`` row pointing at
+``boards.greenhouse.io/spacex/jobs/123`` still hits the Greenhouse
+endpoint) and falls back to the ``source`` field's prefix only when
+the URL doesn't match a known ATS host.
 
 Three layers:
 
@@ -40,6 +40,82 @@ from typing import Optional
 from urllib.parse import quote
 
 from .sources._http import http_get_json
+
+
+# ══════════════════════════════════════════════════════════════════════
+# URL-based ATS detection — works for any source whose apply_url points
+# at a known ATS host, not just rows whose `source` field matches.
+# ══════════════════════════════════════════════════════════════════════
+
+# Each tuple is (provider_name, host_regex, path_regex_with_named_groups).
+# `host_regex` is `re.search`-tested against the URL's netloc; `path_regex`
+# pulls out whatever per-provider identifiers the fetcher needs (slug,
+# job_id, host shard, site, ...). Order matters: the first hit wins.
+_ATS_URL_PATTERNS: list[tuple[str, str, str]] = [
+    # https://boards.greenhouse.io/{slug}/jobs/{numeric_id}
+    ("greenhouse",
+     r"(?:^|\.)(?:boards|job-boards)\.greenhouse\.io$",
+     r"^/(?P<slug>[\w\-]+)/jobs/(?P<job_id>\d+)"),
+    # https://jobs.lever.co/{slug}/{posting_uuid}
+    ("lever",
+     r"(?:^|\.)jobs\.lever\.co$",
+     r"^/(?P<slug>[\w\-]+)/(?P<job_id>[0-9a-f-]{36})"),
+    # https://jobs.ashbyhq.com/{slug}/{posting_uuid}
+    ("ashby",
+     r"(?:^|\.)jobs\.ashbyhq\.com$",
+     r"^/(?P<slug>[\w\-]+)(?:/(?P<job_id>[\w\-]+))?"),
+    # https://apply.workable.com/{slug}/j/{id} (legacy) or /{slug}/...
+    ("workable",
+     r"(?:^|\.)apply\.workable\.com$",
+     r"^/(?P<slug>[\w\-]+)"),
+    # https://{slug}.{wdN}.myworkdayjobs.com/{site}/job/...
+    ("workday",
+     r"^(?P<slug>[\w\-]+)\.(?P<host>wd\d+)\.myworkdayjobs\.com$",
+     r"^/(?P<site>[\w\-]+)/job/.+"),
+    # https://jobs.smartrecruiters.com/{slug}/{job_id}
+    ("smartrecruiters",
+     r"(?:^|\.)jobs\.smartrecruiters\.com$",
+     r"^/(?P<slug>[\w\-]+)/(?P<job_id>\d+)"),
+]
+
+
+def _detect_ats_from_url(url: str) -> Optional[dict]:
+    """Identify the ATS + extract its routing parameters from any apply URL.
+
+    Returns ``{"provider": str, ...captured groups...}`` or ``None``. This
+    is the primary routing path for ``fetch_full_description`` — falling
+    back to the ``source`` field's prefix only when no URL pattern matches
+    (legacy callers, demo jobs, hand-curated lists, etc.).
+    """
+    if not url:
+        return None
+    try:
+        from urllib.parse import urlparse
+        parts = urlparse(url)
+    except Exception:
+        return None
+    netloc = (parts.netloc or "").lower()
+    path = parts.path or ""
+    for provider, host_re, path_re in _ATS_URL_PATTERNS:
+        if not re.search(host_re, netloc):
+            continue
+        m = re.search(path_re, path)
+        if not m:
+            # Workday: capture host even when the path lacks /job/... so the
+            # caller can build the per-job endpoint from later URL components.
+            if provider == "workday":
+                m_host = re.search(host_re, netloc)
+                if m_host:
+                    return {"provider": provider, **m_host.groupdict()}
+            continue
+        # For Workday we need both host (from netloc) and site (from path).
+        out = {"provider": provider, **m.groupdict()}
+        if provider == "workday":
+            m_host = re.search(host_re, netloc)
+            if m_host:
+                out.update(m_host.groupdict())
+        return out
+    return None
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -96,18 +172,23 @@ def strip_html(html: str) -> str:
 
     Block-level tags become newlines; ``<li>`` becomes a leading bullet
     so the section parser downstream still recognises list items.
+    Entities are decoded FIRST so that double-encoded payloads (e.g.
+    Greenhouse's ``content`` field returns HTML where the angle brackets
+    arrive as ``&lt;div&gt;``) get unescaped into real tags before the
+    tag-stripping regex runs — otherwise literal ``<div>`` survives the
+    pipeline.
     """
     if not html:
         return ""
     text = html
+    for ent, ch in _HTML_ENTS.items():
+        text = text.replace(ent, ch)
+    text = re.sub(r"&#\d+;", "", text)            # numeric entities
     text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
     text = re.sub(r"</(?:p|div|h[1-6]|tr|table|ul|ol)\s*>", "\n", text, flags=re.IGNORECASE)
     text = re.sub(r"<li[^>]*>", "\n• ", text, flags=re.IGNORECASE)
     text = re.sub(r"<h[1-6][^>]*>", "\n\n", text, flags=re.IGNORECASE)
     text = _HTML_TAG_RE.sub("", text)
-    for ent, ch in _HTML_ENTS.items():
-        text = text.replace(ent, ch)
-    text = re.sub(r"&#\d+;", "", text)            # numeric entities
     text = re.sub(r"\n{3,}", "\n\n", text)
     text = re.sub(r"[ \t]+\n", "\n", text)
     return text.strip()
@@ -384,29 +465,218 @@ def _fetch_workable(canonical_url: str, slug: str) -> Optional[dict]:
     return None
 
 
-def fetch_full_description(canonical_url: str, source: str) -> Optional[dict]:
-    """Re-fetch the full description from the upstream source's per-job
-    API. Returns ``{"description": text}`` or ``None`` when the source
-    isn't supported / fetch fails.
+def _fetch_workday(canonical_url: str, slug: str, host: str, site: str) -> Optional[dict]:
+    """Workday: per-job GET against ``/wday/cxs/{slug}/{site}/job/{externalPath}``.
+
+    The externalPath is the trailing portion of the canonical URL after
+    ``/{site}``. Workday's response carries ``jobPostingInfo.jobDescription``
+    as HTML — strip it before returning.
     """
-    if not canonical_url or not source:
+    if not (slug and host and site):
         return None
-    parts = source.split(":")
-    if len(parts) < 3:
+    # Path layout: /{site}/job/.../R-12345 — capture everything after /{site}/.
+    m = re.match(rf"^/{re.escape(site)}(/job/.+?)$", canonical_url.split(host + ".myworkdayjobs.com", 1)[-1])
+    if not m:
+        # Defensive — try a looser match if the simple split missed.
+        path_match = re.search(r"(/job/[^?#]+)", canonical_url)
+        if not path_match:
+            return None
+        external_path = path_match.group(1)
+    else:
+        external_path = m.group(1)
+
+    api = f"https://{slug}.{host}.myworkdayjobs.com/wday/cxs/{slug}/{site}/job{external_path[len('/job'):]}"
+    data = http_get_json(api, timeout=12)
+    if not isinstance(data, dict):
         return None
-    provider, slug = parts[1], parts[2]
+    info = data.get("jobPostingInfo") or {}
+    raw = info.get("jobDescription") or info.get("description") or ""
+    text = strip_html(raw)
+    return {"description": text} if text else None
+
+
+def _fetch_smartrecruiters(canonical_url: str, slug: str, job_id: str) -> Optional[dict]:
+    """SmartRecruiters: public Posting API. The endpoint
+    ``/v1/companies/{slug}/postings/{job_id}`` returns ``jobAd.sections``
+    with separate ``companyDescription`` / ``jobDescription`` /
+    ``qualifications`` / ``additionalInformation`` keys (each ``text`` is
+    HTML). Concatenated and HTML-stripped here.
+    """
+    if not (slug and job_id):
+        return None
+    api = f"https://api.smartrecruiters.com/v1/companies/{slug}/postings/{job_id}"
+    data = http_get_json(api, timeout=12)
+    if not isinstance(data, dict):
+        return None
+    sections = (data.get("jobAd") or {}).get("sections") or {}
+    blocks: list[str] = []
+    for key in ("jobDescription", "qualifications", "additionalInformation",
+                "companyDescription"):
+        section = sections.get(key) or {}
+        title = (section.get("title") or "").strip()
+        body = strip_html(section.get("text") or "")
+        if not body:
+            continue
+        if title:
+            blocks.append(f"\n{title}\n{body}")
+        else:
+            blocks.append(body)
+    text = "\n\n".join(blocks).strip()
+    return {"description": text} if text else None
+
+
+# Generic HTML fallback — last-ditch fetch for apply URLs that don't match
+# any known ATS pattern (company career pages, regional job boards, etc.).
+# We do a single GET, cap the response, and strip HTML. Most JS-rendered
+# SPAs return a thin shell here, which is fine — caller treats empty as
+# "no description" and falls back to title-only scoring.
+
+_GENERIC_FETCH_TIMEOUT = 10
+_GENERIC_FETCH_MAX_BYTES = 800_000  # 800 KB — big enough for any real posting
+_GENERIC_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (compatible; JobsAI/1.0; +https://github.com/Sao-06/Job_App)"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.5",
+    # Request uncompressed content. Most servers honor this; we still
+    # decode gzip/deflate fallbacks below for the ones that don't.
+    "Accept-Encoding": "identity",
+}
+
+
+def _fetch_generic_html(url: str) -> Optional[dict]:
+    """Fetch any URL, strip HTML, return the largest content block.
+
+    Best-effort fallback: works for static company career pages and
+    keyword-matching for SPAs is good enough when the page renders >5 KB
+    of text. JS-only skeletons return small bodies and we accept that.
+    Restricted to https for safety.
+    """
+    if not url or not url.lower().startswith("https://"):
+        return None
     try:
-        if provider == "greenhouse":
-            return _fetch_greenhouse(canonical_url, slug)
-        if provider == "lever":
-            return _fetch_lever(canonical_url, slug)
-        if provider == "ashby":
-            return _fetch_ashby(canonical_url, slug)
-        if provider == "workable":
-            return _fetch_workable(canonical_url, slug)
+        import urllib.request
+        req = urllib.request.Request(url, headers=_GENERIC_HEADERS)
+        with urllib.request.urlopen(req, timeout=_GENERIC_FETCH_TIMEOUT) as resp:
+            ctype = (resp.headers.get("Content-Type") or "").lower()
+            if "html" not in ctype and "text" not in ctype:
+                return None
+            raw = resp.read(_GENERIC_FETCH_MAX_BYTES)
+            charset = resp.headers.get_content_charset() or "utf-8"
+            encoding = (resp.headers.get("Content-Encoding") or "").lower()
+        # Some servers ignore Accept-Encoding: identity and gzip anyway —
+        # detect by header AND by gzip magic so we never feed binary into
+        # strip_html.
+        if encoding == "gzip" or raw[:2] == b"\x1f\x8b":
+            import gzip
+            try:
+                raw = gzip.decompress(raw)
+            except Exception:
+                return None
+        elif encoding == "deflate":
+            import zlib
+            try:
+                raw = zlib.decompress(raw)
+            except Exception:
+                try:
+                    raw = zlib.decompress(raw, -zlib.MAX_WBITS)
+                except Exception:
+                    return None
+        elif encoding == "br":
+            try:
+                import brotli  # type: ignore
+                raw = brotli.decompress(raw)
+            except Exception:
+                return None
+        html = raw.decode(charset, errors="replace")
     except Exception:
         return None
-    return None
+    # Remove script/style/nav/footer chrome before stripping the rest.
+    html = re.sub(r"<script\b[^>]*>.*?</script>", "", html,
+                   flags=re.DOTALL | re.IGNORECASE)
+    html = re.sub(r"<style\b[^>]*>.*?</style>", "", html,
+                   flags=re.DOTALL | re.IGNORECASE)
+    html = re.sub(r"<(?:nav|footer|header|aside)\b[^>]*>.*?</(?:nav|footer|header|aside)>",
+                   "", html, flags=re.DOTALL | re.IGNORECASE)
+    text = strip_html(html)
+    # Boilerplate filters: page chrome / cookie banners / SPA shells render
+    # short bodies that aren't useful for scoring. 200 chars is the floor —
+    # below that we treat the fetch as a miss and let the caller fall back.
+    if len(text) < 200:
+        return None
+    # Cap before returning; downstream upsert path trims further to 16 KB.
+    if len(text) > 24000:
+        text = text[:24000].rsplit(" ", 1)[0] + "…"
+    return {"description": text}
+
+
+def fetch_full_description(canonical_url: str, source: str) -> Optional[dict]:
+    """Re-fetch the full description from the upstream source's per-job
+    API. Returns ``{"description": text}`` or ``None`` when no fetcher
+    can produce one.
+
+    Routing order (first hit wins):
+      1. URL-based ATS detection — covers GitHub-aggregated jobs that
+         forward to greenhouse/lever/ashby/workable/workday/smartrecruiters
+         even when their ``source`` field doesn't say so.
+      2. Source-prefix routing — legacy fallback for ``ats:greenhouse:foo``
+         style sources.
+      3. Generic HTML fetch — last-ditch for company career pages and
+         everything else. Returns None when the page renders <200 chars
+         (SPA shells, cookie banners) so callers can keep using
+         title-only scoring with the honest UI badge.
+    """
+    if not canonical_url:
+        return None
+
+    # Pass 1: URL-based detection (the new, better path — works regardless
+    # of the source field).
+    detected = _detect_ats_from_url(canonical_url)
+    if detected:
+        provider = detected.get("provider")
+        try:
+            if provider == "greenhouse":
+                return _fetch_greenhouse(canonical_url, detected["slug"])
+            if provider == "lever":
+                return _fetch_lever(canonical_url, detected["slug"])
+            if provider == "ashby":
+                return _fetch_ashby(canonical_url, detected["slug"])
+            if provider == "workable":
+                return _fetch_workable(canonical_url, detected["slug"])
+            if provider == "workday":
+                return _fetch_workday(
+                    canonical_url, detected.get("slug", ""),
+                    detected.get("host", ""), detected.get("site", ""),
+                )
+            if provider == "smartrecruiters":
+                return _fetch_smartrecruiters(
+                    canonical_url, detected.get("slug", ""),
+                    detected.get("job_id", ""),
+                )
+        except Exception:
+            pass  # fall through to source-prefix and HTML fallbacks
+
+    # Pass 2: source-prefix routing (kept for callers that pass a source
+    # but a URL we don't recognize — rare, but cheap to keep).
+    if source:
+        parts = source.split(":")
+        if len(parts) >= 3:
+            provider, slug = parts[1], parts[2]
+            try:
+                if provider == "greenhouse":
+                    return _fetch_greenhouse(canonical_url, slug)
+                if provider == "lever":
+                    return _fetch_lever(canonical_url, slug)
+                if provider == "ashby":
+                    return _fetch_ashby(canonical_url, slug)
+                if provider == "workable":
+                    return _fetch_workable(canonical_url, slug)
+            except Exception:
+                pass
+
+    # Pass 3: generic HTML — last-ditch for unknown apply URLs.
+    return _fetch_generic_html(canonical_url)
 
 
 # ══════════════════════════════════════════════════════════════════════

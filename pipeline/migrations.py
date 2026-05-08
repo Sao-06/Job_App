@@ -164,5 +164,12 @@ def apply_all_migrations(conn: sqlite3.Connection) -> list[str]:
     ensure_index(conn, "ix_jobs_category", "job_postings",
                  "deleted, job_category")
 
+    # job_postings.description — full posting body (HTML stripped, plain text).
+    # Empty / NULL on rows whose source doesn't expose a description in the
+    # listing response; lazy-filled by Phase 3 LLM-scoring + the SPA detail
+    # view via pipeline.job_details. ~3-5 KB per row when populated; bounded
+    # naturally by how much of the index ever gets scored or viewed.
+    ensure_column(conn, "job_postings", "description", "TEXT")
+
     conn.commit()
     return get_log()

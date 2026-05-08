@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>{{ t.name }} — Resume</title>
+<style>{{ base_css }}{{ diff_css }}
+:root {
+  --accent: {{ accent or '#0a662c' }};
+  --body-size: {{ body_size or 9 }}pt;
+  --header-size: {{ header_size or 10 }}pt;
+  --name-size: {{ name_size or 17 }}pt;
+  --font-body: "Helvetica Neue", Arial, sans-serif;
+  --font-heading: "JetBrains Mono", "Menlo", "Monaco", monospace;
+  --page-margin: 0.4in;
+}
+section.r > h2 { font-family: var(--font-heading); border-bottom: 0.5pt solid #888; color: #222; }
+h1.name { text-align: left; font-family: var(--font-heading); font-weight: 700; letter-spacing: 0.06em; }
+.contact { text-align: left; }
+.entry { margin-top: 3pt; }
+ul.bullets li { margin-bottom: 0.8pt; }
+</style></head><body>
+{% from "_macros.html.j2" import tn, contact_line, section, custom_blocks %}
+<h1 class="name">{{ t.name }}</h1>
+{{ contact_line(t) }}
+{% for s in t.section_order %}{{ section(t, s) }}{% endfor %}
+{{ custom_blocks(t) }}
+</body></html>

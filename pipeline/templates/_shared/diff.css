@@ -1,0 +1,21 @@
+/* diff.css — green-highlight rules for modified/added text */
+mark.diff-add {
+  background: rgba(74, 222, 128, 0.20);
+  color: #0a662c;
+  border-bottom: 1.2pt solid #0a662c;
+  padding: 0 1pt;
+  text-decoration: none;
+}
+mark.diff-mod {
+  background: rgba(74, 222, 128, 0.10);
+  color: #0a662c;
+  border-bottom: 1.0pt dotted #0a662c;
+  padding: 0 1pt;
+  text-decoration: none;
+}
+@media print {
+  mark.diff-add, mark.diff-mod {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+}

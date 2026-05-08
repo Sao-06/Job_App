@@ -1,0 +1,94 @@
+{# Render a TextNode wrapped in <mark> only when modified/added #}
+{%- macro tn(node) -%}
+{%- if not node -%}{%- elif node.diff == 'added' -%}<mark class="diff-add">{{ node.text }}</mark>{%- elif node.diff == 'modified' -%}<mark class="diff-mod">{{ node.text }}</mark>{%- else -%}{{ node.text }}{%- endif -%}
+{%- endmacro -%}
+
+{%- macro contact_line(t) -%}
+<div class="contact">
+{%- if t.email %}<span>{{ t.email }}</span>{% endif -%}
+{%- if t.phone %}<span>{{ t.phone }}</span>{% endif -%}
+{%- if t.linkedin %}<span>{{ t.linkedin }}</span>{% endif -%}
+{%- if t.github %}<span>{{ t.github }}</span>{% endif -%}
+{%- if t.website %}<span>{{ t.website }}</span>{% endif -%}
+{%- if t.location %}<span>{{ t.location }}</span>{% endif -%}
+</div>
+{%- endmacro -%}
+
+{%- macro skills_block(t) -%}
+{% if t.skills %}<section class="r"><h2>Skills</h2>
+{% for cat in t.skills %}
+  <div class="skills-cat skills-line">
+    {% if cat.name %}<span class="skills-cat-name">{{ cat.name }}:</span>{% endif %}
+    {% for it in cat.get('items', []) %}{{ tn(it) }}{% if not loop.last %}, {% endif %}{% endfor %}
+  </div>
+{% endfor %}
+</section>{% endif %}
+{%- endmacro -%}
+
+{%- macro experience_block(t) -%}
+{% if t.experience %}<section class="r"><h2>Experience</h2>
+{% for r in t.experience %}<div class="entry">
+  <div class="entry-h"><span class="l">{{ r.title }}{% if r.company %} — {{ r.company }}{% endif %}</span><span class="r">{{ r.dates }}</span></div>
+  {% if r.location %}<div class="entry-sub"><span>{{ r.location }}</span></div>{% endif %}
+  {% if r.bullets %}<ul class="bullets">{% for b in r.bullets %}<li>{{ tn(b) }}</li>{% endfor %}</ul>{% endif %}
+</div>{% endfor %}
+</section>{% endif %}
+{%- endmacro -%}
+
+{%- macro projects_block(t) -%}
+{% if t.projects %}<section class="r"><h2>Projects</h2>
+{% for p in t.projects %}<div class="entry">
+  <div class="entry-h"><span class="l">{{ p.name }}</span>{% if p.dates %}<span class="r">{{ p.dates }}</span>{% endif %}</div>
+  {% if p.description and p.description.text %}<div>{{ tn(p.description) }}</div>{% endif %}
+  {% if p.bullets %}<ul class="bullets">{% for b in p.bullets %}<li>{{ tn(b) }}</li>{% endfor %}</ul>{% endif %}
+  {% if p.skills_used %}<div class="entry-sub"><span><em>Skills:</em>
+    {% for s in p.skills_used %}{{ tn(s) }}{% if not loop.last %}, {% endif %}{% endfor %}</span></div>{% endif %}
+</div>{% endfor %}
+</section>{% endif %}
+{%- endmacro -%}
+
+{%- macro education_block(t) -%}
+{% if t.education %}<section class="r"><h2>Education</h2>
+{% for e in t.education %}<div class="entry">
+  <div class="entry-h"><span class="l">{{ e.institution }}</span><span class="r">{{ e.dates }}</span></div>
+  <div class="entry-sub"><span>{{ e.degree }}{% if e.gpa %} — GPA: {{ e.gpa }}{% endif %}</span>{% if e.location %}<span>{{ e.location }}</span>{% endif %}</div>
+  {% if e.notes %}<ul class="bullets">{% for n in e.notes %}<li>{{ tn(n) }}</li>{% endfor %}</ul>{% endif %}
+</div>{% endfor %}
+</section>{% endif %}
+{%- endmacro -%}
+
+{%- macro generic_block(title, items) -%}
+{% if items %}<section class="r"><h2>{{ title }}</h2>
+{% for g in items %}<div class="entry">
+  <div class="entry-h"><span class="l">{{ tn(g.title) }}</span>{% if g.detail and g.detail.text %}<span class="r">{{ tn(g.detail) }}</span>{% endif %}</div>
+  {% if g.bullets %}<ul class="bullets">{% for b in g.bullets %}<li>{{ tn(b) }}</li>{% endfor %}</ul>{% endif %}
+</div>{% endfor %}
+</section>{% endif %}
+{%- endmacro -%}
+
+{%- macro custom_blocks(t) -%}
+{% for cs in t.get('custom_sections', []) %}{{ generic_block(cs.name, cs['items']) }}{% endfor %}
+{%- endmacro -%}
+
+{%- macro summary_block(t) -%}
+{% if t.summary and t.summary.text %}<section class="r"><h2>Summary</h2><p>{{ tn(t.summary) }}</p></section>{% endif %}
+{%- endmacro -%}
+
+{# Section dispatch: pick block by section_order entry #}
+{%- macro section(t, name) -%}
+{%- set k = name.lower() -%}
+{%- if k == 'summary' -%}{{ summary_block(t) }}
+{%- elif k == 'skills' -%}{{ skills_block(t) }}
+{%- elif k == 'experience' -%}{{ experience_block(t) }}
+{%- elif k == 'projects' -%}{{ projects_block(t) }}
+{%- elif k == 'education' -%}{{ education_block(t) }}
+{%- elif k == 'awards' -%}{{ generic_block('Awards', t.get('awards', [])) }}
+{%- elif k == 'certifications' -%}{{ generic_block('Certifications', t.get('certifications', [])) }}
+{%- elif k == 'publications' -%}{{ generic_block('Publications', t.get('publications', [])) }}
+{%- elif k == 'activities' -%}{{ generic_block('Activities', t.get('activities', [])) }}
+{%- elif k == 'leadership' -%}{{ generic_block('Leadership', t.get('leadership', [])) }}
+{%- elif k == 'volunteer' -%}{{ generic_block('Volunteer', t.get('volunteer', [])) }}
+{%- elif k == 'coursework' -%}{{ generic_block('Coursework', t.get('coursework', [])) }}
+{%- elif k == 'languages' -%}{{ generic_block('Languages', t.get('languages', [])) }}
+{%- endif -%}
+{%- endmacro -%}

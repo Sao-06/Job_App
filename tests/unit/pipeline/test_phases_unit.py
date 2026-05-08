@@ -144,6 +144,9 @@ class TestTailoringIsEmpty:
 
 
 class TestPhase4Tailor:
+    """Phase 4 now produces TailoredResume v2. Legacy provider outputs are
+    rejected by validate_v2 → heuristic v2 fills the gap (still v2 shape)."""
+
     def test_returns_ats_scores(self):
         provider = FakeProvider(tailored={
             "skills_reordered": ["Verilog", "Python"],
@@ -153,36 +156,45 @@ class TestPhase4Tailor:
         })
         job = {"title": "FPGA Intern", "company": "Acme",
                "requirements": ["Verilog", "Python"]}
-        profile = {"top_hard_skills": ["Verilog", "Python"]}
+        profile = {"name": "Jane", "top_hard_skills": ["Verilog", "Python"]}
         out = phase4_tailor_resume(job, profile, "Verilog Python", provider)
         assert "ats_score_before" in out
         assert "ats_score_after" in out
 
     def test_falls_back_when_provider_returns_empty(self):
         provider = FakeProvider(tailored={})
-        job = {"title": "Eng", "company": "Co",
-               "requirements": ["Verilog"]}
-        profile = {"top_hard_skills": ["Python"]}
+        job = {"title": "Eng", "company": "Co", "requirements": ["Verilog"]}
+        profile = {"name": "Jane", "top_hard_skills": ["Python"]}
         out = phase4_tailor_resume(job, profile, "", provider)
-        # Fallback synthesises skills + section_order.
-        assert "skills_reordered" in out
+        # v2 shape: skills + section_order present.
+        assert "skills" in out
         assert "section_order" in out
+        assert out["schema_version"] == 2
 
     def test_includes_cover_letter_when_requested(self):
         provider = FakeProvider(cover_letter="Dear Acme...")
-        job = {"title": "FPGA Intern", "company": "Acme",
-               "requirements": ["Verilog"]}
-        profile = {"top_hard_skills": ["Verilog"]}
-        out = phase4_tailor_resume(job, profile, "", provider,
-                                    include_cover_letter=True)
+        job = {"title": "FPGA Intern", "company": "Acme", "requirements": ["Verilog"]}
+        profile = {"name": "Jane", "top_hard_skills": ["Verilog"]}
+        out = phase4_tailor_resume(job, profile, "", provider, include_cover_letter=True)
         assert out["cover_letter"] == "Dear Acme..."
 
     def test_section_order_override(self):
         provider = FakeProvider()
         job = {"title": "X", "company": "Y", "requirements": []}
-        out = phase4_tailor_resume(job, {}, "", provider,
+        out = phase4_tailor_resume(job, {"name": "Jane"}, "", provider,
                                     section_order=["Education", "Skills"])
         assert out["section_order"] == ["Education", "Skills"]
+
+    def test_selected_keywords_appear_as_added_skills(self):
+        provider = FakeProvider(tailored={})
+        job = {"title": "Eng", "company": "Co",
+               "requirements": ["Verilog", "AXI4"]}
+        profile = {"name": "Jane", "top_hard_skills": ["Python"]}
+        out = phase4_tailor_resume(job, profile, "", provider,
+                                    selected_keywords=["AXI4"])
+        flat = [(it.get("text"), it.get("diff"))
+                for cat in out["skills"] for it in cat["items"]]
+        assert any(t == "AXI4" and d == "added" for t, d in flat)
 
 
 # ── phase5_simulate_submission ──────────────────────────────────────────────

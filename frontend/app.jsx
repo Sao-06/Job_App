@@ -1235,7 +1235,7 @@ function MissionControlPanel({ state, setPage, refresh }) {
     },
     {
       n: '06', icon: 'settings-2', label: 'Settings',
-      sub: state?.mode === 'demo' ? 'demo mode' : state?.mode === 'ollama' ? 'local AI' : 'cloud AI',
+      sub: state?.mode === 'anthropic' ? 'Claude (dev)' : (state?.is_pro ? 'cloud AI' : 'local AI'),
       tone: 'violet', onClick: () => setPage('settings'),
     },
   ];
@@ -4367,7 +4367,7 @@ function AskAtlas({ job, mode, isPro, isDev, onClose }) {
   const score = Math.round(job.score || 0);
   // Neutral label — the chat advisor uses whichever provider is configured;
   // surfacing the brand here is just noise.
-  const providerLabel = mode === 'demo' ? 'Demo' : 'AI';
+  const providerLabel = 'AI';
 
   const suggestions = [
     'How well do I fit this role based on my profile?',
@@ -4550,7 +4550,7 @@ function TailorDrawer({ job, mode, isPro, isDev, hasResume, onClose, onOpenDocum
   const co       = job.co || job.company || '—';
   const role     = job.role || job.title || 'Untitled role';
   const score    = Math.round(job.score || 0);
-  const provLbl  = mode === 'demo' ? 'Demo' : (mode === 'anthropic' ? 'Claude' : 'Ollama');
+  const provLbl  = mode === 'anthropic' ? 'Claude' : 'Ollama';
 
   const selectedCount = Object.values(selectedKws).filter(Boolean).length;
 
@@ -5668,7 +5668,7 @@ function ResumePage({ state, refresh, setPage }) {
                     </div>
                   </div>
                   {(!isEditing && embedUrl && previewMode === 'document') ? (
-                    <div style={{ padding:0, height:720, background:'#0f0f13' }}>
+                    <div style={{ padding:0, height:720, background:'var(--bg-1)' }}>
                       {/* Browsers render PDFs natively in an iframe. The
                           #toolbar=0&navpanes=0 hash hides the Chrome/Edge
                           built-in toolbar so the embed sits flush; Firefox
@@ -5678,10 +5678,10 @@ function ResumePage({ state, refresh, setPage }) {
                         key={embedUrl}
                         src={embedUrl + '#toolbar=0&navpanes=0'}
                         title="Resume preview"
-                        style={{ width:'100%', height:'100%', border:'none', background:'#0f0f13' }}/>
+                        style={{ width:'100%', height:'100%', border:'none', background:'var(--bg-1)' }}/>
                     </div>
                   ) : (
-                  <div style={{ padding:isEditing ? 0 : 20, maxHeight:600, overflowY:'auto', background:'#0f0f13' }}>
+                  <div style={{ padding:isEditing ? 0 : 20, maxHeight:600, overflowY:'auto', background:'var(--bg-1)' }}>
                     {loading && !isEditing ? (
                       <div style={{ padding:40, textAlign:'center', color:'var(--t4)' }}><span className="spin"/> Loading content…</div>
                     ) : isEditing ? (
@@ -5693,7 +5693,7 @@ function ResumePage({ state, refresh, setPage }) {
                         placeholder="Resume text..."
                       />
                     ) : (
-                      <pre style={{ margin:0, whiteSpace:'pre-wrap', fontSize:15.5, lineHeight:1.6, color:'#d1d1d6', fontFamily:'"JetBrains Mono", Menlo, monospace' }}>
+                      <pre style={{ margin:0, whiteSpace:'pre-wrap', fontSize:15.5, lineHeight:1.6, color:'var(--t2)', fontFamily:'"JetBrains Mono", Menlo, monospace' }}>
                         {resumeText || 'No text content available.'}
                       </pre>
                     )}
@@ -7053,18 +7053,22 @@ function SearchPrefsCard({ form, state, updateField }) {
           <Icon name="info" size={13}/> No preferences set yet. Upload a resume on the Resume page to auto-fill these, or type them in below.
         </div>
       )}
-      <div className="profile-grid">
-        <ProfileInput
-          label="Target roles (comma-separated)"
-          value={titles}
-          onChange={v => updateField('target_titles', v)}
-        />
-        <ProfileInput
-          label="Job-search location"
-          value={searchLoc}
-          onChange={v => updateField('search_location', v)}
-        />
-      </div>
+      {/* Target roles — full-width textarea since these lists tend to run
+          long once the resume scan + user edits land (5-15 titles is normal).
+          A single-line input clipped most of them off-screen and forced
+          horizontal scroll. */}
+      <ProfileInput
+        label="Target roles (comma-separated)"
+        value={titles}
+        onChange={v => updateField('target_titles', v)}
+        textarea
+        placeholder="e.g. Hardware Engineer, FPGA Engineer, Embedded Software Engineer, Robotics Engineer, IC Design Intern…"
+      />
+      <ProfileInput
+        label="Job-search location"
+        value={searchLoc}
+        onChange={v => updateField('search_location', v)}
+      />
       <ChipToggle
         label="Experience level"
         value={exp}
@@ -7830,16 +7834,27 @@ function TailoredResumeCard({ item }) {
   const ats_delta  = Number(item.ats_delta != null ? item.ats_delta : ats_after - ats_before);
   const score      = Number(item.score) || 0;
 
-  // resume_file is "sessions/<sid>/<base>.pdf" when pdflatex / reportlab
-  // produced a PDF, OR "sessions/<sid>/<base>.tex" when neither was
-  // available. Build whichever links make sense, label them accurately.
+  // Download links — ALWAYS prefer the *_final* (clean / no-green) variants
+  // produced by _save_tailored_resume. The diff-colored versions are only
+  // useful for the in-page preview iframe (item.html_preview_url); the file
+  // a user actually attaches to a job application must be all-black body
+  // text. The server exposes:
+  //   item.final_pdf_url  → clean PDF  (template-lib + in-place renderers)
+  //   item.final_docx_url → clean DOCX (in-place .docx path only)
+  //   item.final_tex_url  → clean TeX  (in-place .tex path only)
+  // Fall back to resume_file (which the endpoint now also prefers _final
+  // over _diff for) when the explicit URL fields aren't set — covers
+  // legacy session_state rows that pre-date the schema.
   const fileBase = item.resume_file || '';
-  const isPdf   = /\.pdf$/i.test(fileBase);
-  const isTex   = /\.tex$/i.test(fileBase);
-  const pdfHref = isPdf ? `/output/${fileBase}` : null;
-  const texHref = isTex
-    ? `/output/${fileBase}`
-    : (fileBase ? `/output/${fileBase.replace(/\.pdf$/i, '.tex')}` : null);
+  const isPdf = /\.pdf$/i.test(fileBase);
+  const isTex = /\.tex$/i.test(fileBase);
+  const isDocx = /\.docx$/i.test(fileBase);
+  const pdfHref = item.final_pdf_url
+    || (isPdf ? `/output/${fileBase}` : null);
+  const texHref = item.final_tex_url
+    || (isTex ? `/output/${fileBase}` : null);
+  const docxHref = item.final_docx_url
+    || (isDocx ? `/output/${fileBase}` : null);
 
   const skills = Array.isArray(item.skills) ? item.skills : [];
   const gaps   = Array.isArray(item.ats_gaps) ? item.ats_gaps : [];
@@ -7974,11 +7989,16 @@ function TailoredResumeCard({ item }) {
             </section>
           )}
 
-          {(pdfHref || texHref) && (
+          {(pdfHref || docxHref || texHref) && (
             <div className="tr-actions">
               {pdfHref && (
                 <a className="tr-dl tr-dl-primary" href={pdfHref} download>
                   <Icon name="download" size={12} color="#fff"/> Download PDF
+                </a>
+              )}
+              {docxHref && (
+                <a className="tr-dl" href={docxHref} download>
+                  <Icon name="file-text" size={12}/> .docx source
                 </a>
               )}
               {texHref && pdfHref !== texHref && (
@@ -7991,6 +8011,11 @@ function TailoredResumeCard({ item }) {
                   <Icon name="external-link" size={12}/> Open in new tab
                 </a>
               )}
+              <small style={{ display: 'block', flexBasis: '100%', marginTop: 6, color: 'var(--t4)', fontSize: 11 }}>
+                Downloads are the all-black, employer-ready version. Green
+                highlights only appear in the preview above so you can see
+                what changed.
+              </small>
             </div>
           )}
         </div>
@@ -8297,9 +8322,9 @@ function AtlasChat({ state, dataPing }) {
   const cancelRef = useRef(null);
   const transcriptRef = useAutoScroll([messages]);
 
-  const mode = state?.mode || 'anthropic';
+  const mode = state?.mode || 'ollama';
   // Neutral label — the user shouldn't have to know which provider is wired.
-  const modeLabel = mode === 'demo' ? 'DEMO' : 'AI';
+  const modeLabel = 'AI';
 
   const send = (text) => {
     const trimmed = (text ?? draft).trim();
@@ -8877,7 +8902,7 @@ function AgentPage({ state, refresh }) {
           <div className="agent-meter">
             <div className="agent-meter-ring">
               <svg width="120" height="120" viewBox="0 0 120 120">
-                <circle cx="60" cy="60" r={C} fill="none" strokeWidth="6" stroke="rgba(255,255,255,.06)"/>
+                <circle cx="60" cy="60" r={C} fill="none" strokeWidth="6" stroke="var(--bdr)"/>
                 <circle cx="60" cy="60" r={C} fill="none" strokeWidth="6" stroke={ringTone} strokeLinecap="round"
                   strokeDasharray={circ} strokeDashoffset={off}
                   transform="rotate(-90 60 60)"
@@ -9349,13 +9374,6 @@ function SettingsPage({ state, refresh, setPage }) {
               </div>
             )}
           </div>
-          
-          {/* Advanced */}
-          <div className="set-sec">
-            <div className="set-sec-h"><Icon name="cpu" size={14}/> Advanced</div>
-            <Toggle field="quick_score_only" label="Quick score only" sub="Skip LLM rubric scoring (faster, less accurate)."/>
-          </div>
-
         </div>
       </div>
     </>

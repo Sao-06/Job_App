@@ -247,12 +247,18 @@ def _skill_overlap(profile_skills: Iterable[str], requirements: Iterable[str]) -
     users with broad skill sets: matching 3 of 3 reqs out of a 30-skill
     profile produced 0.10, not 1.00, and crushed the entire scoring scale.
 
-    Empty requirements OR empty profile → 0.3 (neutral) so jobs whose source
-    didn't expose tags don't get pinned to zero on this signal.
+    Empty profile → 0.0 (NOT 0.3). The previous "neutral" 0.3 contributed
+    ~13.5pts to the rerank composite for every job regardless of fit, which
+    is what produced the "blank resume gets 68% match on senior hardware
+    roles" bug. Empty *requirements* on a job → 0.3 stays (the job's source
+    didn't expose tags, but we still have something to rank by — title +
+    description signals from BM25).
     """
     skills = {s.lower().strip() for s in profile_skills if s and str(s).strip()}
     reqs = [str(r).lower().strip() for r in requirements if r and str(r).strip()]
-    if not skills or not reqs:
+    if not skills:
+        return 0.0
+    if not reqs:
         return 0.3
     matched = 0
     for req in reqs:

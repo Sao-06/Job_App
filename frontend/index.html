@@ -7229,6 +7229,88 @@ code { font-family: var(--mono); font-size: 14px; background: var(--bg-3); paddi
 }
 
 /* ────────────────────────────────────────────────────────────
+   PROFILE-INCOMPLETE BANNER (Jobs page)
+   Surfaces above the filter row when the user's profile lacks the
+   minimum signals (≥2 hard skills OR ≥1 target title) needed to
+   compute a real match score. The previous behavior of fabricating
+   ~50-70% scores from rerank text-search alone produced the
+   "blank resume reads 68% on a senior hardware role" failure mode.
+   Now those cards render "—" and this banner explains why + offers
+   a one-click route to fix it.
+   ──────────────────────────────────────────────────────────── */
+.profile-gate-banner {
+  display: flex; align-items: center; gap: 14px;
+  padding: 14px 18px;
+  margin-bottom: 14px;
+  border-radius: 12px;
+  background:
+    linear-gradient(90deg, var(--accent2-d, rgba(34,229,255,.10)) 0%, transparent 70%),
+    var(--surface);
+  border: 1px solid var(--accent2-b, rgba(34,229,255,.30));
+  animation: rise-in .35s cubic-bezier(.16,1,.3,1) both;
+}
+.profile-gate-icon {
+  flex-shrink: 0;
+  width: 36px; height: 36px; border-radius: 10px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--accent2-d, rgba(34,229,255,.12));
+  border: 1px solid var(--accent2-b, rgba(34,229,255,.30));
+  color: var(--accent2);
+}
+.profile-gate-body { flex: 1; min-width: 0 }
+.profile-gate-h {
+  font-size: 14px; font-weight: 600; color: var(--t1);
+  letter-spacing: -.005em;
+  margin-bottom: 3px;
+}
+.profile-gate-p {
+  font-size: 13px; line-height: 1.5; color: var(--t2);
+  margin: 0;
+}
+.profile-gate-p b { color: var(--t1); font-weight: 600 }
+.profile-gate-p code {
+  font-family: var(--mono); font-size: 12px;
+  padding: 0 5px; border-radius: 4px;
+  background: var(--bg-2); border: 1px solid var(--bdr);
+  color: var(--t2);
+}
+.profile-gate-cta {
+  flex-shrink: 0;
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 9px 15px; border-radius: 9px;
+  background: linear-gradient(135deg, var(--accent2) 0%, var(--accent-h) 100%);
+  border: 1px solid transparent;
+  color: #07070e;
+  font-family: var(--sans); font-size: 13px; font-weight: 700;
+  letter-spacing: -.005em;
+  cursor: pointer;
+  transition: transform .12s, box-shadow .12s;
+  box-shadow: 0 8px 18px -8px var(--accent2);
+}
+.profile-gate-cta:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 22px -8px var(--accent-h);
+}
+.profile-gate-arrow {
+  font-family: var(--mono); font-weight: 700;
+  transition: transform .12s;
+}
+.profile-gate-cta:hover .profile-gate-arrow { transform: translateX(3px) }
+
+@media (max-width: 720px) {
+  .profile-gate-banner { flex-direction: column; align-items: stretch; gap: 12px }
+  .profile-gate-icon { align-self: flex-start }
+}
+
+:root[data-theme="light"] .profile-gate-banner {
+  background:
+    linear-gradient(90deg, rgba(0,184,212,.06) 0%, transparent 70%),
+    var(--surface);
+  border-color: rgba(0,184,212,.30);
+}
+:root[data-theme="light"] .profile-gate-cta { color: #fff }
+
+/* ────────────────────────────────────────────────────────────
    JD EMPTY-STATE CARD
    Renders when Atlas can't pull the full posting body (CAPTCHA,
    JS-only render, auth wall on the source). Replaces the dead

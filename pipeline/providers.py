@@ -154,7 +154,13 @@ def compute_skill_coverage(job: dict, profile: dict) -> tuple[float, list, list]
     skills = [str(s).strip() for s in (profile.get("top_hard_skills") or []) if s]
     skills_lower = {s.lower(): s for s in skills}
     if not skills_lower:
-        result = (0.5, [], [])
+        # No skills in profile → no meaningful coverage signal. Returning a
+        # neutral 0.5 (the previous behavior) inflated every job to a fake
+        # ~50% match for blank/incomplete resumes — a senior hardware role
+        # would read "68% match" against a two-word resume. Returning 0.0
+        # makes the rubric correctly score these as low-signal until the
+        # user fills their profile.
+        result = (0.0, [], [])
         job["_skill_coverage"] = result
         return result
 

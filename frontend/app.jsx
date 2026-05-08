@@ -3207,6 +3207,35 @@ function JobsPage({ state, refresh, setPage }) {
       ) : (
       <div className="page-body" onScroll={onScroll} style={{ overflowY: 'auto' }}>
         <div className="col-main">
+          {/* Profile-incomplete banner — when the user has < 2 hard skills
+              AND no target titles, scoring against jobs is meaningless;
+              every match number would be derived purely from text-search
+              relevance. We surface "—" on each card and explain why here
+              so the user knows what to fix instead of seeing fake numbers
+              like "68% match" on a senior hardware role from a blank
+              resume. Mirrors the server-side `_profile_is_meaningful`
+              gate so client + server stay aligned. */}
+          {(() => {
+            const sk = (state?.profile?.top_hard_skills || []).filter(s => s && String(s).trim());
+            const tt = (state?.profile?.target_titles || []).filter(t => t && String(t).trim());
+            if (sk.length >= 2 || tt.length >= 1) return null;
+            return (
+              <div className="profile-gate-banner" role="status">
+                <span className="profile-gate-icon"><Icon name="user-plus" size={16}/></span>
+                <div className="profile-gate-body">
+                  <div className="profile-gate-h">Match scoring is paused</div>
+                  <div className="profile-gate-p">
+                    Add at least <b>2 hard skills</b> or <b>1 target title</b> to your profile so Atlas can compute real fit scores. Until then every card shows a neutral <code>—</code> instead of a fabricated percentage.
+                  </div>
+                </div>
+                <button className="profile-gate-cta" onClick={() => setPage('profile')}>
+                  Complete profile
+                  <span className="profile-gate-arrow">→</span>
+                </button>
+              </div>
+            );
+          })()}
+
           {/* Filter chips — searchable dropdowns */}
           <div className="filters">
             <BackendFacetFilter placeholder="Location" kind="location" value={fLocation} onChange={setFLocation}
@@ -11386,7 +11415,19 @@ function App() {
   const refresh = useCallback(async () => {
     try {
       const next = await api.get('/api/state');
-      setState(next);
+      // Skip setState when the response is byte-for-byte identical to the
+      // current state. Every 8 s poll was previously creating a fresh
+      // `state` reference, which made the whole component tree re-render
+      // (App → JobsPage → 30 JobCards) even when nothing changed — users
+      // perceived this as "the job listing page keeps refreshing every
+      // few seconds." JSON.stringify is cheap on a ~tens-of-KB state
+      // object compared to the React reconciliation pass we're avoiding.
+      setState(prev => {
+        try {
+          if (prev && JSON.stringify(prev) === JSON.stringify(next)) return prev;
+        } catch (_) { /* fall through to fresh setState */ }
+        return next;
+      });
       applyDevTweaks(next.dev_tweaks);
       return next;
     }

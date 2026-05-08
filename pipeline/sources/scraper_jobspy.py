@@ -44,7 +44,7 @@ import traceback
 from datetime import datetime
 from typing import Iterator
 
-from .base import RawJob, GENERAL_QUERIES, QueryRotator
+from .base import RawJob, GENERAL_QUERIES, QueryRotator, strip_html
 from .registry import register
 
 
@@ -174,13 +174,22 @@ class JobSpySource:
                     label = _PLATFORM_LABEL.get(row_site, row_site.title() or "JobSpy")
                     src = f"scraper:jobspy:{row_site}"
 
+                    # Indeed/Glassdoor/ZipRecruiter return the full posting body
+                    # in the dataframe — keep it (HTML-stripped, length-capped)
+                    # so scoring has real text to match against. The upsert
+                    # layer trims past 16 KB anyway.
+                    description = strip_html(_clean(r.get("description")))
+                    if len(description) > 8000:
+                        description = description[:8000].rsplit(" ", 1)[0] + "…"
+
                     out.append(RawJob(
                         application_url=apply_url,
                         company=company,
                         title=title,
                         location=location,
                         remote=is_remote,
-                        requirements=[],   # we deliberately skip description body
+                        description=description,
+                        requirements=[],
                         salary_range=salary,
                         posted_date=posted,
                         platform=label,

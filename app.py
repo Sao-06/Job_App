@@ -4285,6 +4285,7 @@ def _dto_to_json(j) -> dict:
     """Adapt a JobDTO to the wire shape the SPA already speaks (matches the
     keys used by ``state.scored_summary.jobs``: ``id, co, role, loc, score,
     skills, url, status``). Extra fields are added for richer cards."""
+    has_jd = bool((j.description or "").strip()) or bool(j.requirements)
     return {
         "id":      j.id,
         "co":      j.company,
@@ -4300,6 +4301,12 @@ def _dto_to_json(j) -> dict:
         "cit":     j.citizenship_required,
         "posted":  j.posted_at,
         "source":  j.source,
+        # Honesty signal — when False the score was computed from title alone
+        # (no requirements list, no description body). The SPA renders a small
+        # "title-only" badge so users know the score is preliminary; lazy
+        # description fetches in Phase 3 + SPA detail clicks promote rows out
+        # of this state over time.
+        "has_jd":  has_jd,
         "status":  "passed",
     }
 
@@ -4436,6 +4443,24 @@ def jobs_details(job_id: str, request: Request):
     try:
         from pipeline import job_details as _details
         payload = _details.get_job_details(job_id, canonical_url, source, company)
+        # Persist the freshly-fetched description back into the job_postings
+        # index so future Phase 3 scoring reads it directly without paying
+        # the per-job API call again. Only writes when the row currently has
+        # nothing — prior populations from the source-listing path or earlier
+        # detail clicks are preserved. Idempotent + best-effort.
+        desc_text = (payload.get("description") or "").strip()
+        if desc_text and _session_store is not None:
+            try:
+                with _session_store.connect() as _conn:
+                    _conn.execute(
+                        "UPDATE job_postings SET description = ? "
+                        "WHERE id = ? AND (description IS NULL OR description = '')",
+                        (desc_text[:16000], job_id),
+                    )
+                    _conn.commit()
+            except Exception as exc:
+                print(f"[jobs/details] description persist failed for {job_id!r}: "
+                      f"{type(exc).__name__}: {exc}", file=sys.stderr)
     except Exception as exc:
         # Surface a structured failure rather than a 500 — the SPA shows the
         # "view original posting" fallback regardless.

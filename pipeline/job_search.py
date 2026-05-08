@@ -66,6 +66,7 @@ class JobDTO:
     job_category: str
     posted_at: str | None
     source: str
+    description: str = ""        # may be empty when source didn't carry one
     score: float = 0.0           # final ranking score [0..1]
 
 
@@ -389,10 +390,13 @@ _DEFAULT_PER_ROUND = 1
 
 
 def _row_to_dto(row: tuple, score: float) -> JobDTO:
-    # Row layout matches the SELECT in `search()` and `newer_than()` —
-    # 14 leading columns + bm25_score column (always present).
+    # Row layout: 14 base columns, optionally followed by ``description``,
+    # always followed by ``bm25_score``. So a 15-tuple has no description
+    # and ``row[14]`` is bm25; a 16-tuple has description at ``row[14]`` and
+    # bm25 at ``row[15]``. Both shapes coexist while callers migrate.
     (jid, url, source, company, title, location, remote, reqs_json,
      salary, exp, edu, cit, category, posted_at) = row[:14]
+    description = (row[14] if len(row) >= 16 else "") or ""
     reqs = json.loads(reqs_json) if reqs_json else []
     return JobDTO(
         id=jid, url=url, source=source, company=company, title=title,
@@ -403,6 +407,7 @@ def _row_to_dto(row: tuple, score: float) -> JobDTO:
         citizenship_required=cit or "unknown",
         job_category=category or "general",
         posted_at=posted_at,
+        description=description,
         score=round(float(score), 4),
     )
 
@@ -501,6 +506,7 @@ def search(*, conn: sqlite3.Connection,
                jp.location, jp.remote, jp.requirements_json, jp.salary_range,
                jp.experience_level, jp.education_required,
                jp.citizenship_required, jp.job_category, jp.posted_at,
+               jp.description,
                {bm25_select}
           FROM job_postings jp
           {join_fts}
@@ -634,7 +640,7 @@ def newer_than(*, conn: sqlite3.Connection, top_id: str, limit: int = 30) -> lis
         SELECT id, canonical_url, source, company, title, location, remote,
                requirements_json, salary_range, experience_level,
                education_required, citizenship_required, job_category,
-               posted_at, 0.0 AS bm25_score
+               posted_at, description, 0.0 AS bm25_score
           FROM job_postings
          WHERE deleted = 0 AND last_seen_at > ?
          ORDER BY last_seen_at DESC

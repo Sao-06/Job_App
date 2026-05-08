@@ -1899,6 +1899,13 @@ function JobCard({ job, idx, isLiked, onLike, onHide, onAsk, onTailor, onSelect 
             {tags.slice(1).map((t, i) => (
               <span key={i} className="job-chip">{t}</span>
             ))}
+            {job.has_jd === false && (
+              <span className="job-chip"
+                title="The source feed only carried this job's title — score is preliminary. Open the listing to fetch the full description; the score updates the next time you score this job."
+                style={{ borderColor:'var(--warn-b)', color:'var(--warn)', background:'var(--warn-d)' }}>
+                <Icon name="info" size={11}/> Title-only score
+              </span>
+            )}
           </div>
 
           <div className="job-footer">

@@ -347,7 +347,11 @@ def phase2_discover_jobs(profile: dict, job_titles: list, location: str,
             "location":            j.location,
             "remote":              j.remote,
             "posted_date":         j.posted_at or "",
-            "description":         "",
+            # Empty when the source didn't carry one. Phase 3's LLM-scoring
+            # loop lazy-fetches via pipeline.job_details for the top-N rows
+            # and persists the result back to the DB so subsequent loads
+            # already have it.
+            "description":         j.description or "",
             "requirements":        list(j.requirements or []),
             "salary_range":        j.salary_range,
             "application_url":     j.url,
@@ -538,9 +542,55 @@ def phase3_score_jobs(jobs: list, profile: dict, provider: BaseProvider,
             f"LLM-scoring top {llm_score_count} only"
         )
 
+    # Lazy-fetch description for top-N jobs that lack one before LLM scoring.
+    # `pipeline.job_details` is the in-memory + per-source fetcher (Greenhouse
+    # / Lever / Ashby / Workable today; new ATSes plug in incrementally). The
+    # fetched description is also persisted back to job_postings so subsequent
+    # scorings of the same job get it for free — Pareto: most users score the
+    # same handful of high-fit roles repeatedly.
+    def _ensure_description(job: dict) -> None:
+        if job.get("description"):
+            return
+        url = job.get("application_url") or job.get("url") or ""
+        source = job.get("source") or ""
+        if not url or not source:
+            return
+        try:
+            from . import job_details as _jd
+        except Exception:
+            return  # job_details.py not present in this deployment
+        try:
+            details = _jd.fetch_full_description(url, source)
+        except Exception:
+            details = None
+        if not details:
+            return
+        text = (details.get("description") or "").strip()
+        if not text:
+            return
+        # Cap before storing; same trim policy as job_repo.upsert_many.
+        if len(text) > 16000:
+            text = text[:16000].rsplit(" ", 1)[0] + "…"
+        job["description"] = text
+        # Persist back to the index so `phase2_discover_jobs` of a future
+        # session reads this description directly without paying the fetch.
+        try:
+            from .config import DB_PATH
+            import sqlite3 as _sqlite3
+            jid = job.get("id")
+            if jid and DB_PATH.exists():
+                with _sqlite3.connect(DB_PATH, timeout=15) as _conn:
+                    _conn.execute(
+                        "UPDATE job_postings SET description = ? WHERE id = ? AND (description IS NULL OR description = '')",
+                        (text, jid),
+                    )
+        except Exception:
+            pass  # best-effort cache; the in-memory fetch still helps this session
+
     _t0 = time.time()
     scored: list = []
     for i, job in enumerate(to_llm_score, 1):
+        _ensure_description(job)
         result = provider.score_job(job, profile)
         merged = {**job, **result}
         s = merged.get("score", 0)

@@ -21,7 +21,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterator
 
-from .base import RawJob, is_remote_location
+from .base import RawJob, is_remote_location, strip_html
 from .registry import register
 from ._http import http_get_json
 
@@ -89,13 +89,17 @@ class RecruiteeSource:
             api_remote = bool(j.get("remote"))
             remote = api_remote or is_remote_location(location)
             posted = str(j.get("published_at") or j.get("created_at") or "")[:10]
+            # Recruitee returns the full posting body as HTML in the listing
+            # — keep it (HTML-stripped) so scoring has real text to match
+            # against. Skill coverage runs on title + requirements + this.
+            description = strip_html(j.get("description") or "")
             out.append(RawJob(
                 application_url=apply_url,
                 company=company,
                 title=title,
                 location=location or ("Remote" if remote else ""),
                 remote=remote,
-                description="",
+                description=description,
                 posted_date=posted,
                 platform="Recruitee",
                 source=self.name,

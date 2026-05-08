@@ -12,7 +12,7 @@ flask>=3.0.0
 playwright>=1.40.0
 streamlit>=1.35.0
 pandas>=2.0.0
-python-jobspy>=1.1.0
+python-jobspy>=1.1.82  # Indeed/Glassdoor/ZipRecruiter scraper — pipeline/sources/scraper_jobspy.py (LinkedIn excluded)
 reportlab>=4.0.0
 google-auth>=2.0.0
 google-auth-oauthlib>=1.2.0
@@ -27,6 +27,16 @@ psutil>=5.9.0
 
 # Stripe billing (Pro plan checkout + webhook)
 stripe>=8.0.0
+
+# Resume tailoring v2 — HTML/CSS templates + format-preserving renderers.
+# WeasyPrint renders the template-library output to PDF (richer layout than
+# reportlab's flowables). On Windows it requires GTK/Pango/Cairo runtime
+# libs; the renderer gracefully falls back to reportlab if WeasyPrint can't
+# import. docx2pdf is the in-process Win/macOS path for converting the
+# in-place .docx output to PDF; on Linux/Pi we shell out to LibreOffice.
+jinja2>=3.1.0
+weasyprint>=62.0
+docx2pdf>=0.1.8 ; sys_platform == "win32" or sys_platform == "darwin"
 
 # Optional: needed for --ollama mode only
 openai>=1.0.0

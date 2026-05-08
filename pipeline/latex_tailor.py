@@ -9,10 +9,15 @@ for diff='added' nodes.
 from __future__ import annotations
 
 import re
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from .config import console
-from .latex import _sanitize_latex_source, compile_latex_to_pdf
+from .latex import (
+    _sanitize_latex_source,
+    compile_latex_to_pdf,
+    remove_summary_section,
+)
 from .template_render import render_html
 
 
@@ -131,20 +136,12 @@ def _replace_experience_bullets(latex: str, tailored: dict, *, clean: bool = Fal
     return "".join(out_chunks)
 
 
-def _strip_summary(latex: str) -> str:
-    pattern = (
-        r"\\section\*?\{(?:Summary|Objective|Professional Summary|Career Objective)\}"
-        r".*?(?=\\section|\\end\{document\})"
-    )
-    return re.sub(pattern, "", latex, flags=re.IGNORECASE | re.DOTALL)
-
-
 def _build_latex(latex_source: str, tailored: dict, *, clean: bool) -> str:
     """Apply tailoring to a LaTeX source. ``clean=True`` skips the green
     \\textcolor wrapping (and the matching xcolor injection) so the produced
     .tex compiles to all-black body text — used for the final-version PDF."""
     src = latex_source if clean else _ensure_xcolor(latex_source)
-    src = _strip_summary(src)
+    src = remove_summary_section(src)
     src = _replace_skills_section(src, tailored, clean=clean)
     src = _replace_experience_bullets(src, tailored, clean=clean)
     return _sanitize_latex_source(src)
@@ -171,13 +168,21 @@ def tailor_latex_in_place(
     tex_path.write_text(diff_src, encoding="utf-8")
     console.print(f"  [cyan]LaTeX saved (in-place) -> {tex_path.name}[/cyan]")
     pdf_path = out_dir / (base + ".pdf")
-    pdf_ok = compile_latex_to_pdf(diff_src, pdf_path)
 
     clean_src = _build_latex(latex_source, tailored, clean=True)
     final_tex_path = out_dir / (base + "_final.tex")
     final_tex_path.write_text(clean_src, encoding="utf-8")
     final_pdf_path = out_dir / (base + "_final.pdf")
-    final_pdf_ok = compile_latex_to_pdf(clean_src, final_pdf_path)
+
+    # Compile both pdflatex passes concurrently. They're CPU-bound subprocess
+    # calls (~5-10s each for a real resume); running serially doubled the
+    # tailor latency. pdflatex inside compile_latex_to_pdf uses its own temp
+    # dir per call so the two compiles don't fight over the same -aux-files.
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        pdf_fut = pool.submit(compile_latex_to_pdf, diff_src, pdf_path)
+        final_fut = pool.submit(compile_latex_to_pdf, clean_src, final_pdf_path)
+        pdf_ok = pdf_fut.result()
+        final_pdf_ok = final_fut.result()
     if final_pdf_ok:
         console.print(f"  [green]Clean LaTeX PDF saved -> {final_pdf_path.name}[/green]")
 

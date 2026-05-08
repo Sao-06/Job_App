@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from pathlib import Path
 
@@ -224,22 +225,29 @@ def tailor_docx_in_place(
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # ── Diff-colored .docx + PDF ────────────────────────────────────────────
+    # ── Build both .docx variants in-memory; PDF conversion runs in parallel.
+    # Each Document() open + edit + save is fast (<1s); the cost is the
+    # docx2pdf / LibreOffice subprocess in _convert_to_pdf (10+s on real
+    # resumes). Running the two PDF conversions concurrently halves the
+    # perceived tailor latency for .docx uploads.
     docx_path = out_dir / (base + ".docx")
     diff_doc = Document(str(source_path))
     _apply_tailoring(diff_doc, tailored, clean=False)
     diff_doc.save(str(docx_path))
     console.print(f"  [cyan]DOCX saved (in-place) -> {docx_path.name}[/cyan]")
-    pdf_path = out_dir / (base + ".pdf")
-    pdf_ok = _convert_to_pdf(docx_path, pdf_path)
 
-    # ── Clean .docx + PDF — fresh Document so the diff edits don't leak ─────
     final_docx_path = out_dir / (base + "_final.docx")
     clean_doc = Document(str(source_path))
     _apply_tailoring(clean_doc, tailored, clean=True)
     clean_doc.save(str(final_docx_path))
+
+    pdf_path = out_dir / (base + ".pdf")
     final_pdf_path = out_dir / (base + "_final.pdf")
-    final_pdf_ok = _convert_to_pdf(final_docx_path, final_pdf_path)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        pdf_fut = pool.submit(_convert_to_pdf, docx_path, pdf_path)
+        final_fut = pool.submit(_convert_to_pdf, final_docx_path, final_pdf_path)
+        pdf_ok = pdf_fut.result()
+        final_pdf_ok = final_fut.result()
     if final_pdf_ok:
         console.print(f"  [green]Clean DOCX PDF saved -> {final_pdf_path.name}[/green]")
 

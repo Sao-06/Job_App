@@ -4371,6 +4371,13 @@ code { font-family: var(--mono); font-size: 14px; background: var(--bg-3); paddi
   background: linear-gradient(140deg, #1a1340 0%, #0e0e22 55%, #07070e 100%);
   box-shadow: 0 30px 80px -30px rgba(0,0,0,.7), inset 0 1px 0 rgba(255,255,255,.04);
   animation: rise-in .6s cubic-bezier(.16,1,.3,1);
+  /* Floor the hero so it can't collapse to a thin border-only bar even if
+     the inner grid renders unexpectedly empty (e.g. mid-load when state.profile
+     hasn't hydrated yet, or when the orb-only aurora layer is the only child
+     painting). The 220 px floor matches the natural height of the
+     greeting+pipeline+ring layout on desktop, so this is a no-op when content
+     renders normally and only kicks in as a fallback. */
+  min-height: 220px;
 }
 .hero-aurora { position: absolute; inset: 0; z-index: 0; pointer-events: none }
 .orb { position: absolute; border-radius: 50%; filter: blur(60px); opacity: .55; will-change: transform }

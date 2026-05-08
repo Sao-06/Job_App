@@ -3372,12 +3372,35 @@ async def resume_save_text(request: Request):
     r = _get_resume_by_id(rid) if rid else _get_primary_resume()
     if not r:
         raise HTTPException(404, "Resume not found")
-    r["text"] = text
+
+    # Detect pasted LaTeX source — if the body looks like .tex (preamble,
+    # \section, \begin{document}, or just dense backslash use) store it as
+    # latex_source so the preview iframe can compile the real layout via
+    # pdflatex. Plaintext from latex_to_plaintext drives downstream
+    # skill/profile extraction. Mirrors the .txt/.md branch in _read_resume
+    # so file-upload and paste paths now agree on LaTeX handling.
+    from pipeline.latex import detect_latex, latex_to_plaintext
+    if detect_latex(text):
+        r["latex_source"] = text
+        r["text"] = latex_to_plaintext(text)
+    else:
+        r["latex_source"] = None
+        r["text"] = text
     r["updated_at"] = now
     r["profile"] = None
+
+    # Re-render the preview PDF immediately so the user sees the compiled
+    # LaTeX (or the reportlab fallback) without waiting for the background
+    # extraction to finish — Ollama on the Pi can take 10-60 s.
+    try:
+        r["preview_pdf_path"] = _render_preview_pdf(r)
+    except Exception as exc:
+        print(f"[paste preview] render failed: {type(exc).__name__}: {exc}",
+              file=sys.stderr)
+
     if r.get("primary"):
-        _S["resume_text"] = text
-        _S["latex_source"] = None
+        _S["resume_text"] = r["text"]
+        _S["latex_source"] = r.get("latex_source")
         _S["done"].discard(1)
         _S["profile"] = None
     # Re-run extraction so the edited / pasted resume is fully analyzed.

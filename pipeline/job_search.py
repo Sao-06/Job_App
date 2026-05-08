@@ -102,19 +102,68 @@ def _profile_terms(profile: dict | None, max_skills: int = 8,
     return out
 
 
+_ASCII_ALNUM_RE = re.compile(r"^[a-z0-9]+$", re.IGNORECASE)
+# FTS5 binary operators — must be quoted (and can't take a `*` suffix)
+# when they appear as raw tokens in the user's query.
+_FTS5_KEYWORDS = frozenset({"and", "or", "not", "near"})
+
+
+def _to_prefix_token(tok: str) -> str:
+    """Render a typed token as a porter-tolerant FTS5 prefix-match term.
+
+    The job_postings_fts virtual table uses ``tokenize='porter unicode61'``,
+    which stems aggressively at index time — ``robotics`` and ``robotic``
+    both become ``robot``. A user typing ``roboti`` doesn't match porter's
+    suffix rules (no rule strips a lone ``i``), so it survives un-stemmed
+    and FTS5 then prefix-matches ``roboti*`` against indexed ``robot`` —
+    which fails because ``robot`` doesn't start with ``roboti``.
+
+    Strategy: OR several prefix lengths so we hit porter's stem regardless
+    of how many chars it stripped. Min prefix length is 5 to avoid
+    over-broad matches. Examples:
+
+      "roboti"   (6) → ``(roboti* OR robot*)``
+      "robotics" (8) → ``(robotics* OR robotic* OR robot* OR robo*)``
+      "engineer" (8) → ``(engineer* OR enginee* OR engine* OR engin*)``
+      "fpga"     (4) → ``fpga*``        (single 4-char prefix, no OR)
+      "ai"       (2) → ``"ai"``         (too short; exact match only)
+
+    FTS5 reserved keywords (AND/OR/NOT/NEAR) and tokens with non-ASCII /
+    non-alphanumeric chars are quoted without a wildcard — quoting is
+    required to neutralize the operator parse, and FTS5 disallows
+    ``"quoted"*``.
+    """
+    if not tok:
+        return ""
+    if not _ASCII_ALNUM_RE.match(tok) or tok.lower() in _FTS5_KEYWORDS:
+        return f'"{tok}"'
+    n = len(tok)
+    if n <= 3:
+        return f'"{tok}"'
+    if n == 4:
+        return f"{tok}*"
+    # range(n, 4, -1) yields n, n-1, …, 5 — i.e. every prefix length from
+    # the full token down to 5 chars. The OR'd prefixes span whatever stem
+    # porter happens to produce on indexed text without us having to
+    # replicate its rules.
+    prefixes = [tok[:k] for k in range(n, 4, -1)]
+    inner = " OR ".join(f"{p}*" for p in prefixes)
+    return f"({inner})"
+
+
 def _build_fts_query(filters: SearchFilters, profile: dict | None) -> str:
     """Build the FTS5 query string. Returns "" when no terms.
 
     Two regimes:
 
     * **User typed something** (``filters.q`` non-empty): every typed token
-      is REQUIRED (FTS5 implicit-AND). Profile terms are dropped from the
-      MATCH — they still influence relevance via skill_overlap and
-      title_match in the Python rerank below. Without this, a user who
-      types "hardware engineer" but whose profile is marketing-themed sees
-      the query OR'd with ~12 marketing tokens, the marketing jobs match
-      via OR, and the actual hardware-engineer hits get outranked off the
-      first page (the bug the user hit).
+      is REQUIRED (FTS5 implicit-AND), each rendered as a porter-tolerant
+      prefix-match via ``_to_prefix_token``. Profile terms are dropped
+      from the MATCH — they influence relevance via skill_overlap +
+      title_match in the Python rerank below. Without prefix-tolerance the
+      user typing "roboti" returns zero results despite many "Robotics"
+      jobs in the index (porter-stemmed to "robot", which the literal
+      "roboti" can't reach).
 
     * **No typed query**: profile-driven feed. OR every profile term
       together so any candidate role surfaces; the rerank picks order.
@@ -127,9 +176,12 @@ def _build_fts_query(filters: SearchFilters, profile: dict | None) -> str:
             user_tokens.append(tok)
 
     if user_tokens:
-        # Quote each token to guard against FTS5 reserved words; whitespace-
-        # join means implicit AND in FTS5. Cap at 24 to bound query size.
-        return " ".join(f"\"{p}\"" for p in user_tokens[:24])
+        # Explicit AND between parts. Implicit AND (whitespace join) only
+        # parses for bare phrases — parenthesized OR-groups from
+        # ``_to_prefix_token`` need ``AND`` to combine. Cap at 24 to bound
+        # query size.
+        rendered = [_to_prefix_token(t) for t in user_tokens[:24] if t]
+        return " AND ".join(p for p in rendered if p)
 
     profile_tokens: list[str] = []
     seen_profile: set[str] = set()
@@ -139,7 +191,7 @@ def _build_fts_query(filters: SearchFilters, profile: dict | None) -> str:
             profile_tokens.append(tok)
     if not profile_tokens:
         return ""
-    return " OR ".join(f"\"{p}\"" for p in profile_tokens[:24])
+    return " OR ".join(f'"{p}"' for p in profile_tokens[:24])
 
 
 def _decode_cursor(cursor: str | None) -> tuple[float, str, int] | None:

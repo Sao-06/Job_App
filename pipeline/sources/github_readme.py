@@ -526,29 +526,43 @@ REPOS = [
          branches=["master"], parser="md_table",
          default_exp="entry-level", platform="Jobright/GitHub"),
 
-    # speedyapply
-    dict(name="gh:speedyapply/2025-swe-college-jobs",
-         repo="speedyapply/2025-SWE-College-Jobs",
+    # speedyapply — only the SWE-College repo survived to 2026; the AI/ML one
+    # was retired upstream. The fetch path returns None gracefully if either
+    # 404s in the future, so the source emits 0 rows for that cycle without
+    # crashing — fix is a one-line edit when the next cycle rolls over.
+    dict(name="gh:speedyapply/swe-college-jobs",
+         repo="speedyapply/2026-SWE-College-Jobs",
          branches=["main"], parser="md_table",
          default_exp="entry-level", platform="SpeedyApply/GitHub"),
-    dict(name="gh:speedyapply/2025-aiml-internships",
-         repo="speedyapply/2025-AI-ML-Internships",
-         branches=["main"], parser="md_table",
-         default_exp="internship", platform="SpeedyApply/GitHub"),
 
-    # Pittcsc / Vanshb03 / Ouckah (HTML <tr> tables)
+    # Pittcsc handed off to SimplifyJobs/Summer2026-Internships in 2024;
+    # the slug name "pittcsc" is kept as a stable source-id since that's
+    # how it shows up on the Dev Ops page.
     dict(name="gh:pittcsc/summer2026-internships",
-         repo="SimplifyJobs/Summer2025-Internships",   # pittcsc handed off to SimplifyJobs in 2024
+         repo="SimplifyJobs/Summer2026-Internships",
          branches=["dev", "main"], parser="html_tr",
          default_exp="internship", platform="Pittcsc/GitHub"),
     dict(name="gh:vanshb03/summer2026-internships",
          repo="vanshb03/Summer2026-Internships",
          branches=["main"], parser="html_tr",
          default_exp="internship", platform="Vanshb03/GitHub"),
-    dict(name="gh:ouckah/summer2025-internships",
-         repo="ouckah/Summer2025-Internships",
-         branches=["main"], parser="html_tr",
-         default_exp="internship", platform="Ouckah/GitHub"),
+
+    # zapplyjobs — daily-updated 2026 aggregators with category-specific
+    # repos. The healthcare and hardware ones directly fill gaps the rest of
+    # the index under-covers (Workday/SmartRecruiters help here too, but this
+    # surfaces the new-grad slice that's hardest to find by company-walk).
+    dict(name="gh:zapplyjobs/healthcare",
+         repo="zapplyjobs/New-Grad-Healthcare-Jobs-2026",
+         branches=["main"], parser="md_table",
+         default_exp="entry-level", platform="ZapplyJobs/GitHub"),
+    dict(name="gh:zapplyjobs/hardware",
+         repo="zapplyjobs/New-Grad-Hardware-Engineering-Jobs-2026",
+         branches=["main"], parser="md_table",
+         default_exp="entry-level", platform="ZapplyJobs/GitHub"),
+    dict(name="gh:zapplyjobs/data-science",
+         repo="zapplyjobs/New-Grad-Data-Science-Jobs-2026",
+         branches=["main"], parser="md_table",
+         default_exp="entry-level", platform="ZapplyJobs/GitHub"),
 ]
 
 

@@ -134,7 +134,13 @@ class SQLiteSessionStore:
                     pass
 
     def _connect(self):
-        conn = sqlite3.connect(self.db_path, timeout=30)
+        # 60 s busy timeout — `pipeline.ingest._WRITE_LOCK` already serializes
+        # ingest writes, but request-thread writes (session_state save, auth
+        # token refresh) can still contend with an in-flight ingest upsert on
+        # the Pi's slow IO. Doubling the budget from 30 s gives the Python-
+        # level lock + SQLite-level wait room to absorb the worst case
+        # (~200-row executemany) without surfacing "database is locked".
+        conn = sqlite3.connect(self.db_path, timeout=60)
         try:
             conn.execute("PRAGMA journal_mode=WAL")
         except sqlite3.OperationalError:

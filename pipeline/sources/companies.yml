@@ -194,3 +194,117 @@ workable:
   - gogox            # HK/APAC — logistics (formerly GoGoVan)
   - oneDegree        # HK — insurtech
   - prenetics        # HK — health diagnostics
+
+# ─── SmartRecruiters ────────────────────────────────────────────────────────
+# Public posting API — `https://api.smartrecruiters.com/v1/companies/{slug}/postings`.
+# No auth, no key. Slugs are case-sensitive (case preserved exactly as the company
+# registered with SmartRecruiters). Bias here is intentionally NON-tech: healthcare,
+# QSR/hospitality, retail, finance, public sector — categories that the rest of the
+# index under-covers. All entries below were live-verified to return >0 postings
+# at seed time; if any go cold, drop them.
+smartrecruiters:
+  # Healthcare / pharma
+  - NorthwesternMedicine            # 1286 — 11-hospital US health system
+  - MunsonHealthcare1               # 554 — Michigan hospital network
+  - IntuitiveHealth1                # 63 — US clinics
+  - AbbVie                          # 1638 — pharma
+  - Eurofins                        # 2433 — diagnostics / clinical labs
+  # QSR / hospitality
+  - HillstoneRestaurantGroup        # 254 — US restaurant chain
+  - Eataly                          # 290 — global food halls
+  - WynnResorts                     # 149 — Las Vegas hospitality
+  - WestgateResorts                 # 315 — US resorts / timeshare
+  - Sodexo1                         # 123 — global food / facilities ops
+  # Retail / consumer
+  - Primark                         # 689 — UK fashion retail
+  - MattelInc                       # 287 — toys
+  - IkanoRetail                     # 126 — IKEA SE Asia franchisee
+  - Comoto                          # 50+ — motorcycle retail (Cycle Gear / RevZilla)
+  # Finance / services
+  - StandardBankGroup               # 142 — Africa's largest bank
+  - Equinox                         # 625 — luxury fitness / hospitality
+  - Xplor                           # 237 — fintech / payments
+  - Visa                            # 30 — fintech anchor
+  # Operations / logistics / trades
+  - BoschGroup                      # 4488 — global manufacturing (capped at 500/cycle)
+  - CornerstoneBuildingBrandsCareers  # 421 — building products / trades
+  - Expeditors                      # 366 — freight forwarding / warehouse
+  - MATHoldings                     # 39 — manufacturing / warehouse
+  # Public sector
+  - CityOfNewYork                   # 1646 — gov / civic ops
+  - TAL                             # 56 — Australian life insurance
+  # Tech-adjacent
+  - NielsenIQ                       # 503 — retail analytics
+  - Ubisoft2                        # 274 — gaming
+
+# ─── Recruitee ──────────────────────────────────────────────────────────────
+# Public offers API — `https://{slug}.recruitee.com/api/offers/`. No auth.
+# EU-heavy; covers fintech, retail, EV charging, education, biotech, logistics.
+# All entries below were live-verified to return non-empty `offers` at seed time.
+recruitee:
+  # Tellent (Recruitee itself) — NL HR SaaS
+  - jobs
+  # Netherlands / Belgium — retail, logistics, fintech, agencies
+  - bunq                            # NL — neobank
+  - werkenbijvancranenbroek         # NL/BE — retail
+  - customssupport                  # NL — customs / trade
+  - mobilexpense                    # BE — expense SaaS
+  - projectivegroup                 # BE — financial services consultancy
+  - olsamgroup                      # NL — e-commerce aggregator
+  - incentro                        # NL/ES — digital agency
+  - chapter                         # NL — AI for energy
+  - 24sessions                      # NL — luxury tech accessories
+  # Germany — circular economy, automotive, ed-tech
+  - rebuy                           # DE — re-commerce / electronics resale
+  - technicaengineeringgmbh         # DE — automotive engineering
+  - dps                             # DE — Digital Product School (UnternehmerTUM)
+  # Pan-European
+  - fastned                         # NL/DE/FR/UK — EV charging
+  - equalsmoney                     # UK/BE/NL — fintech
+  # Nordic / education / research
+  - uptimedevelopment               # DK — IT consultancy
+  - biovian                         # FI — biotech CDMO
+  - thetalentinstitute              # NL — digital talent / training
+  - atheneum                        # DE/global — market research
+  - greatminds                      # US — K-12 curriculum
+
+# ─── Workday ────────────────────────────────────────────────────────────────
+# Public unauth POST — `https://{slug}.{host}.myworkdayjobs.com/wday/cxs/{slug}/{site}/jobs`.
+# Workday tenants need the full triple (slug + wdN host + site path); the host can't be
+# guessed. Every entry below was live-verified by POSTing and getting >=1 posting back.
+# This is the BIGGEST single coverage win — Fortune 500 healthcare, retail, finance,
+# and media that no other source touches. NVIDIA omitted intentionally (already in
+# greenhouse:; same jobs would double-count under different canonical URLs).
+workday:
+  # Healthcare / pharma
+  - {slug: cigna,             host: wd5,   site: cignacareers}
+  - {slug: elevancehealth,    host: wd1,   site: ANT}
+  - {slug: humana,            host: wd5,   site: Humana_External_Career_Site}
+  - {slug: bristolmyerssquibb, host: wd5,   site: BMS}
+  - {slug: medtronic,         host: wd1,   site: MedtronicCareers}
+  - {slug: astrazeneca,       host: wd3,   site: Careers}
+  # Retail / consumer
+  - {slug: walmart,           host: wd5,   site: WalmartExternal}
+  - {slug: target,            host: wd5,   site: targetcareers}
+  - {slug: homedepot,         host: wd5,   site: CareerDepot}
+  - {slug: nordstrom,         host: wd501, site: nordstrom_careers}
+  - {slug: coke,              host: wd1,   site: coca-cola-careers}
+  # Finance / insurance
+  - {slug: wf,                host: wd1,   site: WellsFargoJobs}
+  - {slug: capitalone,        host: wd12,  site: Capital_One}
+  - {slug: ghr,               host: wd1,   site: Lateral-US}              # Bank of America
+  - {slug: citi,              host: wd5,   site: '2'}
+  - {slug: mastercard,        host: wd1,   site: CorporateCareers}
+  - {slug: visa,              host: wd5,   site: Visa}
+  - {slug: paypal,            host: wd1,   site: jobs}
+  - {slug: blackrock,         host: wd1,   site: BlackRock_Professional}
+  - {slug: pru,               host: wd5,   site: Careers}                 # Prudential
+  - {slug: travelers,         host: wd5,   site: External}
+  # Media / telecom
+  - {slug: comcast,           host: wd5,   site: Comcast_Careers}
+  - {slug: disney,            host: wd5,   site: disneycareer}
+  - {slug: att,               host: wd1,   site: ATTGeneral}
+  # Industrials / aerospace
+  - {slug: boeing,            host: wd1,   site: EXTERNAL_CAREERS}
+  - {slug: '3m',              host: wd1,   site: Search}
+  - {slug: gevernova,         host: wd5,   site: Vernova_ExternalSite}

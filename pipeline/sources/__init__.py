@@ -39,6 +39,11 @@ from . import ats_greenhouse      # noqa: F401
 from . import ats_lever           # noqa: F401
 from . import ats_ashby           # noqa: F401
 from . import ats_workable        # noqa: F401
+from . import ats_smartrecruiters # noqa: F401
+from . import ats_recruitee       # noqa: F401
+from . import ats_workday         # noqa: F401
+# Library-backed scrapers — register only if the optional pip dep is installed.
+from . import scraper_jobspy      # noqa: F401
 
 
 __all__ = [

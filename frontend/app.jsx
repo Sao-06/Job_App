@@ -2599,16 +2599,33 @@ function JobsPage({ state, refresh, setPage }) {
     if (!ids.length) return;
     ids.forEach(id => { queue.delete(id); inflight.add(id); });
     try {
-      const data = await api.post('/api/jobs/score-batch', { job_ids: ids });
+      const data = await api.post('/api/jobs/score-batch', { job_ids: ids }, { timeoutMs: 20000 });
       const next = {};
       for (const r of (data?.scores || [])) {
         if (r && r.id) next[r.id] = r;
       }
+      // Defensive: if the server didn't return an entry for some IDs we
+      // requested (truncation, partial failure, schema mismatch), mark
+      // those as failed locally so the cards don't stay in "Scoring…"
+      // forever. Same shape the endpoint emits so JobCard handles them
+      // identically.
+      for (const id of ids) {
+        if (!next[id]) {
+          next[id] = { id, score: null, has_jd: false, reason: 'no result returned' };
+        }
+      }
       setCardScores(prev => ({ ...prev, ...next }));
-    } catch (_) {
-      // network error — drop these from inflight so a future intersection
-      // can retry them. Don't surface to the user; the card just stays
-      // unscored.
+    } catch (err) {
+      // Network error / timeout / 5xx. Mark these IDs as failed so the
+      // UI shows "—" with a tooltip rather than spinning forever. Cards
+      // stay clickable; the next time the user filters or scrolls back
+      // we re-queue and retry.
+      const failed = {};
+      const reason = (err && err.message) ? `request failed: ${err.message}` : 'request failed';
+      for (const id of ids) {
+        failed[id] = { id, score: null, has_jd: false, reason };
+      }
+      setCardScores(prev => ({ ...prev, ...failed }));
     } finally {
       ids.forEach(id => inflight.delete(id));
       // If more were queued during the in-flight call, schedule another

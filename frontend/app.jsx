@@ -1820,15 +1820,26 @@ const POSTED_LABELS = ['2 days ago','1 week ago','3 days ago','Just posted','5 d
 const WORK_MODELS   = ['Onsite','Hybrid','Remote'];
 const EXP_LEVELS    = ['Internship','Entry-level','Mid-level','Senior'];
 
-function ScoreRing({ score }) {
-  const pct  = Math.max(0, Math.min(100, Math.round(score)));
+function ScoreRing({ score, tooltip }) {
+  const isPending = score == null || Number.isNaN(score);
+  const pct  = isPending ? 0 : Math.max(0, Math.min(100, Math.round(score)));
   const C    = 26, circ = 2 * Math.PI * C;
   const off  = circ - (circ * pct / 100);
-  const tone = pct >= 85 ? 'score-high' : pct >= 65 ? 'score-mid' : 'score-low';
-  const color = pct >= 85 ? 'var(--good)' : pct >= 65 ? 'var(--accent-h)' : 'var(--t3)';
-  const label = pct >= 85 ? 'Strong' : pct >= 65 ? 'Good' : pct >= 50 ? 'Fair' : 'Reach';
+  const tone = isPending ? 'score-pending'
+              : pct >= 85 ? 'score-high'
+              : pct >= 65 ? 'score-mid'
+              : 'score-low';
+  const color = isPending ? 'rgba(255,255,255,.18)'
+              : pct >= 85 ? 'var(--good)'
+              : pct >= 65 ? 'var(--accent-h)'
+              : 'var(--t3)';
+  const label = isPending ? 'Scoring…'
+              : pct >= 85 ? 'Strong'
+              : pct >= 65 ? 'Good'
+              : pct >= 50 ? 'Fair'
+              : 'Reach';
   return (
-    <div className={'job-score-col ' + tone}>
+    <div className={'job-score-col ' + tone} title={tooltip || undefined}>
       <div className="score-ring">
         <svg width="56" height="56" viewBox="0 0 56 56">
           <circle cx="28" cy="28" r={C} fill="none" strokeWidth="4" stroke="rgba(255,255,255,.07)"/>
@@ -1836,21 +1847,33 @@ function ScoreRing({ score }) {
             strokeLinecap="round" strokeDasharray={circ} strokeDashoffset={off}
             style={{ transition:'stroke-dashoffset .8s cubic-bezier(.16,1,.3,1)' }}/>
         </svg>
-        <div className="score-pct">{pct}</div>
+        <div className="score-pct">{isPending ? '—' : pct}</div>
       </div>
       <div className="score-label">{label}</div>
     </div>
   );
 }
 
-function JobCard({ job, idx, isLiked, onLike, onHide, onAsk, onTailor, onSelect }) {
+function JobCard({ job, idx, isLiked, onLike, onHide, onAsk, onTailor, onSelect, scoreData }) {
   // Prefer stable per-job values (set by JobsPage); fall back to idx-based for callers that don't enrich.
   const logo    = job._logo   ?? LOGO_VARIANTS[idx % LOGO_VARIANTS.length];
   const posted  = job._posted ?? POSTED_LABELS[idx % POSTED_LABELS.length];
   const model   = job._model  ?? WORK_MODELS[idx % WORK_MODELS.length];
   const exp     = job._exp    ?? EXP_LEVELS[idx % EXP_LEVELS.length];
-  const pct     = Math.round(job.score || 0);
-  const stripe  = pct >= 85 ? 'score-high' : pct >= 65 ? 'score-mid' : 'score-low';
+  // Lazy-loaded match score from /api/jobs/score-batch. The feed's
+  // `job.score` is the rerank score (used for ordering) — NOT a match
+  // score. Display rules:
+  //   • scoreData not yet returned    → "—" placeholder, no color stripe
+  //   • scoreData.score === null       → "—" plus a "preview" badge
+  //                                       (no description loaded; the
+  //                                       title-only chip already explains)
+  //   • scoreData.score is a number    → real match %, colored stripe
+  const hasScore = scoreData && typeof scoreData.score === 'number';
+  const pct      = hasScore ? Math.round(scoreData.score) : null;
+  const stripe   = pct == null ? 'score-pending'
+                  : pct >= 85 ? 'score-high'
+                  : pct >= 65 ? 'score-mid'
+                  : 'score-low';
   const tags    = (job.skills || '').split(',').map(s => s.trim()).filter(Boolean).slice(0,3);
 
   // Clicking the card body opens the rich detail sub-page (jobright-style).
@@ -1868,6 +1891,7 @@ function JobCard({ job, idx, isLiked, onLike, onHide, onAsk, onTailor, onSelect 
 
   return (
     <div className={'job-card ' + stripe}
+         data-card-id={job.id}
          onClick={openDetail}
          role="button"
          tabIndex={0}
@@ -1936,7 +1960,12 @@ function JobCard({ job, idx, isLiked, onLike, onHide, onAsk, onTailor, onSelect 
             </div>
           </div>
         </div>
-        <ScoreRing score={job.score || 0}/>
+        <ScoreRing score={pct}
+          tooltip={
+            !scoreData ? 'Scoring this posting…' :
+            scoreData.score == null ? (scoreData.reason || 'Score requires job content') :
+            'Score reflects how well your skills match this posting'
+          }/>
       </div>
     </div>
   );
@@ -2573,6 +2602,75 @@ function JobsPage({ state, refresh, setPage }) {
   const seenIds     = useRef(new Set());
   const feedRequest = useRef(0);          // monotonic id; race-safe
 
+  // Per-card on-demand scores (id → {score, has_jd, matched, missing}).
+  // The feed's `score` field is now used only for ORDERING the list. The
+  // displayed match score comes from this map and is populated lazily as
+  // cards scroll into view — POST /api/jobs/score-batch fetches the
+  // description on demand, scores via compute_skill_coverage, caches for
+  // 1 h. Cards not yet scored render "—" rather than a misleading
+  // title-only number.
+  const [cardScores, setCardScores] = useState({});
+  const cardScoresRef = useRef(cardScores);
+  useEffect(() => { cardScoresRef.current = cardScores; }, [cardScores]);
+  const scoreQueueRef    = useRef(new Set());
+  const scoreInflightRef = useRef(new Set());
+  const scoreFlushTimer  = useRef(null);
+
+  const flushScoreQueue = useCallback(async () => {
+    scoreFlushTimer.current = null;
+    const queue = scoreQueueRef.current;
+    const inflight = scoreInflightRef.current;
+    const ids = [];
+    for (const id of queue) {
+      if (ids.length >= 30) break;
+      if (!inflight.has(id)) ids.push(id);
+    }
+    if (!ids.length) return;
+    ids.forEach(id => { queue.delete(id); inflight.add(id); });
+    try {
+      const data = await api.post('/api/jobs/score-batch', { job_ids: ids });
+      const next = {};
+      for (const r of (data?.scores || [])) {
+        if (r && r.id) next[r.id] = r;
+      }
+      setCardScores(prev => ({ ...prev, ...next }));
+    } catch (_) {
+      // network error — drop these from inflight so a future intersection
+      // can retry them. Don't surface to the user; the card just stays
+      // unscored.
+    } finally {
+      ids.forEach(id => inflight.delete(id));
+      // If more were queued during the in-flight call, schedule another
+      // flush so we drain the backlog.
+      if (queue.size > 0) {
+        scoreFlushTimer.current = setTimeout(flushScoreQueue, 60);
+      }
+    }
+  }, []);
+
+  const queueScore = useCallback((jobId) => {
+    if (!jobId) return;
+    if (cardScoresRef.current[jobId]) return;            // already scored
+    if (scoreInflightRef.current.has(jobId)) return;      // currently fetching
+    scoreQueueRef.current.add(jobId);
+    if (scoreFlushTimer.current) clearTimeout(scoreFlushTimer.current);
+    scoreFlushTimer.current = setTimeout(flushScoreQueue, 220);
+  }, [flushScoreQueue]);
+
+  // Reset the score map whenever the search query / filters change — the
+  // displayed match score must reflect THIS user's latest profile-vs-
+  // posting comparison, and the server-side cache key is per-user-per-job
+  // (1h TTL) so re-queueing is cheap.
+  useEffect(() => {
+    setCardScores({});
+    scoreQueueRef.current = new Set();
+    scoreInflightRef.current = new Set();
+    if (scoreFlushTimer.current) {
+      clearTimeout(scoreFlushTimer.current);
+      scoreFlushTimer.current = null;
+    }
+  }, [debouncedQuery, fLocation, fIndustries, fExp, fModel, fDateMax]);
+
   const apps    = state?.applications || [];
   const liked   = new Set(state?.liked_ids || []);
   const hidden  = new Set(state?.hidden_ids || []);
@@ -2698,6 +2796,27 @@ function JobsPage({ state, refresh, setPage }) {
     const id = setInterval(tick, 25_000);
     return () => clearInterval(id);
   }, [feedJobs]);
+
+  // Lazy-score IntersectionObserver: queue a score request for any
+  // [data-card-id] element that scrolls within ~400 px of the viewport.
+  // Each card requests at most once per filter-set; the server-side cache
+  // (per-user, 1 h TTL) absorbs duplicate requests across sessions.
+  useEffect(() => {
+    if (typeof IntersectionObserver === 'undefined') return undefined;
+    const obs = new IntersectionObserver((entries) => {
+      for (const e of entries) {
+        if (!e.isIntersecting) continue;
+        const id = e.target.getAttribute('data-card-id');
+        if (id) queueScore(id);
+      }
+    }, { rootMargin: '400px 0px', threshold: 0.05 });
+    // Observe every job card currently on the page. Re-runs when filtered
+    // changes so newly-rendered cards (next page, search results, etc.)
+    // get observed.
+    const cards = document.querySelectorAll('.job-card[data-card-id]');
+    cards.forEach(c => obs.observe(c));
+    return () => obs.disconnect();
+  }, [queueScore, feedJobs.length, debouncedQuery, fLocation, fIndustries, fExp, fModel, fDateMax]);
 
   const rawJobs = feedJobs;
 
@@ -3116,6 +3235,7 @@ function JobsPage({ state, refresh, setPage }) {
             <div className="job-list">
               {filtered.map((j, i) => (
                 <JobCard key={j.id || i} idx={i} job={j}
+                  scoreData={cardScores[j.id]}
                   isLiked={liked.has(j.id)}
                   onLike={() => handleAction(liked.has(j.id) ? 'unlike' : 'like', j)}
                   onHide={() => handleAction('hide', j)}

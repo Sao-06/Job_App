@@ -4311,6 +4311,191 @@ def _dto_to_json(j) -> dict:
     }
 
 
+# ── Lazy per-card scoring ─────────────────────────────────────────────────────
+# In-memory, per-(user_id, job_id), 1 h TTL. Capped at 5000 entries (LRU
+# evict). Scores recompute cheaply once descriptions are cached, so we
+# don't persist them to disk — the user explicitly asked for transient
+# storage that auto-expires.
+
+_SCORE_CACHE: dict[tuple[str, str], tuple[float, dict]] = {}
+_SCORE_CACHE_LOCK = threading.Lock()
+_SCORE_CACHE_TTL = 60 * 60        # 1 h
+_SCORE_CACHE_MAX = 5000
+
+
+def _score_cache_get(key: tuple[str, str]) -> dict | None:
+    now = time.time()
+    with _SCORE_CACHE_LOCK:
+        entry = _SCORE_CACHE.get(key)
+        if entry and (now - entry[0]) < _SCORE_CACHE_TTL:
+            return entry[1]
+        if entry:
+            _SCORE_CACHE.pop(key, None)
+    return None
+
+
+def _score_cache_set(key: tuple[str, str], value: dict) -> None:
+    now = time.time()
+    with _SCORE_CACHE_LOCK:
+        if len(_SCORE_CACHE) >= _SCORE_CACHE_MAX:
+            # Drop the oldest 10% — amortized eviction.
+            victims = sorted(_SCORE_CACHE.items(), key=lambda kv: kv[1][0])[
+                : max(50, _SCORE_CACHE_MAX // 10)
+            ]
+            for k, _ in victims:
+                _SCORE_CACHE.pop(k, None)
+        _SCORE_CACHE[key] = (now, value)
+
+
+@app.post("/api/jobs/score-batch")
+async def jobs_score_batch(request: Request):
+    """Score a batch of jobs against the caller's profile. Used by the
+    SPA's lazy-scoring path: the JobsPage IntersectionObserver queues up
+    job IDs as cards scroll into view, then flushes the queue here.
+
+    Body: ``{"job_ids": ["abc", "def", ...]}`` — capped at 30 per call.
+    Response: ``{"scores": [{"id":"abc", "score":78, "has_jd":true, ...},
+    {"id":"def", "score":null, "has_jd":false, "reason":"no description"}]}``.
+
+    For each id:
+      1. Look up in ``job_postings``. 404 if missing → ``has_jd=false``.
+      2. If description is empty, lazy-fetch via
+         ``pipeline.job_details.fetch_full_description``. Cached in-memory
+         by job_details.py for 1 h. NOT persisted to disk per the user's
+         "transient cache" requirement.
+      3. If still no description: refuse to score (return ``score=null,
+         has_jd=false``). The SPA shows a "preview score" badge.
+      4. Otherwise run ``compute_skill_coverage`` against the user profile,
+         compose the rubric score, return + cache for 1 h.
+    """
+    auth_user = _require_auth_user(request)
+    user_id = (auth_user or {}).get("id") or "anon"
+    body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+    job_ids = body.get("job_ids") or []
+    if not isinstance(job_ids, list):
+        raise HTTPException(400, "job_ids must be a list")
+    job_ids = [str(j) for j in job_ids if j and str(j).strip()][:30]
+    if not job_ids:
+        return {"scores": []}
+
+    profile = _S.get("profile") or {}
+    if not profile:
+        # No profile loaded → can't score against anything. Return null
+        # scores so the SPA falls back to the rerank-only sort.
+        return {"scores": [
+            {"id": jid, "score": None, "has_jd": False,
+             "reason": "no profile loaded — score requires a resume"}
+            for jid in job_ids
+        ]}
+
+    from pipeline import job_repo, job_details, providers
+
+    # Pull the rows we need in one query.
+    if _session_store is None:
+        return {"scores": [{"id": jid, "score": None, "has_jd": False,
+                            "reason": "session store unavailable"} for jid in job_ids]}
+    with _session_store.connect() as conn:
+        rows = job_repo.bulk_get_by_ids(conn, job_ids)
+    by_id = {r["id"]: r for r in rows}
+
+    out: list[dict] = []
+    for jid in job_ids:
+        # 1. Cache hit — return immediately without touching the DB or
+        #    re-scoring. Only valid when the same user re-requests the
+        #    same job within the TTL window.
+        cached = _score_cache_get((user_id, jid))
+        if cached is not None:
+            out.append({**cached, "id": jid, "cached": True})
+            continue
+
+        rec = by_id.get(jid)
+        if not rec:
+            out.append({"id": jid, "score": None, "has_jd": False,
+                        "reason": "job not found in index"})
+            continue
+
+        # 2. Ensure a description is available — try DB, then lazy fetch.
+        desc = (rec.get("description") or "").strip()
+        if not desc:
+            try:
+                fetched = job_details.fetch_full_description(
+                    rec.get("url") or "", rec.get("source") or "",
+                )
+                desc = (fetched or {}).get("description", "").strip()
+            except Exception:
+                desc = ""
+        # 3. Refuse to score without something to score against.
+        if not desc and not rec.get("requirements"):
+            payload = {
+                "id": jid, "score": None, "has_jd": False,
+                "reason": "no description available — score requires job content",
+            }
+            _score_cache_set((user_id, jid), payload)
+            out.append(payload)
+            continue
+
+        # 4. Score. compute_skill_coverage is deterministic; it reads
+        #    title + requirements + description and returns coverage in
+        #    [0, 1] plus matched / missing skill lists.
+        job_for_scoring = {
+            "id": jid,
+            "title": rec.get("title", ""),
+            "requirements": rec.get("requirements") or [],
+            "description": desc,
+        }
+        try:
+            coverage, matched, missing = providers.compute_skill_coverage(
+                job_for_scoring, profile,
+            )
+        except Exception as exc:
+            print(f"[score-batch] coverage failed for {jid!r}: "
+                  f"{type(exc).__name__}: {exc}", file=sys.stderr)
+            payload = {"id": jid, "score": None, "has_jd": bool(desc),
+                       "reason": "scoring error"}
+            _score_cache_set((user_id, jid), payload)
+            out.append(payload)
+            continue
+
+        # Quick title-vs-target-titles bonus mirrors phase3's _fast_score
+        # so cards in view get the same shape of score Phase 3 would emit.
+        title_lower = (rec.get("title") or "").lower()
+        targets = [str(t).lower() for t in (profile.get("target_titles") or []) if t]
+        title_hit = 0.0
+        for t in targets:
+            t_tokens = [tk for tk in t.split() if len(tk) > 2]
+            if t_tokens and all(tk in title_lower for tk in t_tokens):
+                title_hit = 1.0
+                break
+            elif t in title_lower:
+                title_hit = 1.0
+                break
+            elif any(tk in title_lower for tk in t_tokens):
+                title_hit = max(title_hit, 0.5)
+        # Weighted blend matching providers.RUBRIC_WEIGHTS (50/30/20).
+        # Location/seniority defaults to 0.5 here — the lazy path doesn't
+        # have profile location yet; a fuller composition would call
+        # provider.score_job, but that's an LLM call we want to avoid on
+        # every scroll tick.
+        loc_seniority = 0.5
+        score_pct = int(round(
+            providers.RUBRIC_WEIGHTS["required_skills"] * coverage
+            + providers.RUBRIC_WEIGHTS["industry"] * title_hit
+            + providers.RUBRIC_WEIGHTS["location_seniority"] * loc_seniority
+        ))
+        payload = {
+            "id":            jid,
+            "score":         max(0, min(100, score_pct)),
+            "has_jd":        True,
+            "matched":       matched[:6],
+            "missing":       missing[:6],
+            "coverage":      round(float(coverage), 3),
+        }
+        _score_cache_set((user_id, jid), payload)
+        out.append(payload)
+
+    return {"scores": out}
+
+
 @app.get("/api/jobs/facets")
 def jobs_facets(request: Request):
     """Return facet buckets (label, value, count) for one dimension of the job

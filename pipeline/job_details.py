@@ -172,18 +172,18 @@ def strip_html(html: str) -> str:
 
     Block-level tags become newlines; ``<li>`` becomes a leading bullet
     so the section parser downstream still recognises list items.
-    Entities are decoded FIRST so that double-encoded payloads (e.g.
-    Greenhouse's ``content`` field returns HTML where the angle brackets
-    arrive as ``&lt;div&gt;``) get unescaped into real tags before the
-    tag-stripping regex runs — otherwise literal ``<div>`` survives the
-    pipeline.
+    Entities are decoded via stdlib ``html.unescape`` (covers every named +
+    numeric entity, not just the dozen we used to handle by hand — fixes
+    leaks like ``&times;`` / ``&bull;`` showing up raw in cleaned output).
+    Decode runs BEFORE tag stripping so double-encoded payloads (e.g.
+    Greenhouse's ``content`` field returning ``&lt;div&gt;``) unescape to
+    real tags before the tag regex runs — otherwise literal ``<div>``
+    survives.
     """
     if not html:
         return ""
-    text = html
-    for ent, ch in _HTML_ENTS.items():
-        text = text.replace(ent, ch)
-    text = re.sub(r"&#\d+;", "", text)            # numeric entities
+    import html as _html_mod
+    text = _html_mod.unescape(html)
     text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
     text = re.sub(r"</(?:p|div|h[1-6]|tr|table|ul|ol)\s*>", "\n", text, flags=re.IGNORECASE)
     text = re.sub(r"<li[^>]*>", "\n• ", text, flags=re.IGNORECASE)
@@ -545,15 +545,121 @@ _GENERIC_HEADERS = {
 }
 
 
-def _fetch_generic_html(url: str) -> Optional[dict]:
-    """Fetch any URL, strip HTML, return the largest content block.
+# Hosts that aggregate other boards. Their public detail pages are
+# wrapped in newsletter signups, "looking for more?" CTAs, and copyright
+# footers that bleed into the body — generic page-scraping produces
+# garbage for them. The right path for these is the upstream API, which
+# the per-source connectors handle at ingest time. If a row from one of
+# these makes it to the lazy fetcher with no description, we'd rather
+# return ``None`` (honest: title-only score, surface "preview score"
+# badge) than ship the user newsletter chrome.
+_AGGREGATOR_HOSTS = frozenset({
+    "findwork.dev", "simplifyjobs.com", "jobright.ai", "speedyapply.com",
+    "wellfound.com", "angel.co", "linkedin.com", "indeed.com",
+    "glassdoor.com", "ziprecruiter.com", "monster.com", "dice.com",
+    "themuse.com", "remoteok.com", "remoteok.io", "weworkremotely.com",
+    "jobicy.com", "himalayas.app", "remotive.com", "arbeitnow.com",
+    "github.com", "raw.githubusercontent.com",
+})
 
-    Best-effort fallback: works for static company career pages and
-    keyword-matching for SPAs is good enough when the page renders >5 KB
-    of text. JS-only skeletons return small bodies and we accept that.
-    Restricted to https for safety.
+# Class/id substrings on container elements that almost always carry
+# page chrome rather than job-description content. Dropped before the
+# stripper runs.
+_CHROME_CLASS_RE = re.compile(
+    r'<(?P<tag>div|section|aside|footer|nav|form|p|ul)\b[^>]*'
+    r'(?:class|id)\s*=\s*["\'][^"\']*'
+    r'(?:newsletter|sign[-_]?up|signup|subscribe|cta\b|cookie|gdpr|consent|'
+    r'footer|copyright|related[-_]?(?:jobs|posts)|sidebar|breadcrumb|share[-_]?'
+    r'(?:bar|buttons)?|social|comments?|disclaimer|legal|nav[-_]?bar|menu|'
+    r'pagination|recommended|promo|banner|popup|modal)'
+    r'[^"\']*["\'][^>]*>.*?</(?P=tag)>',
+    flags=re.DOTALL | re.IGNORECASE,
+)
+
+# Sectioning tags that should never carry job content. Stripped wholesale.
+_CHROME_TAG_RE = re.compile(
+    r"<(?:nav|footer|header|aside|form|button|input|select|textarea)\b[^>]*>"
+    r".*?</(?:nav|footer|header|aside|form|button|input|select|textarea)>",
+    flags=re.DOTALL | re.IGNORECASE,
+)
+
+# Markers that real job descriptions tend to have. We require ≥2 of these
+# in the cleaned text — pages that lack them (aggregator landing pages,
+# generic homepages) get rejected as not-a-job-description.
+_JOB_SECTION_MARKERS = (
+    "qualific", "requir", "responsib", "experience", "skills",
+    "about the role", "what you", "you'll", "you will", "we're looking",
+    "ideal candidate", "must have", "nice to have", "duties",
+    "day-to-day", "the role", "your role", "job description", "key skills",
+    "minimum qualifications", "preferred qualifications", "what we offer",
+    "benefits", "salary", "compensation",
+)
+
+# Phrases that strongly suggest chrome / promotional noise. If they
+# dominate the cleaned text we reject the whole fetch.
+_NOISE_PATTERNS = (
+    "newsletter", "subscribe", "sign up for", "sign-up", "follow us",
+    "join our community", "all rights reserved", "copyright ©",
+    "cookie policy", "privacy policy", "terms of service",
+    "looking for more", "never miss out", "get notified",
+)
+
+
+def _try_isolate_main(html: str) -> str:
+    """Narrow ``html`` to the page's ``<main>`` / ``<article>`` /
+    ``role="main"`` block when one is clearly identifiable. Falls back
+    to the input unchanged when no such container is found — the caller
+    still runs the chrome stripper on whatever is returned.
+    """
+    for pat in (
+        r"<main\b[^>]*>(?P<body>.*?)</main>",
+        r"<article\b[^>]*>(?P<body>.*?)</article>",
+        r"<(?P<tag>div|section)\b[^>]*role\s*=\s*[\"']main[\"'][^>]*>(?P<body>.*?)</(?P=tag)>",
+        # Common job-detail container ids/classes
+        r"<(?P<tag2>div|section)\b[^>]*(?:class|id)\s*=\s*[\"'][^\"']*"
+        r"(?:job[-_]?description|job[-_]?details?|posting[-_]?body|content[-_]?body)"
+        r"[^\"']*[\"'][^>]*>(?P<body>.*?)</(?P=tag2)>",
+    ):
+        m = re.search(pat, html, flags=re.DOTALL | re.IGNORECASE)
+        if m:
+            inner = m.group("body")
+            # Don't isolate to a <main> that's tiny — likely a SPA shell.
+            if len(inner) > 300:
+                return inner
+    return html
+
+
+def _is_aggregator_host(url: str) -> bool:
+    """True for known aggregator hosts whose detail pages are page-scrape
+    poison. The upstream API path handles those at ingest time."""
+    try:
+        from urllib.parse import urlparse
+        host = urlparse(url).netloc.lower()
+        if host.startswith("www."):
+            host = host[4:]
+    except Exception:
+        return False
+    return any(host == h or host.endswith("." + h) for h in _AGGREGATOR_HOSTS)
+
+
+def _fetch_generic_html(url: str) -> Optional[dict]:
+    """Fetch any URL, isolate the main content, return cleaned plain text
+    iff it looks like a real job description. Returns ``None`` when:
+
+      • URL host is a known aggregator (their pages are wrapped in
+        newsletter chrome — the upstream API is the proper source).
+      • Fetched page lacks at least 2 typical job-description section
+        markers (qualifications / responsibilities / skills / etc.).
+      • Page is dominated by promotional/legal phrases (newsletter,
+        copyright, cookie policy) — > ~3% of body length.
+      • Cleaned body is under 200 chars (SPA shells, cookie banners).
+
+    Restricted to https for safety. gzip / deflate / brotli encodings
+    auto-decoded even when the server ignores ``Accept-Encoding: identity``.
     """
     if not url or not url.lower().startswith("https://"):
+        return None
+    if _is_aggregator_host(url):
         return None
     try:
         import urllib.request
@@ -565,9 +671,6 @@ def _fetch_generic_html(url: str) -> Optional[dict]:
             raw = resp.read(_GENERIC_FETCH_MAX_BYTES)
             charset = resp.headers.get_content_charset() or "utf-8"
             encoding = (resp.headers.get("Content-Encoding") or "").lower()
-        # Some servers ignore Accept-Encoding: identity and gzip anyway —
-        # detect by header AND by gzip magic so we never feed binary into
-        # strip_html.
         if encoding == "gzip" or raw[:2] == b"\x1f\x8b":
             import gzip
             try:
@@ -592,20 +695,60 @@ def _fetch_generic_html(url: str) -> Optional[dict]:
         html = raw.decode(charset, errors="replace")
     except Exception:
         return None
-    # Remove script/style/nav/footer chrome before stripping the rest.
+
+    # Remove non-content chrome tags first so they can't bleed into the
+    # main-isolation pass.
     html = re.sub(r"<script\b[^>]*>.*?</script>", "", html,
                    flags=re.DOTALL | re.IGNORECASE)
     html = re.sub(r"<style\b[^>]*>.*?</style>", "", html,
                    flags=re.DOTALL | re.IGNORECASE)
-    html = re.sub(r"<(?:nav|footer|header|aside)\b[^>]*>.*?</(?:nav|footer|header|aside)>",
-                   "", html, flags=re.DOTALL | re.IGNORECASE)
+    html = re.sub(r"<noscript\b[^>]*>.*?</noscript>", "", html,
+                   flags=re.DOTALL | re.IGNORECASE)
+    # Drop containers whose class/id screams chrome (newsletter, signup,
+    # cookie, footer, related-jobs, share buttons, etc.). Run twice in
+    # case nested chrome wrappers reveal each other.
+    for _ in range(2):
+        html = _CHROME_CLASS_RE.sub("", html)
+    # Drop full sectioning chrome tags.
+    html = _CHROME_TAG_RE.sub("", html)
+
+    # Try to narrow to the page's main content area. Many job pages wrap
+    # the description in <main>/<article>/<div class="job-description">.
+    html = _try_isolate_main(html)
+
     text = strip_html(html)
-    # Boilerplate filters: page chrome / cookie banners / SPA shells render
-    # short bodies that aren't useful for scoring. 200 chars is the floor —
-    # below that we treat the fetch as a miss and let the caller fall back.
     if len(text) < 200:
         return None
-    # Cap before returning; downstream upsert path trims further to 16 KB.
+
+    # Quality filter 1: must look like a job description.
+    text_lower = text.lower()
+    marker_hits = sum(1 for m in _JOB_SECTION_MARKERS if m in text_lower)
+    if marker_hits < 2:
+        return None
+
+    # Quality filter 2: drop pages dominated by chrome/promotional noise.
+    # Each occurrence of a noise phrase is roughly worth its length plus
+    # surrounding chrome that survived stripping. >3% of body == reject.
+    noise_chars = sum(text_lower.count(p) * len(p) for p in _NOISE_PATTERNS)
+    if noise_chars * 33 > len(text):  # ~3% threshold
+        return None
+
+    # Trailing-chrome trimmer: many job pages append "Apply now" CTAs,
+    # related-jobs lists, etc. AFTER the description. Cut at the first
+    # appearance of a strong terminator phrase if it's past 60% of the
+    # body — preserves the description while dropping the tail.
+    cutpoint = len(text)
+    for term in ("Looking for more?", "Sign up for", "Subscribe to",
+                 "Newsletter", "Related Jobs", "More jobs at",
+                 "Copyright ©", "All rights reserved",
+                 "Apply for this job", "Other Jobs"):
+        idx = text.find(term)
+        if 0 <= idx < cutpoint and idx > len(text) * 0.4:
+            cutpoint = idx
+    text = text[:cutpoint].rstrip()
+    if len(text) < 200:
+        return None
+
     if len(text) > 24000:
         text = text[:24000].rsplit(" ", 1)[0] + "…"
     return {"description": text}

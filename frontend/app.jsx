@@ -3183,6 +3183,8 @@ function JobsPage({ state, refresh, setPage }) {
           job={detailJob}
           profile={state?.profile}
           allJobs={feedJobs}
+          scoreData={cardScores[detailJob.id]}
+          allScores={cardScores}
           isLiked={liked.has(detailJob.id)}
           isHidden={hidden.has(detailJob.id)}
           onClose={() => setDetailJob(null)}
@@ -3371,12 +3373,15 @@ function JobsPage({ state, refresh, setPage }) {
 
       {askJob && (
         <AskAtlas job={askJob} mode={state?.mode} isPro={!!state?.is_pro}
-                  isDev={!!state?.is_dev} onClose={() => setAskJob(null)}/>
+                  isDev={!!state?.is_dev}
+                  scoreData={cardScores[askJob.id]}
+                  onClose={() => setAskJob(null)}/>
       )}
       {tailorJob && (
         <TailorDrawer job={tailorJob} mode={state?.mode} isPro={!!state?.is_pro}
                       isDev={!!state?.is_dev}
                       hasResume={!!state?.profile}
+                      scoreData={cardScores[tailorJob.id]}
                       onOpenDocuments={() => { setTailorJob(null); setPage('documents'); }}
                       onClose={() => setTailorJob(null)}/>
       )}
@@ -3394,7 +3399,8 @@ function JobsPage({ state, refresh, setPage }) {
    so the score breakdown stays in sync with the score on
    the JobCard ring without round-tripping the LLM rubric. */
 
-function JobDetailView({ job, profile, allJobs, isLiked, isHidden,
+function JobDetailView({ job, profile, allJobs, scoreData, allScores,
+                          isLiked, isHidden,
                           onClose, onAsk, onTailor, onLike, onHide,
                           onSwitchTo }) {
   const [tab, setTab] = useState('overview');
@@ -3452,24 +3458,45 @@ function JobDetailView({ job, profile, allJobs, isLiked, isHidden,
     return () => { cancelled = true; };
   }, [job?.id]);
 
-  // ── Skill alignment, computed client-side from the profile ───────────
+  // ── Skill alignment ──────────────────────────────────────────────────
+  // Two sources, in priority order:
+  //   1. scoreData (from /api/jobs/score-batch) — the SAME description-aware
+  //      scorer the JobCard uses. Reads title + requirements + full
+  //      description against profile.top_hard_skills. Returns: score (0-100),
+  //      matched (top 6), missing (top 6), coverage (0-1). This is the
+  //      authoritative number we want the user to see.
+  //   2. Client-side recompute against `job.skills` — only when scoreData
+  //      hasn't arrived yet (first paint, network in-flight, scoreData
+  //      failed). Keeps the panel populated instead of showing zeros.
   const userSkills = (profile?.top_hard_skills || [])
     .map(s => String(s).toLowerCase().trim()).filter(Boolean);
   const userSkillsSet = new Set(userSkills);
   const jobReqs = String(job.skills || '')
     .split(',').map(s => s.trim()).filter(Boolean);
 
-  const matched = [];
-  const gaps    = [];
-  for (const r of jobReqs) {
-    const lr = r.toLowerCase();
-    const hit = userSkillsSet.has(lr) ||
-                userSkills.some(s => s && (lr.includes(s) || s.includes(lr)));
-    (hit ? matched : gaps).push(r);
+  const haveLazy = scoreData && typeof scoreData.score === 'number';
+  let matched, gaps, skillPct;
+  if (haveLazy && (Array.isArray(scoreData.matched) || Array.isArray(scoreData.missing))) {
+    matched = scoreData.matched || [];
+    gaps    = scoreData.missing || [];
+    skillPct = (typeof scoreData.coverage === 'number')
+      ? Math.round(scoreData.coverage * 100)
+      : (matched.length + gaps.length > 0
+          ? Math.round((matched.length / (matched.length + gaps.length)) * 100)
+          : 50);
+  } else {
+    matched = [];
+    gaps    = [];
+    for (const r of jobReqs) {
+      const lr = r.toLowerCase();
+      const hit = userSkillsSet.has(lr) ||
+                  userSkills.some(s => s && (lr.includes(s) || s.includes(lr)));
+      (hit ? matched : gaps).push(r);
+    }
+    skillPct = jobReqs.length
+      ? Math.round((matched.length / jobReqs.length) * 100)
+      : (userSkills.length ? 50 : 0);
   }
-  const skillPct = jobReqs.length
-    ? Math.round((matched.length / jobReqs.length) * 100)
-    : (userSkills.length ? 50 : 0);
 
   // ── Title alignment vs. profile target_titles ────────────────────────
   const targetTitles = (profile?.target_titles || []).map(t => String(t).toLowerCase());
@@ -3495,7 +3522,35 @@ function JobDetailView({ job, profile, allJobs, isLiked, isHidden,
     : 50;
 
   // ── Overall match metadata ───────────────────────────────────────────
-  const score = Math.max(0, Math.min(100, Math.round(job.score || 0)));
+  // Single source of truth: prefer the description-aware lazy score
+  // (same number JobCard shows after the IntersectionObserver fetch).
+  // Fall back to job.score (the rerank composite from /api/jobs/feed,
+  // already 0-100 via _dto_to_json) only when the lazy score hasn't
+  // arrived yet. This keeps card-vs-detail score consistent.
+  const score = haveLazy
+    ? Math.max(0, Math.min(100, Math.round(scoreData.score)))
+    : Math.max(0, Math.min(100, Math.round(job.score || 0)));
+
+  // Weighted point breakdown — mirrors providers.RUBRIC_WEIGHTS so the
+  // user sees exactly the same 50/30/20 math the scorer applied. With
+  // lazy data we use `coverage` directly; without it we fall back to the
+  // client-side skillPct ratio above.
+  const coverageFraction = haveLazy && typeof scoreData.coverage === 'number'
+    ? scoreData.coverage
+    : skillPct / 100;
+  const titleFraction    = titlePct / 100;
+  const locFraction      = locPct   / 100;
+  const breakdown = [
+    { key:'skills',   label:'Required skills',    weight:50, raw:coverageFraction,
+      points:Math.round(50 * coverageFraction),
+      hint:'How many of the job’s requirements your profile already covers' },
+    { key:'industry', label:'Title · industry', weight:30, raw:titleFraction,
+      points:Math.round(30 * titleFraction),
+      hint:'Match between your target titles and the job title' },
+    { key:'location', label:'Location · seniority', weight:20, raw:locFraction,
+      points:Math.round(20 * locFraction),
+      hint:'Geographic fit and seniority alignment' },
+  ];
   const verdict =
       score >= 85 ? { label: 'Strong Match', tone: 'good' }
     : score >= 70 ? { label: 'Good Match',   tone: 'accent' }
@@ -3904,8 +3959,47 @@ function JobDetailView({ job, profile, allJobs, isLiked, isHidden,
                   )}
                 </div>
 
-                {/* Sticky right rail: skill match panel + key facts */}
-                <aside className="jd-detail-rail" aria-label="Skill match and key facts">
+                {/* Sticky right rail: score breakdown + skill match panel + key facts */}
+                <aside className="jd-detail-rail" aria-label="Score breakdown, skill match and key facts">
+                  {/* "Why this score?" — shows the 50/30/20 weighted math the
+                      backend rubric scorer applied. Pulls coverage from
+                      scoreData when available (description-aware) and falls
+                      back to client-side computed signals when the lazy
+                      score hasn't arrived. The user can finally see WHY a
+                      job is 78 vs 56. */}
+                  <section className="jd-rail-card jd-rail-breakdown">
+                    <div className="jd-rail-eyebrow">
+                      <span className="jd-rail-bar"/>
+                      <span>Why this score</span>
+                      <span className={'jd-rail-pct jd-rail-pct-' + verdict.tone}>{score}</span>
+                    </div>
+                    <div className="jd-bd-source">
+                      {haveLazy
+                        ? <>Computed against the full job description.</>
+                        : <>Preview score from title + listing tags. Click anywhere on the page to load the full description.</>}
+                    </div>
+                    <ul className="jd-bd-rows">
+                      {breakdown.map(b => (
+                        <li key={b.key} className="jd-bd-row" title={b.hint}>
+                          <span className="jd-bd-row-h">
+                            <span className="jd-bd-label">{b.label}</span>
+                            <span className="jd-bd-pts">
+                              <b>{b.points}</b><i>/{b.weight}</i>
+                            </span>
+                          </span>
+                          <div className="jd-bd-meter" aria-hidden="true">
+                            <div className="jd-bd-meter-fill"
+                                 style={{ width: `${Math.min(100, Math.round(b.raw * 100))}%` }}/>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                    <div className="jd-bd-total">
+                      <span>Total</span>
+                      <b>{breakdown.reduce((s, b) => s + b.points, 0)}<i>/100</i></b>
+                    </div>
+                  </section>
+
                   <section className="jd-rail-card jd-rail-skills">
                     <div className="jd-rail-eyebrow">
                       <span className="jd-rail-bar"/>
@@ -3916,8 +4010,12 @@ function JobDetailView({ job, profile, allJobs, isLiked, isHidden,
                       <div className="jd-rail-meter-fill" style={{ width: `${skillPct}%` }}/>
                     </div>
                     <div className="jd-rail-skill-summary">
-                      <b>{matched.length}</b> of <b>{jobReqs.length || '—'}</b> tagged
-                      requirement{jobReqs.length === 1 ? '' : 's'} match your profile
+                      {haveLazy
+                        ? (matched.length > 0
+                            ? <><b>{matched.length}</b> of your top skills found in this posting</>
+                            : <>None of your top skills appear in this posting yet</>)
+                        : <><b>{matched.length}</b> of <b>{jobReqs.length || '—'}</b> tagged
+                            requirement{jobReqs.length === 1 ? '' : 's'} match your profile</>}
                     </div>
 
                     {matched.length > 0 && (
@@ -3948,7 +4046,7 @@ function JobDetailView({ job, profile, allJobs, isLiked, isHidden,
                         </div>
                       </div>
                     )}
-                    {jobReqs.length === 0 && (
+                    {!haveLazy && jobReqs.length === 0 && (
                       <div className="jd-rail-skill-empty">
                         Atlas couldn't tag any requirements from this listing.
                         Open the original posting for the full list.
@@ -4334,7 +4432,7 @@ function JobDetailView({ job, profile, allJobs, isLiked, isHidden,
    Ask Atlas — per-job chat advisor. Slides in from the right;
    thread is owned locally and reset when the drawer closes.
    ────────────────────────────────────────────────────────── */
-function AskAtlas({ job, mode, isPro, isDev, onClose }) {
+function AskAtlas({ job, mode, isPro, isDev, scoreData, onClose }) {
   const jobId = job.id || `${job.co || job.company || ''}|${job.role || job.title || ''}`;
   const [history, setHistory] = useState([]);
   const [draft, setDraft] = useState('');
@@ -4385,7 +4483,13 @@ function AskAtlas({ job, mode, isPro, isDev, onClose }) {
 
   const co = job.co || job.company || '—';
   const role = job.role || job.title || 'Untitled role';
-  const score = Math.round(job.score || 0);
+  // Prefer the description-aware lazy score (same number JobCard +
+  // JobDetailView show) so opening AskAtlas never reveals a different
+  // number than the card the user clicked on.
+  const haveLazy = scoreData && typeof scoreData.score === 'number';
+  const score = haveLazy
+    ? Math.max(0, Math.min(100, Math.round(scoreData.score)))
+    : Math.max(0, Math.min(100, Math.round(job.score || 0)));
   // Neutral label — the chat advisor uses whichever provider is configured;
   // surfacing the brand here is just noise.
   const providerLabel = 'AI';
@@ -4500,7 +4604,7 @@ function AskAtlas({ job, mode, isPro, isDev, onClose }) {
    first. Hits POST /api/resume/tailor on mount, renders the
    same TailoredResumeCard the phase-4 batch view uses.
    ────────────────────────────────────────────────────────── */
-function TailorDrawer({ job, mode, isPro, isDev, hasResume, onClose, onOpenDocuments }) {
+function TailorDrawer({ job, mode, isPro, isDev, hasResume, scoreData, onClose, onOpenDocuments }) {
   const jobId = job.id || `${job.co || job.company || ''}|${job.role || job.title || ''}`;
   // stage: 'analyzing' | 'review' | 'generating' | 'result' | 'error'
   const [stage, setStage] = useState('analyzing');
@@ -4570,7 +4674,12 @@ function TailorDrawer({ job, mode, isPro, isDev, hasResume, onClose, onOpenDocum
 
   const co       = job.co || job.company || '—';
   const role     = job.role || job.title || 'Untitled role';
-  const score    = Math.round(job.score || 0);
+  // Same single-source-of-truth pattern as JobDetailView + AskAtlas:
+  // prefer the lazy description-aware score, fall back to job.score.
+  const haveLazy = scoreData && typeof scoreData.score === 'number';
+  const score    = haveLazy
+    ? Math.max(0, Math.min(100, Math.round(scoreData.score)))
+    : Math.max(0, Math.min(100, Math.round(job.score || 0)));
   const provLbl  = mode === 'anthropic' ? 'Claude' : 'Ollama';
 
   const selectedCount = Object.values(selectedKws).filter(Boolean).length;

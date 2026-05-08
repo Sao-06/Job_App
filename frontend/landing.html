@@ -49,14 +49,23 @@ html {
   /* Belt-and-suspenders against horizontal scroll bugs. The scroll-driven
      scrubber sometimes positions decorative elements off-canvas; this
      keeps a stray transform from dragging a horizontal scrollbar across
-     the whole viewport. */
-  overflow-x: hidden;
+     the whole viewport. CRITICAL: use `clip` not `hidden` — `overflow-x:
+     hidden` per spec auto-promotes `overflow-y` to `auto`, which makes
+     <html> a scrolling container and breaks `position: sticky` on
+     descendants (this is what regressed the scrubber's pinned-section
+     animation). `overflow-x: clip` only clips overflowing content
+     without creating a scrolling context. Browser support is
+     Chrome 90+/FF 81+/Safari 16+ — older browsers ignore the rule and
+     fall back to the previous "occasionally a stray scrollbar" behaviour
+     which is far less severe than a broken demo. */
+  overflow-x: clip;
 }
 body {
   font-family: var(--sans); background: var(--bg); color: var(--t1);
   -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
-  letter-spacing: -.005em; overflow-x: hidden;
+  letter-spacing: -.005em;
+  overflow-x: clip;
 }
 /* Common offenders for horizontal scroll on small screens. */
 img, video, iframe, canvas, svg, embed, object {
@@ -1347,6 +1356,14 @@ function Scrubber() {
               <div style={{ textAlign:'center', padding: 30 }}>
                 Demo data couldn't load — refresh the page.<br/>
                 <code style={{ fontFamily:'var(--mono)', fontSize:12, color:'var(--t4)' }}>{dataErr}</code>
+              </div>
+            </div>
+          )}
+          {!data && !dataErr && (
+            <div className="scr-frame active" style={{ color: 'var(--t3)' }}>
+              <div style={{ textAlign:'center', padding: 30, fontFamily:'var(--mono)', fontSize:13, letterSpacing:'.06em', textTransform:'uppercase' }}>
+                <span className="scr-meta-dot" style={{ display:'inline-block', marginRight:10, verticalAlign:'middle' }}/>
+                Loading demo run…
               </div>
             </div>
           )}

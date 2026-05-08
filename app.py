@@ -239,7 +239,16 @@ def _auth_token_delete(token: str) -> None:
 
 @app.get("/")
 def root():
-    return FileResponse("frontend/landing.html")
+    # Same no-cache policy as `/app` — landing.html is the entry point for
+    # marketing visitors AND existing users who navigate to the bare host;
+    # without no-cache headers a single bad CSS deploy can sit cached on
+    # someone's browser indefinitely (this is exactly what hid the
+    # broken-scrubber regression for hours after f74ca22 introduced it).
+    return FileResponse("frontend/landing.html", headers={
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        "Pragma":        "no-cache",
+        "Expires":       "0",
+    })
 
 @app.get("/app")
 def dashboard():
@@ -4294,6 +4303,14 @@ def jobs_feed(request: Request):
     whitelist = _csv(wl_qs if wl_qs is not None else _S.get("whitelist") or "")
 
     from pipeline.job_search import search, SearchFilters
+    # Fall-through default for "include unknowns" flags is True. Most
+    # ingested rows have unknown education AND unknown experience because
+    # the source didn't carry a clean tag — a strict IN squashes them all
+    # and produces "0 results" surprises (e.g. searching "marketing" with
+    # the Internship chip returned nothing because internship marketing
+    # roles overwhelmingly carry no experience_level tag).
+    include_unknown_edu = _truthy(qs.get("include_unknown") or "1")
+    include_unknown_exp = _truthy(qs.get("include_unknown_exp") or "1")
     filters = SearchFilters(
         q=qs.get("q") or "",
         location=qs.get("location") or "",
@@ -4304,7 +4321,8 @@ def jobs_feed(request: Request):
         posted_within_days=int(qs["days"]) if qs.get("days") else None,
         blacklist=blacklist,
         whitelist=whitelist,
-        include_unknown_education=_truthy(qs.get("include_unknown") or "1"),
+        include_unknown_education=include_unknown_edu,
+        include_unknown_experience=include_unknown_exp,
         # `industry` is a comma-separated list of job_category labels. The chip
         # UI ships canonical labels (engineering, sales, healthcare, …) so this
         # is the same shape as `exp`.

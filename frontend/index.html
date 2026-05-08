@@ -4427,6 +4427,15 @@ code { font-family: var(--mono); font-size: 14px; background: var(--bg-3); paddi
 }
 .hero-eyebrow-sep { color: var(--t4); margin: 0 2px }
 .hero-streak { color: #fbbf24; display: inline-flex; align-items: center; gap: 4px }
+/* Honest replacement for the old fake-streak chip — surfaces a real
+   live count (high-fit roles in the queue) instead of fabricating a
+   "X-day streak" from data the backend never tracked. Renders only
+   when `matches > 0` so it never reads "0 high-fit" filler. */
+.hero-eyebrow-stat {
+  color: var(--accent2); display: inline-flex; align-items: center; gap: 5px;
+  font-variant-numeric: tabular-nums;
+}
+.hero-eyebrow-stat svg { color: var(--accent2) }
 .hero-pulse {
   width: 8px; height: 8px; border-radius: 50%; background: var(--good);
   animation: pulse-soft 1.6s ease-in-out infinite; flex-shrink: 0;
@@ -4513,17 +4522,32 @@ code { font-family: var(--mono); font-size: 14px; background: var(--bg-3); paddi
 
 .hero-right { position: relative }
 .hero-ring { position: relative; width: 180px; height: 180px }
+/* Constrain the inner text-stack to the area inside the ring stroke
+   (~120px circle inside the 148px stroke ring), so long facts can't
+   bleed past the visible circle. Padding-x guarantees the text stops
+   before the curve regardless of font-size. */
 .hero-ring-c {
   position: absolute; inset: 0; display: flex; flex-direction: column;
   align-items: center; justify-content: center; pointer-events: none;
+  text-align: center; padding: 0 22px;
 }
 .hrc-pct {
-  font-family: var(--serif); font-size: 50px; line-height: 1;
+  font-family: var(--serif); font-size: 46px; line-height: 1;
   color: var(--t1); letter-spacing: -.04em;
+  font-variant-numeric: tabular-nums;
 }
-.hrc-pct i { font-size: 20px; color: var(--t3); font-style: normal; margin-left: 1px; vertical-align: super }
-.hrc-lbl { font-family: var(--mono); font-size: 12px; letter-spacing: .12em; color: var(--t3); text-transform: uppercase; margin-top: 6px }
-.hrc-sub { font-size: 13px; color: var(--t3); margin-top: 4px; text-align: center }
+.hrc-pct i { font-size: 18px; color: var(--t3); font-style: normal; margin-left: 1px; vertical-align: super }
+.hrc-lbl {
+  font-family: var(--mono); font-size: 10.5px; font-weight: 700;
+  letter-spacing: .18em; color: var(--accent-h);
+  text-transform: uppercase; margin-top: 5px;
+}
+.hrc-sub {
+  font-size: 11.5px; color: var(--t3); margin-top: 2px;
+  font-family: var(--mono); letter-spacing: .04em;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
 
 /* ────────────────────────────────────────────────────────────────────────
    COCKPIT HUD STRIP
@@ -7202,6 +7226,208 @@ code { font-family: var(--mono); font-size: 14px; background: var(--bg-3); paddi
 @keyframes jd-skel-shimmer {
   0%   { background-position: 200% 0; }
   100% { background-position: -200% 0; }
+}
+
+/* ────────────────────────────────────────────────────────────
+   JD EMPTY-STATE CARD
+   Renders when Atlas can't pull the full posting body (CAPTCHA,
+   JS-only render, auth wall on the source). Replaces the dead
+   space we used to leave there with: a clear "we couldn't read
+   it" message + the metadata we DO have (tagged requirements,
+   key facts) + prominent CTAs to read on source / ask Atlas /
+   tailor. Editorial / refined tone — treats the gap as a
+   deliberate handoff rather than an error wall.
+   ──────────────────────────────────────────────────────────── */
+.jd-empty-card {
+  position: relative;
+  background:
+    radial-gradient(120% 100% at 0% 0%, var(--accent2-d, rgba(34,229,255,.08)) 0%, transparent 50%),
+    radial-gradient(120% 100% at 100% 100%, var(--accent-d, rgba(124,92,255,.08)) 0%, transparent 50%),
+    var(--surface);
+  border: 1px solid var(--bdr);
+  border-radius: 16px;
+  padding: 28px 32px;
+  display: flex; flex-direction: column; gap: 18px;
+  overflow: hidden;
+}
+/* Hairline accent rule along the top — same hue as the rail breakdown
+   so the card reads as a sibling, not an error popup. */
+.jd-empty-card::before {
+  content: ''; position: absolute; left: 0; right: 0; top: 0; height: 1px;
+  background: linear-gradient(90deg, transparent 0%, var(--accent2) 30%, var(--accent-h) 70%, transparent 100%);
+  opacity: .55;
+}
+
+.jd-empty-eyebrow {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-family: var(--mono); font-size: 10.5px; font-weight: 700;
+  letter-spacing: .18em; text-transform: uppercase;
+  color: var(--accent2);
+  align-self: flex-start;
+  padding: 5px 11px; border-radius: 999px;
+  background: var(--accent2-d, rgba(34,229,255,.08));
+  border: 1px solid var(--accent2-b, rgba(34,229,255,.32));
+}
+.jd-empty-pulse {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--accent2);
+  box-shadow: 0 0 0 0 var(--accent2);
+  animation: jd-empty-pulse 1.6s ease-out infinite;
+}
+@keyframes jd-empty-pulse {
+  0%,100% { box-shadow: 0 0 0 0 rgba(34,229,255,.55) }
+  60%     { box-shadow: 0 0 0 6px rgba(34,229,255,0) }
+}
+
+.jd-empty-h {
+  font-family: var(--serif); font-weight: 500;
+  font-size: clamp(20px, 2.4vw, 26px);
+  line-height: 1.18;
+  letter-spacing: -.022em;
+  color: var(--t1);
+  margin: 0;
+  max-width: 36ch;
+}
+.jd-empty-lead {
+  margin: 0; font-size: 14.5px; line-height: 1.65;
+  color: var(--t2); max-width: 64ch;
+}
+.jd-empty-lead b { color: var(--t1); font-weight: 600 }
+.jd-empty-code {
+  font-family: var(--mono); font-size: 12.5px;
+  padding: 1px 6px; border-radius: 4px;
+  background: var(--bg-2); border: 1px solid var(--bdr);
+  color: var(--accent-h);
+}
+
+/* Two-column metadata grid — at narrow widths it stacks. */
+.jd-empty-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-top: 4px;
+}
+@media (max-width: 880px) { .jd-empty-grid { grid-template-columns: 1fr } }
+
+.jd-empty-block {
+  background: var(--bg-2);
+  border: 1px solid var(--bdr);
+  border-radius: 12px;
+  padding: 14px 16px;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.jd-empty-block-h {
+  display: flex; align-items: center; gap: 7px;
+  font-family: var(--mono); font-size: 10px; font-weight: 700;
+  letter-spacing: .18em; text-transform: uppercase;
+  color: var(--t3);
+}
+.jd-empty-block-h svg { color: var(--accent-h) }
+.jd-empty-count {
+  margin-left: auto;
+  padding: 1px 6px; border-radius: 999px;
+  background: var(--accent-d); color: var(--accent-h);
+  font-size: 9.5px; font-weight: 800; letter-spacing: .04em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Tagged-requirements as chips. Matched skills get the green "you bring" tone
+   so the user can scan their fit at a glance even without the full description. */
+.jd-empty-chips {
+  display: flex; flex-wrap: wrap; gap: 6px;
+}
+.jd-empty-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 4px 9px; border-radius: 999px;
+  background: var(--bg-3); border: 1px solid var(--bdr);
+  font-size: 12px; color: var(--t2);
+  font-family: var(--sans);
+  letter-spacing: -.005em;
+  transition: transform .12s, border-color .12s;
+}
+.jd-empty-chip:hover { transform: translateY(-1px); border-color: var(--bdr2) }
+.jd-empty-chip.on {
+  background: rgba(61,255,154,.08);
+  border-color: rgba(61,255,154,.30);
+  color: var(--good);
+  font-weight: 500;
+}
+.jd-empty-chip.on svg { color: var(--good) }
+
+/* Definition-list of facts — clean two-column rows */
+.jd-empty-facts {
+  margin: 0;
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  column-gap: 14px; row-gap: 6px;
+}
+.jd-empty-facts dt {
+  font-family: var(--mono); font-size: 10.5px; font-weight: 600;
+  letter-spacing: .14em; text-transform: uppercase;
+  color: var(--t4);
+  align-self: center;
+}
+.jd-empty-facts dd {
+  margin: 0;
+  font-size: 13.5px; line-height: 1.4;
+  color: var(--t1);
+  font-variant-numeric: tabular-nums;
+}
+.jd-empty-source { color: var(--accent-h) !important; font-family: var(--mono); font-size: 12.5px }
+
+/* Action row — primary "Read on source" CTA + ghost siblings */
+.jd-empty-actions {
+  display: flex; flex-wrap: wrap; gap: 10px;
+  margin-top: 6px;
+}
+.jd-empty-cta {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 10px 16px; border-radius: 10px;
+  font-size: 13.5px; font-weight: 600;
+  text-decoration: none; cursor: pointer;
+  transition: transform .12s, box-shadow .15s, border-color .12s, background .12s;
+  font-family: var(--sans);
+  letter-spacing: -.005em;
+}
+.jd-empty-cta.primary {
+  color: #fff; border: 1px solid transparent;
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-h) 100%);
+  box-shadow: 0 8px 22px -8px var(--accent);
+}
+.jd-empty-cta.primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 26px -8px var(--accent-h);
+}
+.jd-empty-cta.primary svg { color: #fff }
+.jd-empty-cta-arrow {
+  font-family: var(--mono); font-size: 13px; font-weight: 700;
+  margin-left: 2px; transition: transform .15s;
+}
+.jd-empty-cta.primary:hover .jd-empty-cta-arrow { transform: translateX(3px) }
+.jd-empty-cta.ghost {
+  background: var(--bg-2); border: 1px solid var(--bdr);
+  color: var(--t2);
+}
+.jd-empty-cta.ghost:hover {
+  color: var(--t1); background: var(--bg-3); border-color: var(--bdr2);
+  transform: translateY(-1px);
+}
+.jd-empty-cta.ghost svg { color: var(--accent-h) }
+
+.jd-empty-hint {
+  margin: 0; padding-top: 10px;
+  border-top: 1px solid var(--bdr);
+  font-size: 12.5px; line-height: 1.5; color: var(--t4);
+  font-style: italic;
+}
+
+/* Light theme — soften the radial gradient so the card doesn't feel
+   over-saturated against the white surface. */
+:root[data-theme="light"] .jd-empty-card {
+  background:
+    radial-gradient(120% 100% at 0% 0%, rgba(0,184,212,.06) 0%, transparent 50%),
+    radial-gradient(120% 100% at 100% 100%, rgba(106,61,255,.06) 0%, transparent 50%),
+    var(--surface);
 }
 
 /* Lead paragraph — short company / role intro pulled from JD */

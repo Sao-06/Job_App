@@ -365,7 +365,7 @@ function PromoStrip({ onClose, text }) {
    Home is the canonical empty hash so /app and /app#home both
    work (we never write #home — only read it). */
 const VALID_PAGES = new Set([
-  'home', 'jobs', 'resume', 'profile', 'agent', 'dev',
+  'home', 'jobs', 'resume', 'documents', 'profile', 'agent', 'dev',
   'feedback', 'settings', 'plans', 'auth',
 ]);
 function pageFromHash() {
@@ -387,11 +387,16 @@ const NAV = [
   { id:'agent',     label:'Agent',     icon:'sparkles' },
   { id:'dev',       label:'Dev Ops',    icon:'square-terminal' },
 ];
+// Documents lives in the utility section right under Plans because it's a
+// library / archive surface, not a primary workflow step. The pipeline is
+// the workflow (Home → Jobs → Resume → Profile → Agent); Documents is
+// where everything the pipeline produces ends up.
 const NAV_UTIL = [
-  { id:'plans',    label:'Plans',    icon:'gem' },
-  { id:'feedback', label:'Feedback', icon:'circle-help' },
-  { id:'settings', label:'Settings', icon:'settings' },
-  { id:'logout',   label:'Sign out', icon:'log-out' },
+  { id:'plans',     label:'Plans',     icon:'gem' },
+  { id:'documents', label:'Documents', icon:'folder-open' },
+  { id:'feedback',  label:'Feedback',  icon:'circle-help' },
+  { id:'settings',  label:'Settings',  icon:'settings' },
+  { id:'logout',    label:'Sign out',  icon:'log-out' },
 ];
 
 function Rail({ page, setPage, counts, isDev, onLogout, navOpen, closeNav }) {
@@ -1785,8 +1790,11 @@ function Onboarding({ onLoaded, isDev, setPage }) {
             <div style={{ marginTop:8, fontSize:16, color:'var(--t1)', fontWeight:500 }}>
               Drop your file or click to browse
             </div>
-            <div style={{ marginTop:4, fontSize:14.5, color:'var(--t3)' }}>PDF · DOCX · TXT</div>
-            <input ref={fileRef} type="file" accept=".pdf,.docx,.txt" style={{ display:'none' }}
+            <div style={{ marginTop:4, fontSize:14.5, color:'var(--t3)' }}>PDF · DOCX · TEX · TXT · MD</div>
+            <div style={{ marginTop:4, fontSize:11.5, color:'var(--t4)', maxWidth:340, lineHeight:1.4 }}>
+              For best format match, upload <b style={{ color:'var(--t2)' }}>.tex</b> or <b style={{ color:'var(--t2)' }}>.docx</b> if you have them — Atlas preserves the original layout exactly. PDF works too: it's matched to the closest template.
+            </div>
+            <input ref={fileRef} type="file" accept=".pdf,.docx,.txt,.tex,.md" style={{ display:'none' }}
               onChange={e => handleFile(e.target.files?.[0])}/>
           </div>
         )}
@@ -1835,7 +1843,7 @@ function ScoreRing({ score }) {
   );
 }
 
-function JobCard({ job, idx, isLiked, onLike, onHide, onAsk, onTailor }) {
+function JobCard({ job, idx, isLiked, onLike, onHide, onAsk, onTailor, onSelect }) {
   // Prefer stable per-job values (set by JobsPage); fall back to idx-based for callers that don't enrich.
   const logo    = job._logo   ?? LOGO_VARIANTS[idx % LOGO_VARIANTS.length];
   const posted  = job._posted ?? POSTED_LABELS[idx % POSTED_LABELS.length];
@@ -1845,15 +1853,34 @@ function JobCard({ job, idx, isLiked, onLike, onHide, onAsk, onTailor }) {
   const stripe  = pct >= 85 ? 'score-high' : pct >= 65 ? 'score-mid' : 'score-low';
   const tags    = (job.skills || '').split(',').map(s => s.trim()).filter(Boolean).slice(0,3);
 
+  // Clicking the card body opens the rich detail sub-page (jobright-style).
+  // Action buttons stop propagation so they keep their existing per-action
+  // behaviour (bookmark, hide, Ask Atlas, Tailor, Quick Apply).
+  const openDetail = (e) => {
+    if (e?.target) {
+      // Don't hijack clicks on links inside the card body (rare today, but
+      // future-proofs us if we add inline links).
+      const a = e.target.closest && e.target.closest('a');
+      if (a) return;
+    }
+    onSelect?.(job);
+  };
+
   return (
-    <div className={'job-card ' + stripe}>
+    <div className={'job-card ' + stripe}
+         onClick={openDetail}
+         role="button"
+         tabIndex={0}
+         onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDetail(e); } }}
+         style={{ cursor: 'pointer' }}
+         title="Click to see full details">
       <div className="job-card-inner">
         <div className="job-body">
           <div className="job-header">
             <CompanyLogo company={job.co} fallbackVariant={logo} size={38}/>
             <div className="job-header-text">
               <div className="job-posted">{posted}</div>
-              <div className="job-title" onClick={() => job.url && window.open(job.url, '_blank')} style={{ cursor:'pointer' }}>
+              <div className="job-title">
                 {job.role || 'Untitled Role'}
               </div>
               <div className="job-company">
@@ -1876,23 +1903,27 @@ function JobCard({ job, idx, isLiked, onLike, onHide, onAsk, onTailor }) {
 
           <div className="job-footer">
             <span className="job-app-count">{(idx * 31 + 47)} applicants</span>
-            <div className="job-footer-actions">
-              <button className="icon-btn" title="Hide" onClick={() => onHide?.(job)}>
+            <div className="job-footer-actions" onClick={e => e.stopPropagation()}>
+              <button className="icon-btn" title="Hide"
+                onClick={e => { e.stopPropagation(); onHide?.(job); }}>
                 <Icon name="eye-off" size={13}/>
               </button>
-              <button className={'icon-btn' + (isLiked ? ' active' : '')} 
-                title={isLiked ? "Unlike" : "Save"} 
-                onClick={() => onLike?.(job)}
+              <button className={'icon-btn' + (isLiked ? ' active' : '')}
+                title={isLiked ? "Unlike" : "Save"}
+                onClick={e => { e.stopPropagation(); onLike?.(job); }}
                 style={isLiked ? { color:'var(--accent-h)', background:'var(--accent-d)', borderColor:'var(--accent-b)' } : {}}>
                 <Icon name="bookmark" size={13} fill={isLiked ? "currentColor" : "none"}/>
               </button>
-              <button className="btn-atlas" onClick={() => onAsk?.(job)}>
+              <button className="btn-atlas"
+                onClick={e => { e.stopPropagation(); onAsk?.(job); }}>
                 <Icon name="sparkles" size={12}/> Ask Atlas
               </button>
-              <button className="btn-tailor" onClick={() => onTailor?.(job)} title="Generate a resume tailored to this job">
+              <button className="btn-tailor" title="Generate a resume tailored to this job"
+                onClick={e => { e.stopPropagation(); onTailor?.(job); }}>
                 <Icon name="wand-2" size={12}/> Tailor
               </button>
-              <button className="btn-primary" onClick={() => job.url && window.open(job.url, '_blank')}>
+              <button className="btn-primary"
+                onClick={e => { e.stopPropagation(); job.url && window.open(job.url, '_blank'); }}>
                 <Icon name="zap" size={12}/> Quick Apply
               </button>
             </div>
@@ -2357,6 +2388,150 @@ function FilterDropdown({ placeholder, value, options, onChange, searchable = tr
   );
 }
 
+/* ──────────────────────────────────────────────────────────
+   Job-detail helpers — shared by JobsPage + JobDetailView.
+   ────────────────────────────────────────────────────────── */
+function _formatPostedAgo(iso) {
+  if (!iso) return '';
+  const t = new Date(iso).getTime();
+  if (!t) return '';
+  const ms = Math.max(0, Date.now() - t);
+  const s = Math.max(1, Math.round(ms / 1000));
+  if (s < 60)         return s + 's ago';
+  const m = Math.round(s / 60);
+  if (m < 60)         return m + 'm ago';
+  const h = Math.round(m / 60);
+  if (h < 24)         return h + 'h ago';
+  const d = Math.round(h / 24);
+  if (d < 30)         return d + 'd ago';
+  return Math.round(d / 30) + 'mo ago';
+}
+
+const _PLATFORM_BY_PREFIX = [
+  ['ats:greenhouse',     'Greenhouse'],
+  ['ats:lever',          'Lever'],
+  ['ats:ashby',          'Ashby'],
+  ['ats:workable',       'Workable'],
+  ['api:themuse',        'The Muse'],
+  ['api:remoteok',       'RemoteOK'],
+  ['api:jobicy',         'Jobicy'],
+  ['api:himalayas',      'Himalayas'],
+  ['api:remotive',       'Remotive'],
+  ['api:arbeitnow',      'Arbeitnow'],
+  ['api:weworkremotely', 'We Work Remotely'],
+  ['api:usajobs',        'USAJobs'],
+  ['api:adzuna',         'Adzuna'],
+  ['api:reed',           'Reed'],
+  ['api:jooble',         'Jooble'],
+  ['api:findwork',       'Findwork'],
+  ['gh:simplify',        'SimplifyJobs'],
+  ['gh:jobright',        'Jobright'],
+  ['gh:speedyapply',     'SpeedyApply'],
+  ['gh:vanshb03',        'Vanshb03'],
+  ['gh:ouckah',          'Ouckah'],
+  ['gh:pittcsc',         'PittCSC'],
+];
+function _prettyPlatform(source) {
+  if (!source) return 'Direct';
+  const s = String(source);
+  for (const [pref, name] of _PLATFORM_BY_PREFIX) {
+    if (s.startsWith(pref)) return name;
+  }
+  // ats:foo:bar → "Foo"
+  const head = s.split(':')[1] || s.split(':')[0] || s;
+  return head.charAt(0).toUpperCase() + head.slice(1);
+}
+
+function _humanLevel(value, fallback = '—') {
+  if (!value || value === 'unknown') return fallback;
+  return String(value).split(/[-_]/g)
+    .map(p => p.charAt(0).toUpperCase() + p.slice(1))
+    .join(' ');
+}
+
+/* Inline-highlight any user-skill mentions inside arbitrary text.
+   Whole-word case-insensitive match, longest-skill-first so "C" doesn't
+   pre-empt "C++". Returns a React fragment of plain strings + chip spans. */
+function _highlightSkills(text, userSkills) {
+  if (!text) return null;
+  if (!Array.isArray(userSkills) || userSkills.length === 0) return text;
+  const skills = [...userSkills]
+    .filter(s => typeof s === 'string' && s.trim().length >= 2)
+    .sort((a, b) => b.length - a.length);
+  if (skills.length === 0) return text;
+  const escaped = skills.map(s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  // Lookbehind/ahead avoid matching across alphanumeric or punctuation
+  // glued to the skill (so "c" doesn't match inside "scala", and "c++"
+  // matches "C++ programming" cleanly).
+  const re = new RegExp(`(?<![\\w+#.])(${escaped.join('|')})(?![\\w+#.])`, 'gi');
+  const parts = [];
+  let lastIndex = 0;
+  let match;
+  let key = 0;
+  while ((match = re.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push(text.slice(lastIndex, match.index));
+    }
+    parts.push(
+      <span key={`hl-${key++}`} className="jd-skill-inline match">{match[0]}</span>
+    );
+    lastIndex = match.index + match[0].length;
+    if (match[0].length === 0) re.lastIndex += 1;
+  }
+  if (lastIndex < text.length) parts.push(text.slice(lastIndex));
+  return <>{parts}</>;
+}
+
+/* Pull a small set of "tagged" skills from the qualification bullet lines
+   for the chip cloud above the Required/Preferred columns — jobright's
+   "click on the tags" UI. Picks: every profile skill that appears in the
+   qualifications text (=match, green) + a few obvious tech tokens that
+   don't (=gap, gray). */
+function _extractQualSkills(bullets, userSkills, max = 14) {
+  const haystack = (bullets || []).join('\n');
+  if (!haystack.trim()) return { matched: [], gaps: [] };
+
+  const matched = [];
+  const seenLower = new Set();
+  for (const s of userSkills || []) {
+    const sl = String(s).toLowerCase().trim();
+    if (!sl || sl.length < 2 || seenLower.has(sl)) continue;
+    const escaped = sl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(`(?<![\\w+#.])${escaped}(?![\\w+#.])`, 'i');
+    if (re.test(haystack)) {
+      matched.push(s);
+      seenLower.add(sl);
+    }
+  }
+  const STOP = new Set([
+    'the','and','for','with','from','our','your','their','this','that',
+    'these','those','will','have','has','use','using','work','team','more',
+    'who','what','when','where','which','required','preferred','plus',
+    'years','year','must','should','can','any','all','one','two','three',
+    'four','five','etc','strong','solid','great','good','familiar','related',
+    'similar','including','design','development','experience','knowledge',
+    'understanding','ability','skills','degree','field','area','various',
+  ]);
+  const gaps = [];
+  const tokenRe = /\b([A-Za-z][A-Za-z0-9+#.\-]{1,28})\b/g;
+  let tm;
+  while ((tm = tokenRe.exec(haystack)) !== null) {
+    const tok = tm[1];
+    const tl  = tok.toLowerCase();
+    if (seenLower.has(tl) || STOP.has(tl) || tl.length < 3) continue;
+    const looksTech = (
+      /[A-Z][a-z]+[A-Z]/.test(tok)               // CamelCase
+      || /[+#.]/.test(tok)                        // C++, C#, .NET
+      || (tok === tok.toUpperCase() && tok.length >= 2 && tok.length <= 6)
+    );
+    if (!looksTech) continue;
+    seenLower.add(tl);
+    gaps.push(tok);
+    if (matched.length + gaps.length >= max) break;
+  }
+  return { matched, gaps };
+}
+
 function JobsPage({ state, refresh, setPage }) {
   const [tab, setTab]           = useState('recommended');
   const [searchQuery, setQuery] = useState('');
@@ -2365,6 +2540,10 @@ function JobsPage({ state, refresh, setPage }) {
   const [runLabel, setRunLabel] = useState('');
   const [askJob,  setAskJob]    = useState(null);  // active "Ask Atlas" target
   const [tailorJob, setTailorJob] = useState(null); // active "Tailor for this job" target
+  // active "open the rich Overview/Company detail" target. When set, the page
+  // swaps the list view for <JobDetailView/> while keeping the page-head
+  // visible so the user can still hop between Recommended/Liked/etc.
+  const [detailJob, setDetailJob] = useState(null);
 
   // Filter selections — null means "no filter for this dimension"
   const [fLocation,   setFLocation]   = useState(null);
@@ -2822,31 +3001,51 @@ function JobsPage({ state, refresh, setPage }) {
         <span className="page-tab-sep">›</span>
         <div className="page-tabs">
           {[['recommended','Recommended'],['liked','Liked'],['applied','Applied'],['external','External']].map(([id, label]) => (
-            <button key={id} className={'page-tab' + (tab===id ? ' active' : '')} onClick={() => setTab(id)}>
+            <button key={id} className={'page-tab' + (tab===id ? ' active' : '')}
+                    onClick={() => { setTab(id); setDetailJob(null); }}>
               {label}
               {tabCounts[id] != null && <span className="tab-count">{tabCounts[id]}</span>}
             </button>
           ))}
         </div>
         <div className="head-spacer"/>
-        <div className="head-search">
-          <Icon name="search" size={13} color="var(--t3)"/>
-          <input placeholder="Search roles or companies" value={searchQuery} onChange={e => setQuery(e.target.value)}/>
-        </div>
-        <button className="head-cta" onClick={handleRefresh}>
-          {running ? <><span className="spin"/> {runLabel || 'Refreshing'}…</> : <><Icon name="refresh-cw" size={13} color="#fff"/> Refresh</>}
-        </button>
-        {refreshToast && !running && (
-          <span className={'refresh-toast ' + refreshToast.kind} aria-live="polite">
-            <Icon name={refreshToast.kind === 'new' ? 'sparkles' : 'check'} size={11}/>
-            {refreshToast.text}
-          </span>
+        {!detailJob && (
+          <>
+            <div className="head-search">
+              <Icon name="search" size={13} color="var(--t3)"/>
+              <input placeholder="Search roles or companies" value={searchQuery} onChange={e => setQuery(e.target.value)}/>
+            </div>
+            <button className="head-cta" onClick={handleRefresh}>
+              {running ? <><span className="spin"/> {runLabel || 'Refreshing'}…</> : <><Icon name="refresh-cw" size={13} color="#fff"/> Refresh</>}
+            </button>
+            {refreshToast && !running && (
+              <span className={'refresh-toast ' + refreshToast.kind} aria-live="polite">
+                <Icon name={refreshToast.kind === 'new' ? 'sparkles' : 'check'} size={11}/>
+                {refreshToast.text}
+              </span>
+            )}
+            <button className="btn-ghost" onClick={handleDeepSearch} disabled={running} style={{ marginLeft:8 }}>
+              <Icon name="radar" size={12}/> Deep search
+            </button>
+          </>
         )}
-        <button className="btn-ghost" onClick={handleDeepSearch} disabled={running} style={{ marginLeft:8 }}>
-          <Icon name="radar" size={12}/> Deep search
-        </button>
       </div>
 
+      {detailJob ? (
+        <JobDetailView
+          job={detailJob}
+          profile={state?.profile}
+          allJobs={feedJobs}
+          isLiked={liked.has(detailJob.id)}
+          isHidden={hidden.has(detailJob.id)}
+          onClose={() => setDetailJob(null)}
+          onAsk={(j) => setAskJob(j)}
+          onTailor={(j) => setTailorJob(j)}
+          onLike={(j) => handleAction(liked.has(j.id) ? 'unlike' : 'like', j)}
+          onHide={(j) => handleAction('hide', j)}
+          onSwitchTo={(j) => setDetailJob(j)}
+        />
+      ) : (
       <div className="page-body" onScroll={onScroll} style={{ overflowY: 'auto' }}>
         <div className="col-main">
           {/* Filter chips — searchable dropdowns */}
@@ -2914,7 +3113,8 @@ function JobsPage({ state, refresh, setPage }) {
                   onLike={() => handleAction(liked.has(j.id) ? 'unlike' : 'like', j)}
                   onHide={() => handleAction('hide', j)}
                   onAsk={() => setAskJob(j)}
-                  onTailor={() => setTailorJob(j)}/>
+                  onTailor={() => setTailorJob(j)}
+                  onSelect={() => setDetailJob(j)}/>
               ))}
 
               {/* Sentinel — IntersectionObserver fires loadMore when this
@@ -3019,23 +3219,917 @@ function JobsPage({ state, refresh, setPage }) {
           </div>
         </div>
       </div>
+      )}
 
       {askJob && (
-        <AskAtlas job={askJob} mode={state?.mode} isPro={!!state?.is_pro} onClose={() => setAskJob(null)}/>
+        <AskAtlas job={askJob} mode={state?.mode} isPro={!!state?.is_pro}
+                  isDev={!!state?.is_dev} onClose={() => setAskJob(null)}/>
       )}
       {tailorJob && (
         <TailorDrawer job={tailorJob} mode={state?.mode} isPro={!!state?.is_pro}
-                      hasResume={!!state?.profile} onClose={() => setTailorJob(null)}/>
+                      isDev={!!state?.is_dev}
+                      hasResume={!!state?.profile}
+                      onOpenDocuments={() => { setTailorJob(null); setPage('documents'); }}
+                      onClose={() => setTailorJob(null)}/>
       )}
     </>
   );
 }
 
+/* ══════════════════════════════════════════════════════════
+   JOB DETAIL VIEW — Overview + Company sub-page
+   ══════════════════════════════════════════════════════════
+   Replaces the JobsPage list when a card is clicked. All data
+   flows from the existing /api/jobs/feed shape — no extra
+   fetches. Match analysis is derived client-side from the
+   current profile (top_hard_skills + target_titles + location)
+   so the score breakdown stays in sync with the score on
+   the JobCard ring without round-tripping the LLM rubric. */
+
+function JobDetailView({ job, profile, allJobs, isLiked, isHidden,
+                          onClose, onAsk, onTailor, onLike, onHide,
+                          onSwitchTo }) {
+  const [tab, setTab] = useState('overview');
+  const bodyRef = useRef(null);
+
+  // ── Live-fetched detail payload — full description + parsed sections + Wikipedia ──
+  // The list view's job DTOs are intentionally metadata-only (description
+  // bodies were dropped at ingest to keep the SQLite index lean). This
+  // detail view re-fetches the full posting from the upstream source on
+  // demand and parses it into responsibilities/required/preferred buckets,
+  // plus a Wikipedia-derived company summary. Both are cached server-side
+  // so opening the same posting twice never re-hits the upstream APIs.
+  const [details,        setDetails]        = useState(null);
+  const [detailsLoading, setDetailsLoading] = useState(false);
+  const [detailsError,   setDetailsError]   = useState(null);
+
+  // Esc closes — but skip when AskAtlas / TailorDrawer is open over us
+  // (those drawers manage their own Esc and would double-fire).
+  useEffect(() => {
+    const onKey = e => {
+      if (e.key !== 'Escape') return;
+      if (document.querySelector('.ask-overlay, .tailor-overlay')) return;
+      onClose?.();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  // Reset to Overview tab + scroll to top whenever the active job changes
+  // (covers both first-open and "switch to another role" from the Company tab).
+  useEffect(() => {
+    setTab('overview');
+    if (bodyRef.current) bodyRef.current.scrollTop = 0;
+  }, [job?.id]);
+
+  // Fetch the live detail payload whenever the active job id changes.
+  // The /api/jobs/{id}/details endpoint composes (a) full description from
+  // the source's per-job API and (b) Wikipedia company summary. Skip the
+  // fetch when the id is empty (defensive — shouldn't happen in practice).
+  useEffect(() => {
+    if (!job?.id) {
+      setDetails(null);
+      setDetailsError(null);
+      setDetailsLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setDetails(null);
+    setDetailsError(null);
+    setDetailsLoading(true);
+    api.get(`/api/jobs/${encodeURIComponent(job.id)}/details`, { timeoutMs: 25000 })
+      .then(d => { if (!cancelled) setDetails(d); })
+      .catch(err => { if (!cancelled) setDetailsError(err?.message || 'Could not load job details'); })
+      .finally(() => { if (!cancelled) setDetailsLoading(false); });
+    return () => { cancelled = true; };
+  }, [job?.id]);
+
+  // ── Skill alignment, computed client-side from the profile ───────────
+  const userSkills = (profile?.top_hard_skills || [])
+    .map(s => String(s).toLowerCase().trim()).filter(Boolean);
+  const userSkillsSet = new Set(userSkills);
+  const jobReqs = String(job.skills || '')
+    .split(',').map(s => s.trim()).filter(Boolean);
+
+  const matched = [];
+  const gaps    = [];
+  for (const r of jobReqs) {
+    const lr = r.toLowerCase();
+    const hit = userSkillsSet.has(lr) ||
+                userSkills.some(s => s && (lr.includes(s) || s.includes(lr)));
+    (hit ? matched : gaps).push(r);
+  }
+  const skillPct = jobReqs.length
+    ? Math.round((matched.length / jobReqs.length) * 100)
+    : (userSkills.length ? 50 : 0);
+
+  // ── Title alignment vs. profile target_titles ────────────────────────
+  const targetTitles = (profile?.target_titles || []).map(t => String(t).toLowerCase());
+  const titleLower   = String(job.role || '').toLowerCase();
+  let titlePct = 0;
+  for (const t of targetTitles) {
+    const toks = t.split(/\s+/).filter(w => w.length > 2);
+    if (!toks.length) continue;
+    const hits = toks.filter(w => titleLower.includes(w)).length;
+    titlePct = Math.max(titlePct, Math.round((hits / toks.length) * 100));
+  }
+  if (!targetTitles.length) titlePct = 60;
+
+  // ── Location & seniority fit ─────────────────────────────────────────
+  const profileLoc = (profile?.location || '').toLowerCase().split(',')[0].trim();
+  const jobLoc     = String(job.loc || '').toLowerCase();
+  const locFitGeneric = /united states|usa|us|north america|remote|anywhere/i.test(job.loc || '');
+  const profileLocHit = profileLoc && jobLoc.includes(profileLoc);
+  const locPct = job.remote
+    ? 100
+    : profileLocHit ? 95
+    : locFitGeneric ? 75
+    : 50;
+
+  // ── Overall match metadata ───────────────────────────────────────────
+  const score = Math.max(0, Math.min(100, Math.round(job.score || 0)));
+  const verdict =
+      score >= 85 ? { label: 'Strong Match', tone: 'good' }
+    : score >= 70 ? { label: 'Good Match',   tone: 'accent' }
+    : score >= 55 ? { label: 'Fair Match',   tone: 'warn' }
+    :              { label: 'Reach Match',  tone: 'bad' };
+  const ringColor =
+      score >= 85 ? 'var(--good)'
+    : score >= 70 ? 'var(--accent-h)'
+    : score >= 55 ? 'var(--warn)'
+    :              'var(--bad)';
+
+  const RING_R = 86, RING_C = 2 * Math.PI * RING_R;
+  const ringOff = RING_C - (RING_C * score / 100);
+  const gradId  = `jd-ring-grad-${(job.id || '').replace(/[^a-zA-Z0-9]/g, '') || 'x'}`;
+
+  // ── Quick chips & meta ───────────────────────────────────────────────
+  const postedAgo      = job.posted ? _formatPostedAgo(job.posted) : (job._posted || 'recently');
+  const platformPretty = _prettyPlatform(job.source);
+  const expHuman       = _humanLevel(job.exp || job._exp || '', 'Open level');
+  const eduHuman       = _humanLevel(job.edu || '', 'Any education');
+  const remoteLabel    = job.remote ? 'Remote-friendly' : (job._model || 'Onsite / Hybrid');
+  const cit            = String(job.cit || '').toLowerCase();
+
+  // ── Industry chips (first few requirements as a proxy) ───────────────
+  const industryRaw = jobReqs.slice(0, 5);
+
+  // ── Other roles at this company from the loaded feed ─────────────────
+  const otherRoles = (allJobs || [])
+    .filter(j => (j.co || '').toLowerCase() === (job.co || '').toLowerCase()
+                  && j.id !== job.id)
+    .slice(0, 6);
+
+  // ── Company external lookups ─────────────────────────────────────────
+  const companyHost = companyDomain(job.co);
+  const companyUrl  = companyHost ? `https://${companyHost}` : null;
+  const lookups = [
+    { id: 'web',        ic: 'globe',     label: 'Company website',
+      url: companyUrl,  hint: companyHost || 'Direct site',  disabled: !companyUrl },
+    { id: 'linkedin',   ic: 'briefcase', label: 'LinkedIn',
+      url: `https://www.linkedin.com/company/${encodeURIComponent(job.co || '')}`,
+      hint: 'Profile · employees · followers' },
+    { id: 'crunchbase', ic: 'building-2', label: 'Crunchbase',
+      url: `https://www.crunchbase.com/textsearch?q=${encodeURIComponent(job.co || '')}`,
+      hint: 'Funding · investors · status' },
+    { id: 'wiki',       ic: 'book-open', label: 'Wikipedia',
+      url: `https://en.wikipedia.org/wiki/Special:Search?search=${encodeURIComponent(job.co || '')}`,
+      hint: 'Background · history' },
+    { id: 'glassdoor',  ic: 'star',      label: 'Glassdoor',
+      url: `https://www.glassdoor.com/Search/results.htm?keyword=${encodeURIComponent(job.co || '')}`,
+      hint: 'Reviews · ratings · salary data' },
+    { id: 'news',       ic: 'newspaper', label: 'Recent news',
+      url: `https://news.google.com/search?q=${encodeURIComponent((job.co || '') + ' company')}`,
+      hint: 'Press · announcements' },
+  ];
+
+  // ── Action handlers ──────────────────────────────────────────────────
+  const handleApply = () => job.url && window.open(job.url, '_blank');
+  const handleShare = async () => {
+    if (job.url && navigator.clipboard) {
+      try { await navigator.clipboard.writeText(job.url); } catch (_) {}
+    }
+  };
+
+  const reasonText = matched.length
+    ? <>You match <b>{matched.length}</b> of <b>{jobReqs.length}</b> tagged requirements
+        {targetTitles.length && titlePct >= 80 ? <>, and the role aligns with your target titles.</> : <>.</>}
+        {' '}Tailor your résumé to surface those skills first.</>
+    : (jobReqs.length === 0
+        ? <>Atlas couldn't tag any requirements from this listing — open the original posting for the full requirements list.</>
+        : <>None of your top-hard skills match the listed tags. Consider adding the missing keywords (right column) before applying.</>);
+
+  return (
+    <div className="jd-shell" role="region" aria-label="Job detail">
+      <div className="jd-bar">
+        <button className="jd-back" onClick={onClose} title="Back to jobs (Esc)">
+          <Icon name="arrow-left" size={13}/>
+          <span>Back</span>
+        </button>
+
+        <div className="jd-tabs" role="tablist">
+          <button role="tab" aria-selected={tab === 'overview'}
+                  className={'jd-tab' + (tab === 'overview' ? ' active' : '')}
+                  onClick={() => setTab('overview')}>
+            <Icon name="layout-grid" size={11}/> Overview
+          </button>
+          <button role="tab" aria-selected={tab === 'company'}
+                  className={'jd-tab' + (tab === 'company' ? ' active' : '')}
+                  onClick={() => setTab('company')}>
+            <Icon name="building-2" size={11}/> Company
+          </button>
+        </div>
+
+        <span className="jd-bar-meta" title="Composite match score">
+          <span>match</span><b style={{ color: ringColor }}>{score}</b>
+        </span>
+
+        <div className="jd-spacer"/>
+
+        <button className="jd-bar-icon" title="Copy job link" onClick={handleShare}>
+          <Icon name="share-2" size={13}/>
+        </button>
+        <button className="jd-bar-icon" title="Open original posting"
+                onClick={() => job.url && window.open(job.url, '_blank')}>
+          <Icon name="external-link" size={13}/>
+        </button>
+        <button className={'jd-bar-icon' + (isLiked ? ' active' : '')}
+                title={isLiked ? 'Saved — click to remove' : 'Save for later'}
+                onClick={() => onLike?.(job)}>
+          <Icon name="bookmark" size={13} fill={isLiked ? 'currentColor' : 'none'}/>
+        </button>
+        <button className="jd-apply" onClick={handleApply} disabled={!job.url}>
+          <Icon name="zap" size={13} color="#fff"/>
+          <span>Apply now</span>
+          <Icon name="arrow-up-right" size={11} color="#fff"/>
+        </button>
+      </div>
+
+      <div className="jd-body" ref={bodyRef}>
+        <div className="jd-page">
+          {tab === 'overview' && (
+            <>
+              {/* Hero */}
+              <section className="jd-hero">
+                <div className="jd-hero-eyebrow">
+                  <span className="jd-eb-dot"/>
+                  <b>Open role</b>
+                  <span className="jd-dot">·</span>
+                  <span>{postedAgo} on {platformPretty}</span>
+                </div>
+
+                <div className="jd-hero-top">
+                  <div className="jd-hero-logo">
+                    <CompanyLogo company={job.co} size={64} fallbackVariant="v2"/>
+                  </div>
+                  <div className="jd-hero-meta">
+                    <div className="jd-hero-co">
+                      <b>{job.co || 'Unknown company'}</b>
+                      <span className="jd-dot">·</span>
+                      <span>{postedAgo}</span>
+                      {platformPretty && (<>
+                        <span className="jd-dot">·</span>
+                        <span className="jd-source-tag">
+                          <Icon name="link-2" size={9}/>{platformPretty}
+                        </span>
+                      </>)}
+                    </div>
+                    <h1 className="jd-hero-title">{job.role || 'Untitled role'}</h1>
+                  </div>
+                </div>
+
+                <div className="jd-hero-quick">
+                  {job.loc && (
+                    <span className="jd-quick-chip">
+                      <Icon name="map-pin" size={12}/>{job.loc}
+                    </span>
+                  )}
+                  <span className={'jd-quick-chip' + (job.remote ? ' cyan' : '')}>
+                    <Icon name="building-2" size={12}/>{remoteLabel}
+                  </span>
+                  <span className="jd-quick-chip accent">
+                    <Icon name="graduation-cap" size={12}/>{expHuman}
+                  </span>
+                  {eduHuman !== 'Any education' && (
+                    <span className="jd-quick-chip">
+                      <Icon name="book-open" size={12}/>{eduHuman}
+                    </span>
+                  )}
+                  {cit === 'yes' && (
+                    <span className="jd-quick-chip warn">
+                      <Icon name="shield" size={12}/>US citizenship required
+                    </span>
+                  )}
+                  {cit === 'no' && (
+                    <span className="jd-quick-chip good">
+                      <Icon name="globe" size={12}/>Open to non-citizens
+                    </span>
+                  )}
+                  {job.salary && job.salary !== 'Unknown' && (
+                    <span className="jd-quick-chip good">
+                      <Icon name="dollar-sign" size={12}/>{job.salary}
+                    </span>
+                  )}
+                </div>
+
+                {industryRaw.length > 0 && (
+                  <div className="jd-hero-industry">
+                    {industryRaw.map((tag, i) => (
+                      <span key={i} className="jd-industry-chip">{tag}</span>
+                    ))}
+                  </div>
+                )}
+              </section>
+
+              {/* Match analysis */}
+              <section className="jd-match">
+                <div className="jd-match-ring">
+                  <svg viewBox="0 0 200 200">
+                    <defs>
+                      <linearGradient id={gradId} x1="0" y1="0" x2="1" y2="1">
+                        <stop offset="0%"  stopColor={ringColor} stopOpacity=".95"/>
+                        <stop offset="100%" stopColor={ringColor} stopOpacity=".55"/>
+                      </linearGradient>
+                    </defs>
+                    <circle cx="100" cy="100" r={RING_R} fill="none"
+                            stroke="rgba(255,255,255,.06)" strokeWidth="9"/>
+                    <circle cx="100" cy="100" r={RING_R} fill="none"
+                            stroke={`url(#${gradId})`}
+                            strokeWidth="9" strokeLinecap="round"
+                            strokeDasharray={RING_C} strokeDashoffset={ringOff}
+                            transform="rotate(-90 100 100)"
+                            style={{ transition: 'stroke-dashoffset 1.4s cubic-bezier(.16,1,.3,1)' }}/>
+                  </svg>
+                  <div className="jd-match-ring-c">
+                    <div className="jd-match-num" style={{ color: ringColor }}>
+                      <CountUp to={score}/><i>%</i>
+                    </div>
+                    <div className={'jd-match-verdict ' + verdict.tone}>
+                      {verdict.label}
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  <div className="jd-match-rows">
+                    <div className="jd-match-row">
+                      <div className="jd-match-row-l">
+                        <Icon name="check-square" size={12}/>Skill match
+                      </div>
+                      <div className="jd-match-bar">
+                        <div className="jd-match-bar-fill" style={{
+                          width: skillPct + '%',
+                          background: 'linear-gradient(90deg, var(--good), var(--accent2))',
+                          boxShadow: '0 0 12px var(--good-d)',
+                        }}/>
+                      </div>
+                      <div className="jd-match-row-r" style={{ color: 'var(--good)' }}>{skillPct}%</div>
+                    </div>
+                    <div className="jd-match-row">
+                      <div className="jd-match-row-l">
+                        <Icon name="target" size={12}/>Title alignment
+                      </div>
+                      <div className="jd-match-bar">
+                        <div className="jd-match-bar-fill" style={{
+                          width: titlePct + '%',
+                          background: 'linear-gradient(90deg, var(--accent), var(--accent3))',
+                          boxShadow: '0 0 12px var(--accent-d)',
+                        }}/>
+                      </div>
+                      <div className="jd-match-row-r" style={{ color: 'var(--accent-h)' }}>{titlePct}%</div>
+                    </div>
+                    <div className="jd-match-row">
+                      <div className="jd-match-row-l">
+                        <Icon name="map-pin" size={12}/>Location & seniority
+                      </div>
+                      <div className="jd-match-bar">
+                        <div className="jd-match-bar-fill" style={{
+                          width: locPct + '%',
+                          background: 'linear-gradient(90deg, var(--accent2), var(--accent-h))',
+                          boxShadow: '0 0 12px var(--accent2-d)',
+                        }}/>
+                      </div>
+                      <div className="jd-match-row-r" style={{ color: 'var(--accent2)' }}>{locPct}%</div>
+                    </div>
+                  </div>
+
+                  <div className="jd-match-reason">{reasonText}</div>
+                </div>
+              </section>
+
+              {/* ── LIVE-FETCHED JOB BODY (description + responsibilities + qualifications + benefits) ── */}
+
+              {/* Loading skeleton */}
+              {detailsLoading && (
+                <section className="jd-section">
+                  <h2 className="jd-section-h">
+                    <span className="jd-section-icon"><Icon name="file-text" size={14}/></span>
+                    Loading the full posting…
+                  </h2>
+                  <div className="jd-jd-loading">
+                    <div className="jd-jd-skel title"/>
+                    <div className="jd-jd-skel"/>
+                    <div className="jd-jd-skel"/>
+                    <div className="jd-jd-skel short"/>
+                    <div className="jd-jd-skel"/>
+                    <div className="jd-jd-skel short"/>
+                  </div>
+                </section>
+              )}
+
+              {/* About this role — short lead paragraph */}
+              {!detailsLoading && details?.lead_paragraph && (
+                <section className="jd-lead-card">
+                  <div className="jd-lead-eyebrow">
+                    <Icon name="file-text" size={11}/>
+                    <span>About this role</span>
+                  </div>
+                  <div className="jd-lead-text">
+                    {_highlightSkills(details.lead_paragraph, profile?.top_hard_skills || [])}
+                  </div>
+                </section>
+              )}
+
+              {/* What you'll do — responsibilities */}
+              {!detailsLoading && (details?.responsibilities || []).length > 0 && (
+                <section className="jd-section">
+                  <h2 className="jd-section-h">
+                    <span className="jd-section-icon"><Icon name="layout-grid" size={14}/></span>
+                    What you'll do
+                  </h2>
+                  <ul className="jd-bullet-list">
+                    {details.responsibilities.map((b, i) => (
+                      <li key={i} className="jd-bullet-item">
+                        <span className="jd-bullet-marker accent">{i + 1}</span>
+                        <span>{_highlightSkills(b, profile?.top_hard_skills || [])}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
+
+              {/* Qualifications — Required + Preferred two-col, with skill chip cloud above */}
+              {!detailsLoading && details && (
+                ((details.required_qualifications  || []).length > 0)
+                || ((details.preferred_qualifications || []).length > 0)
+              ) && (() => {
+                const allQuals = [
+                  ...(details.required_qualifications  || []),
+                  ...(details.preferred_qualifications || []),
+                ];
+                const cloud = _extractQualSkills(allQuals, profile?.top_hard_skills || []);
+                return (
+                  <section className="jd-section">
+                    <h2 className="jd-section-h">
+                      <span className="jd-section-icon"><Icon name="check-square" size={14}/></span>
+                      Qualifications
+                    </h2>
+                    {(cloud.matched.length > 0 || cloud.gaps.length > 0) && (
+                      <div className="jd-skill-cloud">
+                        <div className="jd-skill-cloud-h">
+                          <Icon name="zap" size={10}/>
+                          <span>Skills tagged in this posting</span>
+                          <span className="jd-cloud-tip">
+                            Green = you have it · Gray = consider adding
+                          </span>
+                        </div>
+                        {cloud.matched.map((s, i) => (
+                          <span key={`m-${i}`} className="jd-cloud-chip on">
+                            <Icon name="check" size={10}/>{s}
+                          </span>
+                        ))}
+                        {cloud.gaps.map((s, i) => (
+                          <span key={`g-${i}`} className="jd-cloud-chip off">{s}</span>
+                        ))}
+                      </div>
+                    )}
+                    <div className="jd-qual-grid">
+                      {(details.required_qualifications || []).length > 0 && (
+                        <div className="jd-qual-col required">
+                          <div className="jd-qual-col-h">
+                            <Icon name="shield-check" size={11}/>
+                            Required
+                          </div>
+                          <ul className="jd-bullet-list">
+                            {details.required_qualifications.map((b, i) => (
+                              <li key={i} className="jd-bullet-item">
+                                <span className="jd-bullet-marker accent">
+                                  <Icon name="check" size={11}/>
+                                </span>
+                                <span>{_highlightSkills(b, profile?.top_hard_skills || [])}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      {(details.preferred_qualifications || []).length > 0 && (
+                        <div className="jd-qual-col preferred">
+                          <div className="jd-qual-col-h">
+                            <Icon name="star" size={11}/>
+                            Preferred
+                          </div>
+                          <ul className="jd-bullet-list">
+                            {details.preferred_qualifications.map((b, i) => (
+                              <li key={i} className="jd-bullet-item">
+                                <span className="jd-bullet-marker">
+                                  <Icon name="plus" size={11}/>
+                                </span>
+                                <span>{_highlightSkills(b, profile?.top_hard_skills || [])}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                  </section>
+                );
+              })()}
+
+              {/* Benefits & perks — only when the source returned them */}
+              {!detailsLoading && (details?.benefits || []).length > 0 && (
+                <section className="jd-section">
+                  <h2 className="jd-section-h">
+                    <span className="jd-section-icon"><Icon name="sparkles" size={14}/></span>
+                    Benefits &amp; perks
+                  </h2>
+                  <ul className="jd-bullet-list">
+                    {details.benefits.map((b, i) => (
+                      <li key={i} className="jd-bullet-item">
+                        <span className="jd-bullet-marker good">
+                          <Icon name="check" size={11}/>
+                        </span>
+                        <span>{b}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
+
+              {/* Source-not-supported / fetch-error fallback. Shown when the live
+                  fetch returned no description and we have nothing parsed. */}
+              {!detailsLoading && details && !details.has_description
+                  && !details.lead_paragraph
+                  && (details.responsibilities || []).length === 0 && (
+                <section className="jd-no-desc">
+                  <div className="jd-no-desc-icon"><Icon name="file-text" size={20}/></div>
+                  <div className="jd-no-desc-h">
+                    The full posting lives on {platformPretty}
+                  </div>
+                  <div className="jd-no-desc-p">
+                    Atlas indexes <b>{platformPretty}</b> as a metadata-only source —
+                    the responsibilities and qualifications aren't pulled into the
+                    local store. Open the original posting to read the full JD,
+                    or use the skill-alignment block below for the tagged-skills view.
+                  </div>
+                  {job.url && (
+                    <a className="jd-no-desc-cta" href={job.url}
+                       target="_blank" rel="noopener noreferrer">
+                      <Icon name="external-link" size={12} color="#fff"/>
+                      Open on {platformPretty}
+                      <Icon name="arrow-up-right" size={11} color="#fff"/>
+                    </a>
+                  )}
+                </section>
+              )}
+
+              {/* Network-error fallback — distinct from "no source support" */}
+              {!detailsLoading && detailsError && !details && (
+                <section className="jd-no-desc">
+                  <div className="jd-no-desc-icon"
+                       style={{ background:'var(--bad-d)', borderColor:'var(--bad-b)', color:'var(--bad)' }}>
+                    <Icon name="wifi-off" size={20}/>
+                  </div>
+                  <div className="jd-no-desc-h">Couldn't load the full posting</div>
+                  <div className="jd-no-desc-p">{detailsError}</div>
+                  {job.url && (
+                    <a className="jd-no-desc-cta" href={job.url}
+                       target="_blank" rel="noopener noreferrer">
+                      <Icon name="external-link" size={12} color="#fff"/>
+                      Open original
+                    </a>
+                  )}
+                </section>
+              )}
+
+              {/* Skill alignment */}
+              <section className="jd-section">
+                <h2 className="jd-section-h">
+                  <span className="jd-section-icon"><Icon name="check-square" size={14}/></span>
+                  Skill alignment
+                </h2>
+                <div className="jd-skills-grid">
+                  <div className="jd-skills-col match">
+                    <div className="jd-skills-col-h">
+                      <Icon name="check-circle-2" size={11}/>
+                      <span>Skills you have</span>
+                      <span className="jd-skills-count">{matched.length}</span>
+                    </div>
+                    <div className="jd-skills-chips">
+                      {matched.length === 0
+                        ? <span className="jd-skills-empty">No direct overlap detected from this listing's tags.</span>
+                        : matched.map((s, i) => (
+                            <span key={i} className="jd-skill-chip match">
+                              <Icon name="check" size={10}/>{s}
+                            </span>
+                          ))}
+                    </div>
+                  </div>
+                  <div className="jd-skills-col gap">
+                    <div className="jd-skills-col-h">
+                      <Icon name="zap" size={11}/>
+                      <span>Consider adding</span>
+                      <span className="jd-skills-count">{gaps.length}</span>
+                    </div>
+                    <div className="jd-skills-chips">
+                      {gaps.length === 0
+                        ? <span className="jd-skills-empty">You cover the listed requirements.</span>
+                        : gaps.map((s, i) => (
+                            <span key={i} className="jd-skill-chip gap">
+                              <Icon name="plus" size={10}/>{s}
+                            </span>
+                          ))}
+                    </div>
+                  </div>
+                </div>
+                <p className="jd-skills-foot">
+                  Pulled from the job's tagged requirements and matched against your profile's
+                  {' '}<b>{userSkills.length}</b> hard {userSkills.length === 1 ? 'skill' : 'skills'}.
+                  Tailor your résumé from the action panel below to surface the matches first.
+                </p>
+              </section>
+
+              {/* Listed requirements — fallback for sources that don't expose
+                  per-job description APIs (RemoteOK / Adzuna / Jobicy / etc.).
+                  Hidden once we successfully parsed Required/Preferred from a
+                  live ATS fetch since those bullets are richer. */}
+              {jobReqs.length > 0 && !(
+                details && (
+                  (details.required_qualifications  || []).length > 0
+                  || (details.preferred_qualifications || []).length > 0
+                )
+              ) && (
+                <section className="jd-section">
+                  <h2 className="jd-section-h">
+                    <span className="jd-section-icon"><Icon name="list-checks" size={14}/></span>
+                    Tagged requirements
+                  </h2>
+                  <ul className="jd-reqs-list">
+                    {jobReqs.map((r, i) => {
+                      const isMatch = matched.includes(r);
+                      return (
+                        <li key={i} className={'jd-reqs-item' + (isMatch ? ' match' : '')}>
+                          <span className="jd-reqs-item-marker">
+                            {isMatch ? <Icon name="check" size={11}/> : (i + 1)}
+                          </span>
+                          <span>{r}</span>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </section>
+              )}
+
+              {/* Action footer */}
+              <section className="jd-actions-card">
+                <div className="jd-actions-text">
+                  <div className="jd-actions-h">Move on this role</div>
+                  <div className="jd-actions-sub">
+                    Tailor your résumé in seconds, ask Atlas for an angle, then apply directly.
+                  </div>
+                </div>
+                <div className="jd-actions-row">
+                  <button className="jd-action-btn cyan" onClick={() => onTailor?.(job)}>
+                    <Icon name="wand-2" size={12}/> Tailor résumé
+                  </button>
+                  <button className="jd-action-btn" onClick={() => onAsk?.(job)}>
+                    <Icon name="sparkles" size={12}/> Ask Atlas
+                  </button>
+                  <button className="jd-action-btn"
+                          onClick={() => { onHide?.(job); onClose?.(); }}>
+                    <Icon name="eye-off" size={12}/> Hide
+                  </button>
+                  <button className="jd-action-btn primary"
+                          onClick={handleApply} disabled={!job.url}>
+                    <Icon name="zap" size={12} color="#fff"/> Apply now
+                    <Icon name="arrow-up-right" size={11} color="#fff"/>
+                  </button>
+                </div>
+              </section>
+            </>
+          )}
+
+          {tab === 'company' && (
+            <>
+              <section className="jd-company-hero">
+                <div className="jd-company-logo">
+                  <CompanyLogo company={job.co} size={84} fallbackVariant="v3"/>
+                </div>
+                <div className="jd-company-text">
+                  <div className="jd-company-name">{job.co || 'Unknown company'}</div>
+                  {industryRaw.length > 0 && (
+                    <div className="jd-company-tags">
+                      {industryRaw.map((tag, i) => (
+                        <span key={i} className="jd-industry-chip">{tag}</span>
+                      ))}
+                    </div>
+                  )}
+                  {industryRaw.length === 0 && (
+                    <div className="jd-company-tags">
+                      <span className="jd-industry-chip">Indexed via {platformPretty}</span>
+                    </div>
+                  )}
+                  {companyUrl && (
+                    <a className="jd-company-link" href={companyUrl}
+                       target="_blank" rel="noopener noreferrer">
+                      <Icon name="external-link" size={11}/>{companyHost}
+                    </a>
+                  )}
+                </div>
+              </section>
+
+              {/* Wikipedia-derived company summary. Shown only when the live
+                  fetch returned a real summary; otherwise the curated lookup
+                  cards below stand in for the missing background. */}
+              {detailsLoading && (
+                <section className="jd-section">
+                  <h2 className="jd-section-h">
+                    <span className="jd-section-icon"><Icon name="book-open" size={14}/></span>
+                    Loading company background…
+                  </h2>
+                  <div className="jd-jd-loading">
+                    <div className="jd-jd-skel title"/>
+                    <div className="jd-jd-skel"/>
+                    <div className="jd-jd-skel"/>
+                    <div className="jd-jd-skel short"/>
+                  </div>
+                </section>
+              )}
+
+              {!detailsLoading && details?.company_summary && (
+                <section className="jd-co-summary">
+                  {details.company_image && (
+                    <img className="jd-co-summary-img"
+                         src={details.company_image}
+                         alt={job.co || 'Company image'}
+                         loading="lazy"
+                         referrerPolicy="no-referrer"/>
+                  )}
+                  <div className="jd-co-summary-text">
+                    <div className="jd-co-summary-eyebrow">
+                      <Icon name="book-open" size={10}/>
+                      About {job.co || 'this company'}
+                    </div>
+                    <div className="jd-co-summary-h">
+                      {job.co}
+                      {details.company_short_description && (
+                        <span className="jd-co-summary-tag">
+                          — {details.company_short_description}
+                        </span>
+                      )}
+                    </div>
+                    <div className="jd-co-summary-body">
+                      {details.company_summary}
+                    </div>
+                    {details.company_wiki_url && (
+                      <div className="jd-co-summary-cite">
+                        Source: <a href={details.company_wiki_url}
+                                    target="_blank" rel="noopener noreferrer">Wikipedia</a>
+                        {' · cached locally for 24 h'}
+                      </div>
+                    )}
+                  </div>
+                </section>
+              )}
+
+              <section className="jd-section">
+                <h2 className="jd-section-h">
+                  <span className="jd-section-icon"><Icon name="info" size={14}/></span>
+                  At a glance
+                </h2>
+                <div className="jd-fact-grid">
+                  <div className="jd-fact">
+                    <span className="jd-fact-l">Source platform</span>
+                    <span className="jd-fact-v">{platformPretty}</span>
+                    <span className="jd-fact-h">Indexed via the public API</span>
+                  </div>
+                  <div className="jd-fact">
+                    <span className="jd-fact-l">Posted</span>
+                    <span className="jd-fact-v">{postedAgo}</span>
+                    {job.posted && <span className="jd-fact-h">{job.posted}</span>}
+                  </div>
+                  <div className="jd-fact">
+                    <span className="jd-fact-l">Open roles in feed</span>
+                    <span className="jd-fact-v mono">{otherRoles.length + 1}</span>
+                    <span className="jd-fact-h">From the current Jobs index</span>
+                  </div>
+                  <div className="jd-fact">
+                    <span className="jd-fact-l">Salary range</span>
+                    <span className="jd-fact-v">
+                      {job.salary && job.salary !== 'Unknown' ? job.salary : 'Not disclosed'}
+                    </span>
+                    <span className="jd-fact-h">From the original posting</span>
+                  </div>
+                  <div className="jd-fact">
+                    <span className="jd-fact-l">Work location</span>
+                    <span className="jd-fact-v">{job.loc || 'Unspecified'}</span>
+                    <span className="jd-fact-h">{job.remote ? 'Remote-friendly' : 'On-site / hybrid'}</span>
+                  </div>
+                  <div className="jd-fact">
+                    <span className="jd-fact-l">Citizenship</span>
+                    <span className="jd-fact-v">
+                      {cit === 'yes' ? 'US citizenship required'
+                        : cit === 'no' ? 'Open to non-citizens'
+                        : 'Not specified'}
+                    </span>
+                    <span className="jd-fact-h">From the JD inference</span>
+                  </div>
+                </div>
+              </section>
+
+              <section className="jd-section">
+                <h2 className="jd-section-h">
+                  <span className="jd-section-icon"><Icon name="search" size={14}/></span>
+                  Look up the company
+                </h2>
+                <div className="jd-lookup-grid">
+                  {lookups.map(l => l.disabled
+                    ? <div key={l.id} className="jd-lookup"
+                            style={{ opacity: .45, cursor: 'not-allowed' }}>
+                        <span className="jd-lookup-ic"><Icon name={l.ic} size={13}/></span>
+                        <div className="jd-lookup-text">
+                          <span className="jd-lookup-l">{l.label}</span>
+                          <span className="jd-lookup-h">Domain not resolved</span>
+                        </div>
+                      </div>
+                    : <a key={l.id} className="jd-lookup"
+                          href={l.url} target="_blank" rel="noopener noreferrer">
+                        <span className="jd-lookup-ic"><Icon name={l.ic} size={13}/></span>
+                        <div className="jd-lookup-text">
+                          <span className="jd-lookup-l">{l.label}</span>
+                          <span className="jd-lookup-h">{l.hint}</span>
+                        </div>
+                        <Icon name="arrow-up-right" size={11} color="var(--t4)"/>
+                      </a>)}
+                </div>
+              </section>
+
+              <section className="jd-section">
+                <h2 className="jd-section-h">
+                  <span className="jd-section-icon"><Icon name="briefcase" size={14}/></span>
+                  Other roles at {job.co || 'this company'}
+                </h2>
+                {otherRoles.length === 0 ? (
+                  <div className="jd-skills-empty" style={{ padding: '8px 4px', lineHeight: 1.55 }}>
+                    No additional roles for this company in the loaded feed.
+                    The ingester refreshes every 25 seconds — try Refresh on the Jobs tab to widen the pool.
+                  </div>
+                ) : (
+                  <div className="jd-roles-list">
+                    {otherRoles.map(r => {
+                      const sc = Math.round(r.score || 0);
+                      const tone = sc >= 85 ? 'good' : sc >= 70 ? 'accent' : '';
+                      return (
+                        <div key={r.id} className="jd-role-card"
+                             role="button" tabIndex={0}
+                             onClick={() => onSwitchTo?.(r)}
+                             onKeyDown={e => {
+                               if (e.key === 'Enter' || e.key === ' ') {
+                                 e.preventDefault(); onSwitchTo?.(r);
+                               }
+                             }}
+                             title="Open this role">
+                          <CompanyLogo company={r.co} size={32} fallbackVariant="v1"/>
+                          <div className="jd-role-card-text">
+                            <div className="jd-role-card-title">{r.role || 'Untitled role'}</div>
+                            <div className="jd-role-card-meta">
+                              <span>{r.loc || '—'}</span>
+                              {r.posted && <>
+                                <span className="jd-dot">·</span>
+                                <span>{_formatPostedAgo(r.posted)}</span>
+                              </>}
+                            </div>
+                          </div>
+                          <span className={'jd-role-card-score ' + tone}>{sc}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
 /* ──────────────────────────────────────────────────────────
    Ask Atlas — per-job chat advisor. Slides in from the right;
    thread is owned locally and reset when the drawer closes.
    ────────────────────────────────────────────────────────── */
-function AskAtlas({ job, mode, isPro, onClose }) {
+function AskAtlas({ job, mode, isPro, isDev, onClose }) {
   const jobId = job.id || `${job.co || job.company || ''}|${job.role || job.title || ''}`;
   const [history, setHistory] = useState([]);
   const [draft, setDraft] = useState('');
@@ -3107,7 +4201,7 @@ function AskAtlas({ job, mode, isPro, onClose }) {
             <div className="ask-head-meta">
               <div className="ask-head-eyebrow">
                 <Icon name="sparkles" size={10}/> Atlas · {providerLabel}
-                {!isPro && mode === 'anthropic' && <span className="ask-pro-pill">Pro</span>}
+                {mode === 'anthropic' && !isDev && <span className="ask-pro-pill">Soon</span>}
               </div>
               <div className="ask-head-role">{role}</div>
               <div className="ask-head-co">
@@ -3201,11 +4295,14 @@ function AskAtlas({ job, mode, isPro, onClose }) {
    first. Hits POST /api/resume/tailor on mount, renders the
    same TailoredResumeCard the phase-4 batch view uses.
    ────────────────────────────────────────────────────────── */
-function TailorDrawer({ job, mode, isPro, hasResume, onClose }) {
+function TailorDrawer({ job, mode, isPro, isDev, hasResume, onClose, onOpenDocuments }) {
   const jobId = job.id || `${job.co || job.company || ''}|${job.role || job.title || ''}`;
-  const [item, setItem]       = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError]     = useState(null);
+  // stage: 'analyzing' | 'review' | 'generating' | 'result' | 'error'
+  const [stage, setStage] = useState('analyzing');
+  const [analysis, setAnalysis] = useState(null);
+  const [selectedKws, setSelectedKws] = useState({});
+  const [item, setItem] = useState(null);
+  const [error, setError] = useState(null);
 
   useEffect(() => {
     const onKey = e => { if (e.key === 'Escape') onClose?.(); };
@@ -3213,54 +4310,65 @@ function TailorDrawer({ job, mode, isPro, hasResume, onClose }) {
     return () => document.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  // Trigger the tailoring run as soon as the drawer opens. Anthropic mode
-  // can take 15–25 s; Ollama varies with the local model. We surface a
-  // progress checklist while it streams so the wait doesn't feel dead.
+  // Stage 0 → /tailor/analyze on mount. Heuristic-only, ~30s timeout.
   useEffect(() => {
     let cancelled = false;
     if (!hasResume) {
-      setLoading(false);
+      setStage('error');
       setError('Upload a resume first — Atlas needs your profile to tailor against this posting.');
       return () => { cancelled = true; };
     }
-    setLoading(true);
+    setStage('analyzing');
     setError(null);
     setItem(null);
-    // 90s timeout — Claude tool-calling for tailoring runs 15-25s; Ollama on
-    // a slow box can exceed the 30s default and 504 prematurely.
-    api.post('/api/resume/tailor', { job_id: jobId }, { timeoutMs: 90000 })
+    api.post('/api/resume/tailor/analyze', { job_id: jobId }, { timeoutMs: 30000 })
       .then(res => {
         if (cancelled) return;
-        setItem(res?.item || null);
-        setLoading(false);
+        setAnalysis(res);
+        const initial = {};
+        (res.must_have || []).forEach(c => { if (!c.present) initial[c.keyword] = true; });
+        (res.nice_to_have || []).forEach(c => { initial[c.keyword] = false; });
+        setSelectedKws(initial);
+        setStage('review');
       })
       .catch(e => {
         if (cancelled) return;
-        let msg = e?.message || 'Tailoring failed.';
-        // The server returns "Claude tailoring requires the Pro plan…" via
-        // JSONResponse — _handle surfaces it as e.message verbatim. We only
-        // rewrite genuinely-confusing messages.
+        let msg = e?.message || 'Analysis failed.';
         if (/Job not found|API 404/i.test(msg)) {
           msg = 'This job is no longer in the index. Refresh the feed and try again.';
         }
         setError(msg);
-        setLoading(false);
+        setStage('error');
       });
     return () => { cancelled = true; };
   }, [jobId, hasResume]);
+
+  const generate = (skipReview = false) => {
+    setStage('generating');
+    setError(null);
+    const selected = skipReview
+      ? (analysis?.must_have || []).filter(c => !c.present).map(c => c.keyword)
+      : Object.entries(selectedKws).filter(([_, v]) => v).map(([k]) => k);
+    api.post('/api/resume/tailor',
+            { job_id: jobId, selected_keywords: selected },
+            { timeoutMs: 120000 })
+      .then(res => { setItem(res?.item || null); setStage('result'); })
+      .catch(e => {
+        let msg = e?.message || 'Tailoring failed.';
+        if (/Job not found|API 404/i.test(msg)) {
+          msg = 'This job is no longer in the index. Refresh the feed and try again.';
+        }
+        setError(msg);
+        setStage('error');
+      });
+  };
 
   const co       = job.co || job.company || '—';
   const role     = job.role || job.title || 'Untitled role';
   const score    = Math.round(job.score || 0);
   const provLbl  = mode === 'demo' ? 'Demo' : (mode === 'anthropic' ? 'Claude' : 'Ollama');
 
-  const STEPS = [
-    'Reading the full posting and extracting requirements',
-    'Comparing your resume keywords against the JD',
-    'Reordering skills to front-load the strongest matches',
-    'Rewriting experience bullets for this role',
-    'Computing the before/after ATS score',
-  ];
+  const selectedCount = Object.values(selectedKws).filter(Boolean).length;
 
   return (
     <div className="ask-overlay" onClick={onClose}>
@@ -3271,7 +4379,7 @@ function TailorDrawer({ job, mode, isPro, hasResume, onClose }) {
             <div className="ask-head-meta">
               <div className="ask-head-eyebrow">
                 <Icon name="wand-2" size={10}/> Tailor · {provLbl}
-                {!isPro && mode === 'anthropic' && <span className="ask-pro-pill">Pro</span>}
+                {mode === 'anthropic' && !isDev && <span className="ask-pro-pill">Soon</span>}
               </div>
               <div className="ask-head-role">{role}</div>
               <div className="ask-head-co">
@@ -3286,29 +4394,27 @@ function TailorDrawer({ job, mode, isPro, hasResume, onClose }) {
         </header>
 
         <div className="tailor-body">
-          {loading && (
+          {(stage === 'analyzing' || stage === 'generating') && (
             <div className="tailor-loading">
               <div className="tailor-loading-eyebrow">
-                <span className="spin"/> Generating tailored resume…
+                <span className="spin"/>
+                {stage === 'analyzing'
+                  ? ' Reading the job description…'
+                  : ' Generating tailored resume…'}
               </div>
               <div className="tailor-loading-hint">
-                {mode === 'anthropic'
-                  ? 'Claude is doing a careful pass over the JD and your profile. Usually 15–25 seconds.'
-                  : mode === 'ollama'
-                    ? 'Your local model is running — speed depends on the model size and your hardware.'
-                    : 'Demo mode: keyword reorder + ATS score, no LLM. Should finish almost instantly.'}
+                {stage === 'analyzing'
+                  ? 'Comparing JD requirements against your resume — finding the keywords you might want to weave in.'
+                  : (mode === 'anthropic'
+                      ? 'Claude is rewriting bullets and skills with your selected keywords. Usually 15–25 s.'
+                      : (mode === 'ollama'
+                          ? 'Your local model is running — speed depends on the model size and your hardware.'
+                          : 'Demo: deterministic reorder + keyword merge.'))}
               </div>
-              <ol className="tailor-steps">
-                {STEPS.map((s, i) => (
-                  <li key={i} style={{ animationDelay: `${i * 200}ms` }}>
-                    <Icon name="check" size={11}/> {s}
-                  </li>
-                ))}
-              </ol>
             </div>
           )}
 
-          {error && (
+          {stage === 'error' && (
             <div className="tailor-error">
               <Icon name="alert-triangle" size={14}/>
               <div>
@@ -3318,18 +4424,84 @@ function TailorDrawer({ job, mode, isPro, hasResume, onClose }) {
             </div>
           )}
 
-          {item && !loading && !error && (
+          {stage === 'review' && analysis && (
+            <div className="tailor-review">
+              <h4 className="must">Must-have keywords ({(analysis.must_have || []).length})</h4>
+              {(analysis.must_have || []).map((c, i) => (
+                <label key={'m' + i} className="tailor-keyword-row">
+                  <input type="checkbox" checked={!!selectedKws[c.keyword]}
+                         disabled={c.present}
+                         onChange={e => setSelectedKws(s => ({ ...s, [c.keyword]: e.target.checked }))}/>
+                  <span className="kw-name">{c.keyword}</span>
+                  {c.present
+                    ? <span className="kw-pill">already on resume</span>
+                    : <span className="kw-meta">→ {c.suggested_section || 'skills'}</span>}
+                </label>
+              ))}
+
+              <h4 className="nice" style={{ marginTop: 14 }}>Nice-to-have ({(analysis.nice_to_have || []).length})</h4>
+              {(analysis.nice_to_have || []).map((c, i) => (
+                <label key={'n' + i} className="tailor-keyword-row">
+                  <input type="checkbox" checked={!!selectedKws[c.keyword]}
+                         disabled={c.present}
+                         onChange={e => setSelectedKws(s => ({ ...s, [c.keyword]: e.target.checked }))}/>
+                  <span className="kw-name">{c.keyword}</span>
+                  {c.present
+                    ? <span className="kw-pill">already on resume</span>
+                    : <span className="kw-meta">→ {c.suggested_section || 'skills'}</span>}
+                </label>
+              ))}
+
+              <div className="tailor-review-stats">
+                ATS score: <b>{analysis.ats_score_current}</b>
+                {' → estimated after: '}
+                <b className="good">{analysis.estimated_after}</b>
+              </div>
+              <div className="tailor-review-actions">
+                <button onClick={() => generate(true)}>Skip review — generate now</button>
+                <button className="primary" onClick={() => generate(false)}>
+                  Generate with selected ({selectedCount})
+                </button>
+              </div>
+            </div>
+          )}
+
+          {stage === 'result' && item && (
             <div className="tailor-result">
-              {/* Index-fed jobs (job_repo) don't carry a profile-relative
-                  score in their raw row — the score lives on the *feed*
-                  payload that JobsPage already has. Overlay it so the
-                  embedded card's MATCH stat reads correctly without an
-                  extra round-trip. */}
-              <TailoredResumeCard item={{
+              {item.resume_file && (
+                <div role="status"
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 10,
+                    padding: '10px 13px',
+                    marginBottom: 12,
+                    borderRadius: 9,
+                    background: 'var(--good-d)',
+                    border: '1px solid var(--good-b)',
+                    fontSize: 13.5, color: 'var(--t1)',
+                  }}>
+                  <Icon name="check-circle-2" size={14} color="var(--good)"/>
+                  <span style={{ flex: 1, lineHeight: 1.45 }}>
+                    Saved to your <b>Documents</b> library —
+                    <span style={{ color: 'var(--t3)', marginLeft: 4 }}>
+                      <code style={{ fontFamily: 'var(--mono)', fontSize: 12.5 }}>
+                        {String(item.resume_file).split('/').pop()}
+                      </code>
+                    </span>
+                  </span>
+                  {onOpenDocuments && (
+                    <button className="btn-ghost"
+                      style={{ padding: '5px 11px', fontSize: 13 }}
+                      onClick={onOpenDocuments}>
+                      <Icon name="folder-open" size={11}/>
+                      View
+                    </button>
+                  )}
+                </div>
+              )}
+              <TailoredResumePreview item={{
                 ...item,
-                co:    item.co    || co,
-                role:  item.role  || role,
-                loc:   item.loc   || job.loc || job.location || '',
+                co: item.co || co, role: item.role || role,
+                loc: item.loc || job.loc || job.location || '',
                 score: item.score || score || 0,
               }}/>
             </div>
@@ -3337,6 +4509,36 @@ function TailorDrawer({ job, mode, isPro, hasResume, onClose }) {
         </div>
       </aside>
     </div>
+  );
+}
+
+function TailoredResumePreview({ item }) {
+  // The HTML preview file is the EXACT content WeasyPrint rendered to PDF —
+  // green highlights, layout, fonts. Embedding it as an iframe gives a
+  // pixel-equivalent in-page preview without re-rendering on the client.
+  const previewUrl = item.html_preview_url || null;
+  const tplLabel = item.template_id ? String(item.template_id).replace(/_/g, ' ') : null;
+  const isInPlace = item.template_id === 'in_place_latex' || item.template_id === 'in_place_docx';
+  return (
+    <>
+      {previewUrl && (
+        <div style={{ marginBottom: 12 }}>
+          <iframe className="tailor-preview-frame"
+                  src={previewUrl}
+                  title="Tailored resume preview"/>
+          {tplLabel && (
+            <div className="tailor-template-pick">
+              <span>{isInPlace ? 'Mode:' : 'Template:'}</span>
+              <b>{tplLabel}</b>
+              {!isInPlace && item.template_confidence != null && (
+                <span>· {Math.round(item.template_confidence * 100)}% match</span>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+      <TailoredResumeCard item={item}/>
+    </>
   );
 }
 
@@ -3658,30 +4860,175 @@ function RsInsights({ insights }) {
 function RsDeepDive({ insights, profile, onRescan, rescanning }) {
   const text   = insights?.narrative || profile?.critical_analysis || '';
   const titles = profile?.target_titles || [];
+  const metrics     = insights?.metrics     || {};
+  const strengths   = insights?.strengths   || [];
+  const redFlags    = insights?.red_flags   || [];
+  const suggestions = insights?.suggestions || [];
+  const score       = insights?.overall_score;
+  const verified    = !!(insights?.verified_by && insights.verified_by !== 'heuristic');
+  const verifNotes  = (insights?.verification_notes || '').trim();
+
+  // Split narrative on blank lines so each paragraph is a real <p>. Lets the
+  // CSS drop-cap apply only to the first paragraph and gives proper rhythm
+  // between paragraphs without relying on white-space:pre-wrap.
+  const paragraphs = String(text || '')
+    .split(/\n\s*\n+/g)
+    .map(p => p.trim())
+    .filter(Boolean);
+
+  // Pick a pull-quote — the punchiest sentence from the narrative for the
+  // sidecar's editorial highlight slot. Falls back to the verification
+  // notes when the narrative is empty / sparse.
+  const pullQuote = (() => {
+    const src = paragraphs[0] || verifNotes || '';
+    if (!src) return '';
+    const sentences = src.split(/(?<=[.!?])\s+/).filter(s => s.length > 30 && s.length < 220);
+    return sentences[0] || '';
+  })();
+
+  const tileFmt = (val, suffix = '') =>
+    val == null || (typeof val === 'number' && !Number.isFinite(val))
+      ? '—' : `${val}${suffix}`;
+
+  const stats = [
+    { label: 'Quantified',   value: tileFmt(metrics.quantified_pct,  '%'),
+      hint: 'bullets w/ numbers', tone: (metrics.quantified_pct  ?? 0) >= 50 ? 'good' : (metrics.quantified_pct  ?? 0) >= 30 ? 'warn' : 'bad' },
+    { label: 'Action verbs', value: tileFmt(metrics.action_verb_pct, '%'),
+      hint: 'strong leads',       tone: (metrics.action_verb_pct ?? 0) >= 60 ? 'good' : (metrics.action_verb_pct ?? 0) >= 40 ? 'warn' : 'bad' },
+    { label: 'Skill density', value: tileFmt(metrics.skill_density),
+      hint: '/100w',              tone: (metrics.skill_density   ?? 0) >= 6  ? 'good' : (metrics.skill_density   ?? 0) >= 4  ? 'warn' : 'bad' },
+    { label: 'Words',        value: tileFmt(metrics.word_count),
+      hint: 'total',              tone: (metrics.word_count >= 350 && metrics.word_count <= 700) ? 'good' : 'warn' },
+  ];
+
   return (
     <div className="rs-deep fade-in">
-      <article className="rs-narrative">
+      {/* Editorial header — sits above the magazine spread */}
+      <header className="rs-deep-head">
         <div className="rs-narrative-sub">Critical analysis</div>
         <h3 className="rs-narrative-h">A reading of <em>your resume</em></h3>
-        {text
-          ? <div className="rs-narrative-text">{text}</div>
-          : <div className="set-helper">No narrative was generated. Re-scan to produce a detailed write-up.</div>}
-      </article>
-
-      {titles.length > 0 && (
-        <div className="rs-deep-pillsec">
-          <div className="rs-metric-group-h"><span style={{ display:'inline-flex', alignItems:'center', gap:8 }}><Icon name="briefcase" size={12}/>Target roles inferred</span></div>
-          <div className="rs-deep-pills">
-            {titles.map((t, i) => <span key={i} className="skill-pill hard">{t}</span>)}
-          </div>
+        <div className="rs-deep-folio">
+          <span className="rs-deep-folio-rule"/>
+          <span className="rs-deep-folio-label">
+            {verified ? 'AI-verified · cross-checked against the original resume text' : 'Heuristic reading · scan tuned for resume quality signals'}
+          </span>
+          {score != null && (
+            <span className="rs-deep-folio-score">
+              <b>{Math.round(score)}</b><i>/100</i>
+            </span>
+          )}
         </div>
-      )}
+      </header>
 
-      <div className="rs-rerun">
-        <button className="btn-ghost" onClick={onRescan} disabled={rescanning}>
-          {rescanning ? <span className="spin" style={{ width:11, height:11, borderWidth:1.5 }}/> : <Icon name="refresh-cw" size={11}/>}
-          Re-scan & re-verify
-        </button>
+      {/* Two-column magazine spread: narrative + supporting sidecar */}
+      <div className="rs-deep-grid">
+        <article className="rs-narrative">
+          {paragraphs.length > 0
+            ? paragraphs.map((p, i) => (
+                <p key={i} className={'rs-narrative-p' + (i === 0 ? ' rs-lede' : '')}>
+                  {p}
+                </p>
+              ))
+            : <div className="rs-narrative-empty">
+                <Icon name="file-text" size={20} color="var(--t3)"/>
+                <div>
+                  <div className="rs-narrative-empty-h">No narrative yet</div>
+                  <div className="rs-narrative-empty-p">
+                    Re-scan to produce a detailed editorial read of your resume — quantified bullets, action-verb cadence, structural notes, and a recommended next move.
+                  </div>
+                </div>
+              </div>}
+          {pullQuote && paragraphs.length >= 2 && (
+            <aside className="rs-narrative-pull" aria-hidden="true">
+              <span className="rs-narrative-pull-mark">&ldquo;</span>
+              <span>{pullQuote}</span>
+            </aside>
+          )}
+        </article>
+
+        <aside className="rs-deep-aside">
+          {/* Score tile — anchors the sidecar */}
+          {score != null && (
+            <section className="rs-aside-block rs-aside-score">
+              <div className="rs-aside-h"><Icon name="gauge" size={11}/>At a glance</div>
+              <div className="rs-aside-score-body">
+                <div className="rs-aside-score-num">
+                  {Math.round(score)}<i>/100</i>
+                </div>
+                <span className={'rs-aside-score-tag ' + (verified ? 'ok' : 'info')}>
+                  <Icon name={verified ? 'shield-check' : 'sparkles'} size={11}/>
+                  {verified ? 'AI verified' : 'Heuristic'}
+                </span>
+              </div>
+              <ul className="rs-aside-stats">
+                {stats.map(s => (
+                  <li key={s.label} className={'tone-' + s.tone}>
+                    <span className="rs-aside-stat-l">{s.label}</span>
+                    <span className="rs-aside-stat-v">{s.value}</span>
+                    <span className="rs-aside-stat-h">{s.hint}</span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+
+          {/* Target roles inferred */}
+          {titles.length > 0 && (
+            <section className="rs-aside-block">
+              <div className="rs-aside-h"><Icon name="briefcase" size={11}/>Target roles</div>
+              <div className="rs-aside-pills">
+                {titles.slice(0, 8).map((t, i) => (
+                  <span key={i} className="skill-pill hard">{t}</span>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {/* Strengths — green dot list */}
+          {strengths.length > 0 && (
+            <section className="rs-aside-block">
+              <div className="rs-aside-h"><Icon name="check-circle-2" size={11}/>Strengths</div>
+              <ul className="rs-aside-list good">
+                {strengths.slice(0, 4).map((s, i) => <li key={i}>{s}</li>)}
+              </ul>
+            </section>
+          )}
+
+          {/* Red flags — pink dot list */}
+          {redFlags.length > 0 && (
+            <section className="rs-aside-block">
+              <div className="rs-aside-h"><Icon name="alert-triangle" size={11}/>Red flags</div>
+              <ul className="rs-aside-list bad">
+                {redFlags.slice(0, 4).map((s, i) => <li key={i}>{s}</li>)}
+              </ul>
+            </section>
+          )}
+
+          {/* Suggestions — accent dot list */}
+          {suggestions.length > 0 && (
+            <section className="rs-aside-block">
+              <div className="rs-aside-h"><Icon name="zap" size={11}/>Suggestions</div>
+              <ul className="rs-aside-list accent">
+                {suggestions.slice(0, 4).map((s, i) => <li key={i}>{s}</li>)}
+              </ul>
+            </section>
+          )}
+
+          {/* Action card — Re-scan CTA + verification meta */}
+          <section className="rs-aside-block rs-aside-action">
+            <button className="rs-aside-rescan" onClick={onRescan} disabled={rescanning}>
+              {rescanning
+                ? <span className="spin" style={{ width:12, height:12, borderWidth:1.5 }}/>
+                : <Icon name="refresh-cw" size={12} color="#fff"/>}
+              {rescanning ? 'Re-scanning…' : 'Re-scan & re-verify'}
+            </button>
+            <div className="rs-aside-action-hint">
+              {verified
+                ? 'Re-runs the heuristic scanner and asks the configured AI to double-check every claim.'
+                : 'Switch to Anthropic or Ollama in Settings to upgrade this reading from heuristic to AI-verified.'}
+            </div>
+          </section>
+        </aside>
       </div>
     </div>
   );
@@ -3950,7 +5297,7 @@ function ResumePage({ state, refresh, setPage }) {
           {addMenuOpen && !uploading && (
             <div
               className="action-menu fade-in"
-              style={{ position:'absolute', top:'calc(100% + 6px)', right:0, minWidth:200, zIndex:50 }}
+              style={{ position:'absolute', top:'calc(100% + 6px)', right:0, minWidth:240, zIndex:50 }}
             >
               <button
                 className="menu-item"
@@ -3966,6 +5313,9 @@ function ResumePage({ state, refresh, setPage }) {
                 <Icon name="clipboard" size={13}/>
                 <span>Paste text</span>
               </button>
+              <div style={{ padding:'8px 12px', borderTop:'1px solid var(--bdr)', fontSize:11, color:'var(--t4)', lineHeight:1.4 }}>
+                For best format match, upload <b style={{ color:'var(--t3)' }}>.tex</b> or <b style={{ color:'var(--t3)' }}>.docx</b>. PDF works too — matched to the closest template.
+              </div>
             </div>
           )}
         </div>
@@ -4368,6 +5718,590 @@ function ResumePage({ state, refresh, setPage }) {
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════
+   DOCUMENTS PAGE
+   Manages every artifact the pipeline produces (tailored resumes,
+   trackers, run reports, cover letters). Distinct from the Resume
+   page, which manages the user's INPUT resumes. Survives a pipeline
+   reset — only the destructive Settings → "Reset all data" wipes
+   these.
+══════════════════════════════════════════════════════════ */
+
+const _DOC_KIND_META = {
+  resume:       { label: 'Tailored resumes', icon: 'file-text',        tone: 'accent' },
+  cover_letter: { label: 'Cover letters',    icon: 'mail',             tone: 'accent2' },
+  tracker:      { label: 'Trackers',         icon: 'file-spreadsheet', tone: 'good' },
+  report:       { label: 'Run reports',      icon: 'file-line-chart',  tone: 'warn' },
+  other:        { label: 'Other',            icon: 'file',             tone: 'mute' },
+};
+const _DOC_KIND_ORDER = ['resume', 'cover_letter', 'tracker', 'report', 'other'];
+
+function _docExtIcon(ext) {
+  const e = (ext || '').toLowerCase();
+  if (e === 'pdf')  return 'file-text';
+  if (e === 'tex')  return 'file-code-2';
+  if (e === 'md')   return 'file-line-chart';
+  if (e === 'xlsx' || e === 'xls' || e === 'csv') return 'file-spreadsheet';
+  if (e === 'docx' || e === 'doc') return 'file-text';
+  return 'file';
+}
+
+function _formatRelativeTime(iso) {
+  if (!iso) return '';
+  const ms = Date.now() - new Date(iso).getTime();
+  if (!isFinite(ms) || ms < 0) return '';
+  const s = ms / 1000;
+  if (s < 60)        return 'just now';
+  if (s < 3600)      return `${Math.round(s / 60)}m ago`;
+  if (s < 86400)     return `${Math.round(s / 3600)}h ago`;
+  if (s < 86400 * 7) return `${Math.round(s / 86400)}d ago`;
+  return new Date(iso).toLocaleDateString();
+}
+
+function DocumentsPage({ state, refresh, setPage }) {
+  const [docs, setDocs]           = useState(null);
+  const [error, setError]         = useState(null);
+  const [filter, setFilter]       = useState('all');
+  const [search, setSearch]       = useState('');
+  const [busyName, setBusyName]   = useState(null);
+  const [editing, setEditing]     = useState(null);  // {name, content, dirty, saving, ext}
+  const [renaming, setRenaming]   = useState(null);  // {oldName, newName}
+  const [flash, setFlash]         = useState(null);  // {kind, text}
+
+  const loadDocs = useCallback(async () => {
+    try {
+      const r = await api.get('/api/documents');
+      setDocs(r.documents || []);
+      setError(null);
+    } catch (e) {
+      setError(e?.message || 'Failed to load documents');
+    }
+  }, []);
+
+  useEffect(() => { loadDocs(); }, [loadDocs]);
+
+  // Auto-clear the flash banner so it doesn't accumulate ghost confirmations.
+  useEffect(() => {
+    if (!flash) return undefined;
+    const id = setTimeout(() => setFlash(null), 3500);
+    return () => clearTimeout(id);
+  }, [flash]);
+
+  const counts = useMemo(() => {
+    const out = { all: 0 };
+    _DOC_KIND_ORDER.forEach(k => { out[k] = 0; });
+    (docs || []).forEach(d => {
+      out.all += 1;
+      out[d.kind] = (out[d.kind] || 0) + 1;
+    });
+    return out;
+  }, [docs]);
+
+  const filtered = useMemo(() => {
+    if (!docs) return [];
+    let list = docs;
+    if (filter !== 'all') list = list.filter(d => d.kind === filter);
+    const q = search.trim().toLowerCase();
+    if (q) list = list.filter(d => d.name.toLowerCase().includes(q));
+    return list;
+  }, [docs, filter, search]);
+
+  // Group filtered list back into kind buckets so the body always shows the
+  // user's documents organized by purpose, even when the chip selection is
+  // "All". Keeps related artifacts from a single run visually adjacent.
+  const grouped = useMemo(() => {
+    const buckets = new Map();
+    filtered.forEach(d => {
+      if (!buckets.has(d.kind)) buckets.set(d.kind, []);
+      buckets.get(d.kind).push(d);
+    });
+    return _DOC_KIND_ORDER
+      .map(kind => ({ kind, items: buckets.get(kind) || [] }))
+      .filter(g => g.items.length > 0);
+  }, [filtered]);
+
+  const handleDelete = async (doc) => {
+    if (busyName) return;
+    if (!confirm(`Delete ${doc.name}?\n\nThis cannot be undone.`)) return;
+    setBusyName(doc.name);
+    try {
+      await api.delete(`/api/documents/${encodeURIComponent(doc.name)}`);
+      setFlash({ kind: 'ok', text: `Deleted ${doc.name}` });
+      await loadDocs();
+      refresh?.();
+    } catch (e) {
+      setFlash({ kind: 'err', text: e?.message || 'Delete failed' });
+    } finally {
+      setBusyName(null);
+    }
+  };
+
+  const startRename = (doc) => setRenaming({ oldName: doc.name, newName: doc.name });
+  const cancelRename = () => setRenaming(null);
+  const commitRename = async () => {
+    if (!renaming) return;
+    const newName = renaming.newName.trim();
+    if (!newName || newName === renaming.oldName) { setRenaming(null); return; }
+    setBusyName(renaming.oldName);
+    try {
+      await api.post(
+        `/api/documents/${encodeURIComponent(renaming.oldName)}/rename`,
+        { name: newName },
+      );
+      setFlash({ kind: 'ok', text: `Renamed to ${newName}` });
+      setRenaming(null);
+      await loadDocs();
+    } catch (e) {
+      setFlash({ kind: 'err', text: e?.message || 'Rename failed' });
+    } finally {
+      setBusyName(null);
+    }
+  };
+
+  const startEdit = async (doc) => {
+    if (!doc.editable || busyName) return;
+    setBusyName(doc.name);
+    try {
+      const r = await api.get(`/api/documents/${encodeURIComponent(doc.name)}/content`);
+      setEditing({
+        name:    doc.name,
+        ext:     doc.ext,
+        content: r.content || '',
+        dirty:   false,
+        saving:  false,
+      });
+    } catch (e) {
+      setFlash({ kind: 'err', text: e?.message || 'Could not open editor' });
+    } finally {
+      setBusyName(null);
+    }
+  };
+
+  const cancelEdit = () => {
+    if (editing?.dirty && !confirm('Discard unsaved changes?')) return;
+    setEditing(null);
+  };
+
+  const saveEdit = async () => {
+    if (!editing || editing.saving) return;
+    setEditing(e => ({ ...e, saving: true }));
+    try {
+      await api.post(
+        `/api/documents/${encodeURIComponent(editing.name)}/content`,
+        { content: editing.content },
+      );
+      setFlash({ kind: 'ok', text: `Saved ${editing.name}` });
+      setEditing(null);
+      await loadDocs();
+    } catch (e) {
+      setFlash({ kind: 'err', text: e?.message || 'Save failed' });
+      setEditing(prev => prev ? { ...prev, saving: false } : prev);
+    }
+  };
+
+  // Empty state — depends on whether the user has anything generated yet.
+  const isEmpty = docs && docs.length === 0;
+
+  return (
+    <>
+      <div className="page-head">
+        <div>
+          <div className="page-title">Library</div>
+          <div className="page-title-big">Documents</div>
+        </div>
+        <div className="head-spacer"/>
+        <div className="head-search" style={{ width: 220 }}>
+          <Icon name="search" size={13} color="var(--t3)"/>
+          <input
+            placeholder="Filter by name…"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+          />
+        </div>
+        <button
+          className="btn-ghost"
+          onClick={loadDocs}
+          title="Re-scan the session output directory">
+          <Icon name="refresh-cw" size={12}/> Refresh
+        </button>
+      </div>
+
+      <div className="page-body solo" style={{ paddingTop: 14 }}>
+        {/* Filter chips — surfaces buckets with non-zero counts only. */}
+        <div
+          className="filters"
+          style={{ flexWrap: 'wrap', alignItems: 'center', marginBottom: 4 }}>
+          <button
+            className={'page-tab' + (filter === 'all' ? ' active' : '')}
+            onClick={() => setFilter('all')}>
+            All <span className="tab-count">{counts.all}</span>
+          </button>
+          {_DOC_KIND_ORDER.filter(k => counts[k] > 0).map(k => {
+            const meta = _DOC_KIND_META[k];
+            return (
+              <button
+                key={k}
+                className={'page-tab' + (filter === k ? ' active' : '')}
+                onClick={() => setFilter(k)}>
+                <Icon name={meta.icon} size={12}/>
+                {meta.label}
+                <span className="tab-count">{counts[k]}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Soft note when the run-data was reset but documents survived —
+            reassures the user that resetting the pipeline didn't destroy
+            their library. */}
+        <div
+          className="notice-strip"
+          style={{
+            background: 'var(--accent2-d)',
+            borderColor: 'var(--accent2-b)',
+            color: 'var(--t2)',
+          }}>
+          <Icon name="info" size={13} color="var(--accent2)"/>
+          <span>
+            Documents survive a pipeline reset.
+            Use the Agent page's "Reset run" to clear jobs and scoring without
+            losing what you've already generated. The destructive
+            <em style={{ fontStyle: 'normal', fontWeight: 600, margin: '0 4px' }}>
+              Reset all data
+            </em>
+            on Settings <em style={{ fontStyle: 'normal' }}>does</em> wipe these.
+          </span>
+        </div>
+
+        {/* Inline flash for save / rename / delete confirmations + errors. */}
+        {flash && (
+          <div
+            role="status"
+            style={{
+              padding: '9px 12px',
+              borderRadius: 9,
+              fontSize: 13.5,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 7,
+              background: flash.kind === 'ok' ? 'var(--good-d)' : 'var(--bad-d)',
+              border: `1px solid ${flash.kind === 'ok' ? 'var(--good-b)' : 'var(--bad-b)'}`,
+              color:  flash.kind === 'ok' ? 'var(--good)' : 'var(--bad)',
+              alignSelf: 'flex-start',
+            }}>
+            <Icon name={flash.kind === 'ok' ? 'check' : 'alert-triangle'} size={12}/>
+            <span>{flash.text}</span>
+          </div>
+        )}
+
+        {error && (
+          <div className="notice-strip"
+               style={{ background: 'var(--bad-d)', borderColor: 'var(--bad-b)', color: 'var(--bad)' }}>
+            <Icon name="alert-triangle" size={13}/>
+            <span>{error}</span>
+          </div>
+        )}
+
+        {/* Loading skeleton — the list is small (typically <50 items)
+            so a single shimmer block is enough. */}
+        {docs == null && !error && (
+          <div
+            className="data-card"
+            style={{
+              padding: 60, textAlign: 'center', color: 'var(--t3)',
+              fontSize: 14,
+            }}>
+            <span className="spin" style={{ marginRight: 8 }}/>
+            Loading documents…
+          </div>
+        )}
+
+        {/* True empty state — distinguishes "nothing generated yet" from
+            "search/filter returned nothing". */}
+        {isEmpty && (
+          <div
+            className="data-card"
+            style={{
+              padding: '52px 32px', textAlign: 'center', display: 'flex',
+              flexDirection: 'column', alignItems: 'center', gap: 12,
+            }}>
+            <div
+              style={{
+                width: 56, height: 56, borderRadius: 14,
+                background: 'var(--accent-d)', border: '1px solid var(--accent-b)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}>
+              <Icon name="folder-open" size={24} color="var(--accent-h)"/>
+            </div>
+            <div style={{ fontSize: 19, fontWeight: 600 }}>No documents yet</div>
+            <div style={{ fontSize: 14.5, color: 'var(--t2)', maxWidth: 480, lineHeight: 1.55 }}>
+              Tailored resumes, cover letters, trackers, and run reports show up here
+              after you run the agent. Head to the Agent page and click <b>Run all phases</b>.
+            </div>
+            <button className="btn-primary" onClick={() => setPage?.('agent')}>
+              <Icon name="sparkles" size={13} color="#fff"/>
+              Open Agent
+            </button>
+          </div>
+        )}
+
+        {/* No-results state when filters are too tight. */}
+        {docs && docs.length > 0 && filtered.length === 0 && (
+          <div
+            className="data-card"
+            style={{ padding: '36px 24px', textAlign: 'center', color: 'var(--t3)', fontSize: 14 }}>
+            No documents match this filter.
+            {' '}
+            <button
+              className="btn-ghost"
+              style={{ marginLeft: 8 }}
+              onClick={() => { setFilter('all'); setSearch(''); }}>
+              Clear filters
+            </button>
+          </div>
+        )}
+
+        {/* Grouped table view. Each kind gets its own header + rows.
+            Edit / Rename / Download / Delete on the right; the row's
+            click target is the filename which opens in a new tab. */}
+        {grouped.map(({ kind, items }) => {
+          const meta = _DOC_KIND_META[kind];
+          return (
+            <section key={kind} className="data-card" style={{ marginBottom: 4 }}>
+              <header
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 10,
+                  padding: '12px 18px', borderBottom: '1px solid var(--bdr)',
+                  background: 'var(--bg-2)',
+                }}>
+                <Icon name={meta.icon} size={14} color="var(--accent-h)"/>
+                <span
+                  style={{
+                    fontSize: 11.5, fontWeight: 600, letterSpacing: '.08em',
+                    textTransform: 'uppercase', color: 'var(--t2)',
+                    fontFamily: 'var(--mono)',
+                  }}>
+                  {meta.label}
+                </span>
+                <span style={{ fontSize: 13, color: 'var(--t4)' }}>
+                  {items.length} {items.length === 1 ? 'file' : 'files'}
+                </span>
+              </header>
+              <ul
+                style={{
+                  listStyle: 'none', padding: 0, margin: 0,
+                  display: 'flex', flexDirection: 'column',
+                }}>
+                {items.map((d, idx) => {
+                  const isBusy = busyName === d.name;
+                  const isRenaming = renaming?.oldName === d.name;
+                  return (
+                    <li
+                      key={d.name}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 12,
+                        padding: '11px 18px',
+                        borderTop: idx === 0 ? 'none' : '1px solid var(--bdr)',
+                        opacity: isBusy ? 0.55 : 1,
+                        transition: 'opacity .15s, background .15s',
+                      }}
+                      onMouseEnter={e => { if (!isBusy) e.currentTarget.style.background = 'var(--bg-2)'; }}
+                      onMouseLeave={e => { e.currentTarget.style.background = ''; }}>
+                      <span
+                        style={{
+                          width: 32, height: 32, borderRadius: 8,
+                          background: 'var(--bg-3)', border: '1px solid var(--bdr)',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          flexShrink: 0,
+                        }}>
+                        <Icon name={_docExtIcon(d.ext)} size={14} color="var(--t2)"/>
+                      </span>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        {isRenaming ? (
+                          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                            <input
+                              autoFocus
+                              className="set-input"
+                              style={{ width: 360, maxWidth: '60vw' }}
+                              value={renaming.newName}
+                              onChange={e => setRenaming(r => ({ ...r, newName: e.target.value }))}
+                              onKeyDown={e => {
+                                if (e.key === 'Enter') commitRename();
+                                if (e.key === 'Escape') cancelRename();
+                              }}
+                            />
+                            <button className="btn-primary" onClick={commitRename} disabled={!renaming.newName.trim()}>
+                              <Icon name="check" size={11} color="#fff"/> Rename
+                            </button>
+                            <button className="btn-ghost" onClick={cancelRename}>
+                              Cancel
+                            </button>
+                          </div>
+                        ) : (
+                          <>
+                            <a
+                              href={d.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              title={`Open ${d.name}`}
+                              style={{
+                                color: 'var(--t1)',
+                                fontWeight: 500,
+                                fontSize: 14.5,
+                                textDecoration: 'none',
+                                wordBreak: 'break-all',
+                              }}
+                              onMouseEnter={e => { e.currentTarget.style.color = 'var(--accent-h)'; }}
+                              onMouseLeave={e => { e.currentTarget.style.color = 'var(--t1)'; }}>
+                              {d.name}
+                            </a>
+                            <div
+                              style={{
+                                fontSize: 12, color: 'var(--t4)', marginTop: 2,
+                                display: 'flex', gap: 10, fontFamily: 'var(--mono)',
+                              }}>
+                              <span>.{d.ext}</span>
+                              <span>·</span>
+                              <span>{d.size_kb} KB</span>
+                              <span>·</span>
+                              <span title={d.modified}>{_formatRelativeTime(d.modified)}</span>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                      {!isRenaming && (
+                        <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                          {d.editable && (
+                            <button
+                              className="icon-btn"
+                              title="Edit content"
+                              onClick={() => startEdit(d)}
+                              disabled={isBusy}>
+                              <Icon name="pencil" size={13}/>
+                            </button>
+                          )}
+                          <button
+                            className="icon-btn"
+                            title="Rename"
+                            onClick={() => startRename(d)}
+                            disabled={isBusy}>
+                            <Icon name="text-cursor" size={13}/>
+                          </button>
+                          <a
+                            className="icon-btn"
+                            title={`Download ${d.name}`}
+                            href={d.url}
+                            download={d.name}>
+                            <Icon name="download" size={13}/>
+                          </a>
+                          <button
+                            className="icon-btn"
+                            title="Delete"
+                            onClick={() => handleDelete(d)}
+                            disabled={isBusy}
+                            style={{ color: 'var(--bad)' }}>
+                            <Icon name="trash-2" size={13}/>
+                          </button>
+                        </div>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
+          );
+        })}
+      </div>
+
+      {/* In-app editor modal — full-screen overlay so the user has plenty
+          of room. Plain monospace textarea; no syntax highlighting because
+          the SPA is in-browser-Babel and bringing in Monaco/CodeMirror
+          would multiply the bundle weight for what's typically light edits. */}
+      {editing && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Editing ${editing.name}`}
+          onClick={e => { if (e.target === e.currentTarget) cancelEdit(); }}
+          style={{
+            position: 'fixed', inset: 0, zIndex: 1000,
+            background: 'rgba(7, 7, 14, 0.78)',
+            backdropFilter: 'blur(3px)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            padding: 24, animation: 'fade-in-up .18s cubic-bezier(.16,1,.3,1)',
+          }}>
+          <div
+            style={{
+              background: 'var(--surface)',
+              border: '1px solid var(--bdr2)',
+              borderRadius: 14,
+              width: 'min(960px, 100%)',
+              height: 'min(85vh, 760px)',
+              display: 'flex', flexDirection: 'column',
+              boxShadow: '0 20px 60px -10px rgba(0, 0, 0, 0.55)',
+            }}>
+            <header
+              style={{
+                display: 'flex', alignItems: 'center', gap: 12,
+                padding: '14px 20px',
+                borderBottom: '1px solid var(--bdr)',
+              }}>
+              <Icon name={_docExtIcon(editing.ext)} size={16} color="var(--accent-h)"/>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 14.5, fontWeight: 600, color: 'var(--t1)', wordBreak: 'break-all' }}>
+                  {editing.name}
+                </div>
+                <div style={{ fontSize: 12, color: 'var(--t4)', marginTop: 2, fontFamily: 'var(--mono)' }}>
+                  Editing · .{editing.ext} · {(editing.content?.length || 0).toLocaleString()} chars
+                  {editing.dirty && <span style={{ color: 'var(--warn)', marginLeft: 8 }}>● unsaved</span>}
+                </div>
+              </div>
+              <button className="btn-ghost" onClick={cancelEdit} disabled={editing.saving}>
+                <Icon name="x" size={13}/> Cancel
+              </button>
+              <button
+                className="btn-primary"
+                onClick={saveEdit}
+                disabled={editing.saving || !editing.dirty}>
+                {editing.saving
+                  ? <><span className="spin"/> Saving…</>
+                  : <><Icon name="save" size={13} color="#fff"/> Save</>}
+              </button>
+            </header>
+            <textarea
+              autoFocus
+              spellCheck={false}
+              value={editing.content}
+              onChange={e => setEditing(prev => prev ? {
+                ...prev, content: e.target.value, dirty: true,
+              } : prev)}
+              onKeyDown={e => {
+                // Cmd/Ctrl+S saves without leaving the editor.
+                if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+                  e.preventDefault();
+                  saveEdit();
+                }
+              }}
+              style={{
+                flex: 1,
+                resize: 'none',
+                border: 'none', outline: 'none',
+                background: 'var(--bg)',
+                color: 'var(--t1)',
+                fontFamily: 'var(--mono)',
+                fontSize: 13,
+                lineHeight: 1.55,
+                padding: 20,
+                borderBottomLeftRadius: 14,
+                borderBottomRightRadius: 14,
+              }}/>
           </div>
         </div>
       )}
@@ -6533,6 +8467,13 @@ function AgentPage({ state, refresh }) {
   const [errors,  setErrors]  = useState({});
   const [phaseResults, setPhaseResults] = useState({});
   const [phaseLogs, setPhaseLogs] = useState({});
+  const [resetBusy, setResetBusy] = useState(false);
+  const [resetError, setResetError] = useState(null);
+  // True iff this AgentPage instance owns the active SSE EventSource.
+  // Distinguishes "we're driving the phase" from "the server is running it
+  // because we kicked it off in a previous mount" — see the running_phases
+  // sync below.
+  const drivingRef = useRef(false);
 
   const done = useMemo(() => new Set(state?.done || []), [state?.done]);
   const pct  = Math.round((done.size / 7) * 100);
@@ -6540,46 +8481,131 @@ function AgentPage({ state, refresh }) {
   const off = circ - (circ * pct / 100);
   const ringTone = pct === 100 ? 'var(--good)' : pct > 0 ? 'var(--accent-h)' : 'var(--t4)';
 
+  // ── Backend running-phase sync ──────────────────────────────────────────
+  // /api/state.running_phases is the server's source of truth for "what's
+  // executing right now". When the user starts a phase, navigates away,
+  // then comes back, the local `running` state is gone but the worker
+  // thread is still alive on the server. Without this effect, the UI would
+  // wrongly report "idle" while the backend kept churning. We hydrate the
+  // recent-log tail so the user sees continuity, and clear `running` when
+  // the server reports the phase finished.
+  const serverRunningPhases = state?.running_phases || [];
+  const serverRunning = serverRunningPhases[0]?.phase ?? null;
+  useEffect(() => {
+    if (serverRunning != null && running == null && !drivingRef.current) {
+      // Server says a phase is in flight, but we're not driving it.
+      // This is the "navigate away → come back" case.
+      setRunning(serverRunning);
+      setOpen(o => ({ ...o, [serverRunning]: true }));
+      const rec = serverRunningPhases.find(r => r.phase === serverRunning);
+      if (rec?.recent_logs?.length) {
+        setPhaseLogs(p => {
+          // Only hydrate when we don't already have richer local logs —
+          // a concurrent SSE feed will deliver more lines than the
+          // capped server buffer ever does.
+          if ((p[serverRunning] || []).length >= rec.recent_logs.length) return p;
+          return { ...p, [serverRunning]: rec.recent_logs };
+        });
+      }
+    } else if (serverRunning == null && running != null && !drivingRef.current) {
+      // Server reports idle but we still think a phase is running.
+      // Either it finished while we were on another page, or an upstream
+      // error closed the worker. Clear the local indicator — the result
+      // (if any) will surface via state.done / state.error on the next poll.
+      setRunning(null);
+    }
+    // We deliberately depend only on the server-side signal so a local
+    // setRunning(null) inside onDone/onError doesn't immediately re-trigger.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serverRunning, serverRunningPhases.length]);
+
   const startPhase = (n, rerun=false) => {
     if (running) return;
     setRunning(n);
+    drivingRef.current = true;
     setErrors(p => ({ ...p, [n]:null }));
     setOpen(o => ({ ...o, [n]:true }));
     setPhaseLogs(p => ({ ...p, [n]:[] }));
     runPhaseSSE(n, {
       rerun,
       onLog:   m  => setPhaseLogs(p => ({ ...p, [n]:[...(p[n] || []), m.text || m.line || ''] })),
-      onDone:  m  => { setPhaseResults(p => ({ ...p, [n]:m.data || {} })); setRunning(null); refresh(); },
-      onError: e  => { setRunning(null); setErrors(p => ({ ...p, [n]:e.message || 'failed' })); refresh(); },
+      onDone:  m  => {
+        setPhaseResults(p => ({ ...p, [n]:m.data || {} }));
+        setRunning(null); drivingRef.current = false; refresh();
+      },
+      onError: e  => {
+        setRunning(null); drivingRef.current = false;
+        setErrors(p => ({ ...p, [n]:e.message || 'failed' }));
+        refresh();
+      },
     });
+  };
+
+  // Pipeline-only reset. Wipes jobs / scoring / applications / tracker /
+  // report. Preserves resume, profile, settings, and every generated
+  // document. The destructive "reset everything" flow lives on the
+  // Settings page; the Agent page button must never wipe profile data
+  // or delete files the user has already produced.
+  const handleResetRun = async () => {
+    if (resetBusy || running) return;
+    const ok = confirm(
+      'Reset the pipeline run?\n\n'
+      + '✓ Resume, profile, and settings stay intact\n'
+      + '✓ Documents you\'ve generated stay in the Documents page\n'
+      + '✗ Discovered jobs, scores, tailored applications, tracker, and the run report are cleared'
+    );
+    if (!ok) return;
+    setResetBusy(true);
+    setResetError(null);
+    try {
+      await api.post('/api/pipeline/reset', {});
+      // Drop local phase results so the per-phase cards collapse to "idle".
+      setPhaseResults({});
+      setPhaseLogs({});
+      setErrors({});
+      setOpen({});
+      await refresh();
+    } catch (e) {
+      setResetError(e?.message || 'Reset failed');
+      // Auto-clear the inline error so it doesn't linger after the user
+      // resolves whatever blocked the reset (typically: phase still running).
+      setTimeout(() => setResetError(null), 4500);
+    } finally {
+      setResetBusy(false);
+    }
   };
 
   // Run-all uses a local "completed" set so phases finishing mid-loop are
   // tracked correctly (the captured `done` Set otherwise goes stale).
   const runAll = async () => {
     if (running) return;
+    drivingRef.current = true;
     const completed = new Set(done);
-    for (let n = 1; n <= 7; n++) {
-      if (completed.has(n)) continue;
-      const ok = await new Promise(resolve => {
-        setRunning(n);
-        setOpen(o => ({ ...o, [n]:true }));
-        setPhaseLogs(p => ({ ...p, [n]:[] }));
-        runPhaseSSE(n, {
-          onLog:   m => setPhaseLogs(p => ({ ...p, [n]:[...(p[n] || []), m.text || m.line || ''] })),
-          onDone:  m => {
-            setPhaseResults(p => ({ ...p, [n]:m.data || {} }));
-            setRunning(null); refresh();
-            completed.add(n); resolve(true);
-          },
-          onError: e => {
-            setRunning(null);
-            setErrors(p => ({ ...p, [n]:e.message || 'failed' }));
-            refresh(); resolve(false);
-          },
+    try {
+      for (let n = 1; n <= 7; n++) {
+        if (completed.has(n)) continue;
+        const ok = await new Promise(resolve => {
+          setRunning(n);
+          setOpen(o => ({ ...o, [n]:true }));
+          setPhaseLogs(p => ({ ...p, [n]:[] }));
+          runPhaseSSE(n, {
+            onLog:   m => setPhaseLogs(p => ({ ...p, [n]:[...(p[n] || []), m.text || m.line || ''] })),
+            onDone:  m => {
+              setPhaseResults(p => ({ ...p, [n]:m.data || {} }));
+              setRunning(null); refresh();
+              completed.add(n); resolve(true);
+            },
+            onError: e => {
+              setRunning(null);
+              setErrors(p => ({ ...p, [n]:e.message || 'failed' }));
+              refresh(); resolve(false);
+            },
+          });
         });
-      });
-      if (!ok) break;
+        if (!ok) break;
+      }
+    } finally {
+      drivingRef.current = false;
     }
   };
 
@@ -6608,15 +8634,47 @@ function AgentPage({ state, refresh }) {
           <h1 className="agent-h"><em>Atlas</em> runs your entire search.</h1>
         </div>
         <div className="agent-head-r">
-          <button className="btn-ghost" onClick={() => api.post('/api/reset', {}).then(refresh)} disabled={!!running}>
-            <Icon name="rotate-ccw" size={12}/> Reset
+          <button
+            className="btn-ghost"
+            onClick={handleResetRun}
+            disabled={!!running || resetBusy}
+            title="Clear pipeline data only — preserves your resume, profile, settings, and generated documents.">
+            {resetBusy
+              ? <><span className="spin"/> Resetting…</>
+              : <><Icon name="rotate-ccw" size={12}/> Reset run</>}
           </button>
           <button className="head-cta agent-runall" onClick={runAll} disabled={!!running}>
             {running
-              ? <><span className="spin"/> Running phase {running}…</>
+              ? <>
+                  <span className="spin"/>
+                  {drivingRef.current
+                    ? `Running phase ${running}…`
+                    : `Phase ${running} running on server…`}
+                </>
               : <><Icon name="play" size={13} color="#fff"/> Run all phases</>}
           </button>
         </div>
+        {resetError && (
+          <div
+            className="agent-reset-error"
+            role="alert"
+            style={{
+              gridColumn: '1 / -1',
+              marginTop: 10,
+              padding: '8px 12px',
+              borderRadius: 8,
+              background: 'var(--bad-d)',
+              border: '1px solid var(--bad-b)',
+              color: 'var(--bad)',
+              fontSize: 13.5,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+            }}>
+            <Icon name="alert-triangle" size={13}/>
+            <span>{resetError}</span>
+          </div>
+        )}
       </header>
 
       <div className="agent-grid">
@@ -6771,6 +8829,7 @@ function SettingsPage({ state, refresh, setPage }) {
   const [resetError, setResetError] = useState(null);
 
   const isPro = !!state?.is_pro;
+  const isDev = !!state?.is_dev;
   const isCloudModel = name => /cloud$/i.test(name || '');
 
   const handleReset = async () => {
@@ -6802,8 +8861,10 @@ function SettingsPage({ state, refresh, setPage }) {
       setPlanError(null);
       refresh();
     } catch (e) {
-      // 402 Pro plan required: roll back optimistic state, surface inline.
-      if (/Pro plan/i.test(e.message || '')) {
+      // 402 Pro plan required OR 503 coming-soon: roll back optimistic state,
+      // surface inline. The /api/config endpoint emits both — `Pro plan` for
+      // cloud Ollama gating and `coming soon` for Anthropic Claude.
+      if (/Pro plan/i.test(e.message || '') || /coming soon/i.test(e.message || '')) {
         setPlanError(e.message);
         setCfg(prev);
       } else {
@@ -6900,11 +8961,16 @@ function SettingsPage({ state, refresh, setPage }) {
             <div className="set-field">
               <div className="set-label">
                 Model mode
-                {!isPro && <span className="set-label-hint">Claude requires Pro</span>}
+                <span className="set-label-hint">Claude — coming soon</span>
               </div>
               <select className="set-select" value={cfg.mode} onChange={e => update({ mode: e.target.value })}>
-                <option value="anthropic">Anthropic Claude (High quality){isPro ? '' : ' — Pro'}</option>
-                <option value="ollama">Local Ollama (Free/Private)</option>
+                {/* Anthropic stays in the schema for developer testing; non-devs
+                    see it as disabled "Coming soon". The backend rejects the
+                    selection regardless, so this is just UX clarity. */}
+                <option value="anthropic" disabled={!isDev}>
+                  Anthropic Claude{isDev ? ' (developer build)' : ' — Coming soon'}
+                </option>
+                <option value="ollama">Ollama (local + cloud models)</option>
               </select>
             </div>
             {planError && (
@@ -6912,16 +8978,22 @@ function SettingsPage({ state, refresh, setPage }) {
                 <Icon name="lock" size={14}/>
                 <div className="plan-banner-body">
                   <b>{planError}</b>
-                  <span>{/cloud/i.test(planError) ? 'Switch to a local model, or upgrade to unlock cloud models.' : 'Switch your provider, or upgrade to unlock Claude.'}</span>
+                  <span>
+                    {/coming soon/i.test(planError)
+                      ? "Anthropic Claude isn't live yet — Ollama is selected for now."
+                      : 'Switch to a local model, or upgrade to unlock the high-quality cloud models.'}
+                  </span>
                 </div>
-                <button className="plan-banner-cta" onClick={() => setPage && setPage('plans')}>
-                  View plans <Icon name="arrow-right" size={11}/>
-                </button>
+                {!/coming soon/i.test(planError) && (
+                  <button className="plan-banner-cta" onClick={() => setPage && setPage('plans')}>
+                    View plans <Icon name="arrow-right" size={11}/>
+                  </button>
+                )}
               </div>
             )}
-            {cfg.mode === 'anthropic' && (
+            {cfg.mode === 'anthropic' && isDev && (
               <div className="set-field">
-                <div className="set-label">Anthropic API Key</div>
+                <div className="set-label">Anthropic API Key <span className="set-label-hint">developer-only</span></div>
                 <input className="set-input" type="password" placeholder="sk-ant-…" value={cfg.api_key || ''}
                   onChange={e => update({ api_key: e.target.value })}/>
               </div>
@@ -7134,7 +9206,7 @@ function PlansPage({ state, setPage }) {
 
       <div className="page-body solo plans-wrap">
         <div className="plans-eyebrow">
-          <Icon name="zap" size={11}/> One simple split — local LLMs are free, Claude is Pro.
+          <Icon name="zap" size={11}/> Free runs the local models on our server. Pro unlocks the high-quality cloud models.
         </div>
 
         <div className="plans-grid">
@@ -7145,15 +9217,15 @@ function PlansPage({ state, setPage }) {
               <div className="plan-name">Free</div>
               <div className="plan-price"><b>$0</b><span>/forever</span></div>
             </div>
-            <div className="plan-tag">Bring your own local LLM</div>
+            <div className="plan-tag">Local Ollama models on our server</div>
             <ul className="plan-features">
-              <li><Icon name="check" size={13}/> Local Ollama — private, free, your hardware</li>
+              <li><Icon name="check" size={13}/> Local LLMs — small open-weight models hosted on the Pi</li>
               <li><Icon name="check" size={13}/> Full 7-phase pipeline</li>
               <li><Icon name="check" size={13}/> Excel tracker + run reports</li>
-              <li><Icon name="check" size={13}/> Job discovery across all scrapers</li>
+              <li><Icon name="check" size={13}/> Job discovery across 22+ sources</li>
               <li><Icon name="check" size={13}/> Cover letter generation (template)</li>
-              <li className="plan-feature-muted"><Icon name="x" size={13}/> Cloud Ollama models</li>
-              <li className="plan-feature-muted"><Icon name="x" size={13}/> Anthropic Claude provider</li>
+              <li className="plan-feature-muted"><Icon name="x" size={13}/> High-quality cloud models</li>
+              <li className="plan-feature-muted"><Icon name="clock" size={13}/> Anthropic Claude — coming soon</li>
             </ul>
             <button className="plan-cta plan-cta-ghost" disabled>
               {tier === 'free' ? 'Active' : 'Downgrade'}
@@ -7168,15 +9240,15 @@ function PlansPage({ state, setPage }) {
               <div className="plan-name">Pro</div>
               <div className="plan-price"><b>$4</b><span>/month</span></div>
             </div>
-            <div className="plan-tag">Unlock Claude — bring your own API key</div>
+            <div className="plan-tag">High-quality cloud models — sharper scoring &amp; tailoring</div>
             <ul className="plan-features">
               <li><Icon name="check" size={13}/> Everything in Free</li>
-              <li className="plan-feature-hi"><Icon name="sparkles" size={13}/> Anthropic Claude provider unlocked</li>
-              <li className="plan-feature-hi"><Icon name="sparkles" size={13}/> Cloud Ollama models unlocked</li>
+              <li className="plan-feature-hi"><Icon name="sparkles" size={13}/> Cloud Ollama models unlocked (frontier-class quality)</li>
               <li><Icon name="check" size={13}/> Higher-fidelity scoring &amp; tailoring</li>
-              <li><Icon name="check" size={13}/> Better résumé critique &amp; ATS gap analysis</li>
+              <li><Icon name="check" size={13}/> Sharper résumé critique &amp; ATS gap analysis</li>
+              <li><Icon name="check" size={13}/> Faster, more reliable runs (no Pi-hardware ceiling)</li>
               <li><Icon name="check" size={13}/> Priority support</li>
-              <li className="plan-feature-muted"><Icon name="key" size={13}/> Bring your own ANTHROPIC_API_KEY</li>
+              <li className="plan-feature-muted"><Icon name="clock" size={13}/> Anthropic Claude — coming soon, included when it launches</li>
             </ul>
             {tier === 'pro' ? (
               <button className="plan-cta plan-cta-ghost" disabled>Active</button>
@@ -7199,11 +9271,21 @@ function PlansPage({ state, setPage }) {
         <div className="plans-faq">
           <div className="plans-faq-h">FAQ</div>
           <details className="plans-faq-item" open>
-            <summary>Why does Claude cost more if I bring my own key?</summary>
+            <summary>What's the difference between local and cloud models?</summary>
             <div>
-              You pay Anthropic directly for tokens — we don't mark up the LLM. Pro covers the
-              tooling around Claude: scoring rubrics, tailoring prompts, ATS gap analysis, and the
-              orchestration layer that turns a résumé into 50+ tailored applications.
+              The Free tier uses small open-weight models hosted directly on our Pi server —
+              fast, private, and free, but the reasoning depth is limited. Pro upgrades you to
+              the cloud-hosted Ollama Turbo models (proxied through the same daemon), which
+              are dramatically larger and produce noticeably better scoring rubrics, tailoring,
+              and résumé critique. Same pipeline, much sharper output.
+            </div>
+          </details>
+          <details className="plans-faq-item">
+            <summary>When is Claude available?</summary>
+            <div>
+              Anthropic Claude is under active development and will launch at a future date.
+              Pro subscribers will get access automatically when it ships — no separate upgrade
+              or API key needed on your end.
             </div>
           </details>
           <details className="plans-faq-item">
@@ -7211,10 +9293,12 @@ function PlansPage({ state, setPage }) {
             <div>Yes — once Stripe billing is wired in, you'll have a self-serve customer portal. Today, contact the admin.</div>
           </details>
           <details className="plans-faq-item">
-            <summary>What if I run Ollama locally?</summary>
+            <summary>Where do the models actually run?</summary>
             <div>
-              Free plan covers Ollama fully. The whole pipeline works against your local model with
-              zero API costs — just run <code>ollama serve</code> and pick a model in Settings.
+              Both tiers go through the same Ollama daemon on our Pi server. Free uses local
+              models pulled to disk; Pro routes through Ollama Turbo, where the daemon
+              transparently proxies your request to Ollama's hosted servers and streams the
+              answer back. Either way, you don't need to install or run anything yourself.
             </div>
           </details>
         </div>
@@ -8918,6 +11002,7 @@ function App() {
       case 'home':      return <Dashboard state={state} setPage={setPage} refresh={refresh}/>;
       case 'jobs':      return <JobsPage state={state} refresh={refresh} setPage={setPage}/>;
       case 'resume':    return <ResumePage state={state} refresh={refresh} setPage={setPage}/>;
+      case 'documents': return <DocumentsPage state={state} refresh={refresh} setPage={setPage}/>;
       case 'profile':   return <ProfilePage state={state} refresh={refresh} setPage={setPage}/>;
       case 'agent':     return <AgentPage state={state} refresh={refresh}/>;
       case 'dev':       return <DevPage state={state} refresh={refresh}/>;

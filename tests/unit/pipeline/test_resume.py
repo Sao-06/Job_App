@@ -160,7 +160,11 @@ class TestReadResume:
 
 
 class TestSaveTailoredResume:
-    def test_writes_tex_file(self, tmp_path):
+    """v2: _save_tailored_resume dispatches by source_format. The default path
+    (no source_format → template lib) emits HTML preview + PDF; the explicit
+    .tex path emits .tex + (optionally) PDF + HTML preview."""
+
+    def test_default_path_writes_html_preview(self, tmp_path):
         profile = {"name": "Jane Tester", "email": "j@x.com",
                    "top_hard_skills": ["Python", "Verilog"], "education": [],
                    "experience": [], "projects": []}
@@ -168,14 +172,11 @@ class TestSaveTailoredResume:
                     "experience_bullets": [], "ats_keywords_missing": [],
                     "section_order": ["Skills"]}
         job = {"title": "FPGA Intern", "company": "Acme"}
-        out = _save_tailored_resume(job, tailored, profile,
-                                     output_dir=tmp_path)
-        tex_path = tmp_path / out["tex"]
-        assert tex_path.exists()
-        content = tex_path.read_text(encoding="utf-8")
-        assert "Verilog, Python" in content
-        # Filename safe: no special chars.
-        assert "FPGA" in out["tex"] and "Acme" in out["tex"]
+        out = _save_tailored_resume(job, tailored, profile, output_dir=tmp_path)
+        assert out["html_preview"] is not None
+        html = (tmp_path / out["html_preview"]).read_text(encoding="utf-8")
+        assert "Verilog" in html and "Python" in html
+        assert "FPGA" in out["base"] and "Acme" in out["base"]
 
     def test_pdf_or_skipped(self, tmp_path):
         profile = {"name": "Jane Tester", "education": [], "experience": [],
@@ -188,7 +189,7 @@ class TestSaveTailoredResume:
         # Either a PDF was produced (reportlab path) or it's None (no backend).
         assert out["pdf"] is None or (tmp_path / out["pdf"]).exists()
 
-    def test_with_latex_source_uses_apply_tailoring(self, tmp_path):
+    def test_with_latex_source_in_place_path(self, tmp_path):
         profile = {"name": "Jane Tester", "education": [], "experience": [],
                    "projects": [], "top_hard_skills": []}
         tailored = {"skills_reordered": ["Foo", "Bar"],
@@ -200,6 +201,10 @@ class TestSaveTailoredResume:
         job = {"title": "Eng", "company": "Co"}
         out = _save_tailored_resume(job, tailored, profile,
                                      latex_source=latex_src,
-                                     output_dir=tmp_path)
+                                     output_dir=tmp_path,
+                                     source_format="tex")
+        # In-place LaTeX path emits a .tex file
+        assert out["tex"] is not None
         tex_content = (tmp_path / out["tex"]).read_text(encoding="utf-8")
-        assert "Foo, Bar" in tex_content
+        assert "Foo" in tex_content and "Bar" in tex_content
+        assert out["template_id"] == "in_place_latex"

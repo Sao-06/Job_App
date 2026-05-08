@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>{{ t.name }} — Resume</title>
+<style>{{ base_css }}{{ diff_css }}
+:root {
+  --accent: {{ accent or '#1F4E79' }};
+  --body-size: {{ body_size or 9.5 }}pt;
+  --header-size: {{ header_size or 11 }}pt;
+  --name-size: {{ name_size or 19 }}pt;
+  --font-body: "Helvetica", Arial, sans-serif;
+  --font-heading: "Helvetica", Arial, sans-serif;
+}
+.layout { display: grid; grid-template-columns: 1fr 33%; gap: 14pt; margin-top: 8pt; }
+.sidebar section.r > h2 { font-size: calc(var(--header-size) - 0.5pt); }
+.sidebar { background: rgba(0,0,0,0.025); padding: 8pt; }
+h1.name { text-align: left; }
+.contact { text-align: left; }
+</style></head><body>
+{% from "_macros.html.j2" import tn, contact_line, skills_block, experience_block, projects_block, education_block, generic_block, custom_blocks, summary_block %}
+<h1 class="name">{{ t.name }}</h1>
+{{ contact_line(t) }}
+{{ summary_block(t) }}
+<div class="layout">
+  <main class="body">
+    {{ experience_block(t) }}
+    {{ projects_block(t) }}
+    {{ generic_block('Publications', t.get('publications', [])) }}
+    {{ generic_block('Leadership', t.get('leadership', [])) }}
+    {{ custom_blocks(t) }}
+  </main>
+  <aside class="sidebar">
+    {{ skills_block(t) }}
+    {{ generic_block('Languages', t.get('languages', [])) }}
+    {{ generic_block('Certifications', t.get('certifications', [])) }}
+    {{ generic_block('Awards', t.get('awards', [])) }}
+    {{ education_block(t) }}
+  </aside>
+</div>
+</body></html>

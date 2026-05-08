@@ -2875,8 +2875,55 @@ function JobsPage({ state, refresh, setPage }) {
     } else if (tab === 'recommended') list = list.filter(j => !hidden.has(j.id));
 
     if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
-      list = list.filter(j => (j.co || '').toLowerCase().includes(q) || (j.role || '').toLowerCase().includes(q) || (j.skills || '').toLowerCase().includes(q));
+      // Punctuation-insensitive client-side filter. The previous version
+      // did a literal `String.includes(q)` against the company/role/skills
+      // strings, which meant typing "mcdonalds" never matched "McDonald's"
+      // (the apostrophe broke the substring check) — same problem with
+      // "AT&T" / "att", "Kaiser-Permanente" / "kaiserpermanente",
+      // "L'Oréal" / "loreal", "Procter & Gamble" / "procterandgamble",
+      // etc. The server-side FTS5 already tokenizes through these via
+      // unicode61 (treats non-alnum as separators) — the client filter
+      // needs the same forgiveness so it doesn't strip results the
+      // server correctly returned.
+      //
+      // We also tokenize the query into words and require ALL of them
+      // to appear in the haystack (matches FTS5's implicit AND), so
+      // multi-word queries like "software engineer" don't get filtered
+      // away because the company name is "Atlas Software".
+      // Unicode normalize first so accented chars decompose into base + combining
+      // mark, then strip the combining marks. Effect: "L'Oréal" → "loreal",
+      // "Nestlé" → "nestle", "Crédit Agricole" → "creditagricole". Without
+      // this, typing "loreal" silently filters out the L'Oréal listing.
+      // Two normalized forms per text — "&" maps two ways at once:
+      //   form1 (strip-all): "AT&T" → "att", "Procter & Gamble" → "proctergamble"
+      //   form2 (& → "and"): "AT&T" → "atandt", "Procter & Gamble" → "procterandgamble"
+      // ANY-of-ANY substring match catches "att" / "atandt" both hitting
+      // AT&T, and "procterandgamble" / "proctergamble" both hitting Procter
+      // & Gamble. Then a word-by-word fallback catches multi-token queries
+      // whose order differs ("software engineer atlas" vs "Atlas Software").
+      const _flat = (s) => String(s || '')
+        .normalize('NFD').replace(/[̀-ͯ]/g, '')
+        .toLowerCase();
+      const _norms = (s) => {
+        const f = _flat(s);
+        return [
+          f.replace(/[^a-z0-9]+/g, ''),
+          f.replace(/&/g, 'and').replace(/[^a-z0-9]+/g, ''),
+        ].filter(Boolean);
+      };
+      const _wordsForm = (s) =>
+        _flat(s).replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, ' ').trim();
+
+      const qNorms = _norms(searchQuery);
+      const qWords = _wordsForm(searchQuery).split(/\s+/).filter(Boolean);
+      list = list.filter(j => {
+        const hayNorms = [
+          ..._norms(j.co), ..._norms(j.role), ..._norms(j.skills),
+        ];
+        const hayWords = _wordsForm(j.co) + ' ' + _wordsForm(j.role) + ' ' + _wordsForm(j.skills);
+        if (qNorms.some(q => hayNorms.some(h => h.includes(q)))) return true;
+        return qWords.length > 0 && qWords.every(w => hayWords.includes(w));
+      });
     }
 
     if (fLocation && fLocation !== 'Anywhere') {
@@ -3507,22 +3554,40 @@ function JobDetailView({ job, profile, allJobs, scoreData, allScores,
   //   2. Client-side recompute against `job.skills` — only when scoreData
   //      hasn't arrived yet (first paint, network in-flight, scoreData
   //      failed). Keeps the panel populated instead of showing zeros.
+  // Profile-meaningfulness gate — mirrors the backend's
+  // _profile_is_meaningful (≥2 hard skills OR ≥1 target title). If the
+  // profile is below the threshold (e.g., a blank 2-word resume that
+  // extracted nothing useful), refuse to compute fit signals at all.
+  // The previous version had per-signal client-side fallbacks that
+  // fabricated "60% title alignment" and "100% location & seniority"
+  // for any blank profile — exactly the bug the user reported. Now
+  // every signal is 0 (and the panels render an honest "—" with
+  // copy directing the user to the Profile page).
   const userSkills = (profile?.top_hard_skills || [])
     .map(s => String(s).toLowerCase().trim()).filter(Boolean);
   const userSkillsSet = new Set(userSkills);
   const jobReqs = String(job.skills || '')
     .split(',').map(s => s.trim()).filter(Boolean);
+  const targetTitlesAll = (profile?.target_titles || [])
+    .map(t => String(t).trim()).filter(Boolean);
+  const profileMeaningful = userSkills.length >= 2 || targetTitlesAll.length >= 1;
 
   const haveLazy = scoreData && typeof scoreData.score === 'number';
   let matched, gaps, skillPct;
-  if (haveLazy && (Array.isArray(scoreData.matched) || Array.isArray(scoreData.missing))) {
+  if (!profileMeaningful) {
+    // No fit math when the profile lacks signal. Zero everything; the
+    // rail panels render explicit "Profile incomplete" copy below.
+    matched  = [];
+    gaps     = [];
+    skillPct = 0;
+  } else if (haveLazy && (Array.isArray(scoreData.matched) || Array.isArray(scoreData.missing))) {
     matched = scoreData.matched || [];
     gaps    = scoreData.missing || [];
     skillPct = (typeof scoreData.coverage === 'number')
       ? Math.round(scoreData.coverage * 100)
       : (matched.length + gaps.length > 0
           ? Math.round((matched.length / (matched.length + gaps.length)) * 100)
-          : 50);
+          : 0);
   } else {
     matched = [];
     gaps    = [];
@@ -3532,13 +3597,22 @@ function JobDetailView({ job, profile, allJobs, scoreData, allScores,
                   userSkills.some(s => s && (lr.includes(s) || s.includes(lr)));
       (hit ? matched : gaps).push(r);
     }
+    // No "userSkills.length ? 50 : 0" fallback — that previously
+    // injected a flat 50% for any profile-with-skills regardless of
+    // job-fit, which lit up the rail panel for unrelated roles.
     skillPct = jobReqs.length
       ? Math.round((matched.length / jobReqs.length) * 100)
-      : (userSkills.length ? 50 : 0);
+      : 0;
   }
 
   // ── Title alignment vs. profile target_titles ────────────────────────
-  const targetTitles = (profile?.target_titles || []).map(t => String(t).toLowerCase());
+  // Returns 0 when the profile has no target titles. The previous
+  // `titlePct = 60` default was the source of the user's "100% title
+  // alignment on a blank resume" report — it inflated the rubric's
+  // 30-point industry slot by ~18pts for every job regardless of fit.
+  const targetTitles = profileMeaningful
+    ? targetTitlesAll.map(t => t.toLowerCase())
+    : [];
   const titleLower   = String(job.role || '').toLowerCase();
   let titlePct = 0;
   for (const t of targetTitles) {
@@ -3547,18 +3621,40 @@ function JobDetailView({ job, profile, allJobs, scoreData, allScores,
     const hits = toks.filter(w => titleLower.includes(w)).length;
     titlePct = Math.max(titlePct, Math.round((hits / toks.length) * 100));
   }
-  if (!targetTitles.length) titlePct = 60;
 
   // ── Location & seniority fit ─────────────────────────────────────────
+  // Returns 0 when the profile has no location AND the job isn't
+  // explicitly remote-friendly to a profile-with-known-region. The
+  // previous `job.remote ? 100 : ...` produced "100% location" for
+  // every remote role regardless of whether we knew anything about
+  // the user's location preferences — fabricated again for blank
+  // resumes. Now: remote alone isn't enough — we need a profile
+  // location to confirm the user actually wants remote OR a generic
+  // US/global qualifier the user has on file.
   const profileLoc = (profile?.location || '').toLowerCase().split(',')[0].trim();
   const jobLoc     = String(job.loc || '').toLowerCase();
   const locFitGeneric = /united states|usa|us|north america|remote|anywhere/i.test(job.loc || '');
   const profileLocHit = profileLoc && jobLoc.includes(profileLoc);
-  const locPct = job.remote
-    ? 100
-    : profileLocHit ? 95
-    : locFitGeneric ? 75
-    : 50;
+  let locPct;
+  if (!profileMeaningful) {
+    locPct = 0;
+  } else if (profileLocHit) {
+    locPct = 95;
+  } else if (job.remote && profileLoc) {
+    // Remote helps when we know the user has a base region — they
+    // can take it. Without a known region, we don't know if they'd
+    // accept remote-only, so we don't claim a high fit.
+    locPct = 90;
+  } else if (locFitGeneric && profileLoc) {
+    locPct = 70;
+  } else if (profileLoc) {
+    locPct = 30;
+  } else {
+    // Profile meaningful (has titles or skills) but no location set —
+    // mid-low signal, not zero (we have *some* fit signal from titles)
+    // but not the inflated 100% the previous code produced.
+    locPct = job.remote ? 50 : 25;
+  }
 
   // ── Overall match metadata ───────────────────────────────────────────
   // Single source of truth: prefer the description-aware lazy score
@@ -3794,81 +3890,135 @@ function JobDetailView({ job, profile, allJobs, scoreData, allScores,
                 )}
               </section>
 
-              {/* Match analysis */}
-              <section className="jd-match">
-                <div className="jd-match-ring">
-                  <svg viewBox="0 0 200 200">
-                    <defs>
-                      <linearGradient id={gradId} x1="0" y1="0" x2="1" y2="1">
-                        <stop offset="0%"  stopColor={ringColor} stopOpacity=".95"/>
-                        <stop offset="100%" stopColor={ringColor} stopOpacity=".55"/>
-                      </linearGradient>
-                    </defs>
-                    <circle cx="100" cy="100" r={RING_R} fill="none"
-                            stroke="var(--bdr)" strokeWidth="9"/>
-                    <circle cx="100" cy="100" r={RING_R} fill="none"
-                            stroke={`url(#${gradId})`}
-                            strokeWidth="9" strokeLinecap="round"
-                            strokeDasharray={RING_C} strokeDashoffset={ringOff}
-                            transform="rotate(-90 100 100)"
-                            style={{ transition: 'stroke-dashoffset 1.4s cubic-bezier(.16,1,.3,1)' }}/>
-                  </svg>
-                  <div className="jd-match-ring-c">
-                    <div className="jd-match-num" style={{ color: ringColor }}>
-                      <CountUp to={score}/><i>%</i>
-                    </div>
-                    <div className={'jd-match-verdict ' + verdict.tone}>
-                      {verdict.label}
-                    </div>
-                  </div>
-                </div>
-
-                <div>
-                  <div className="jd-match-rows">
-                    <div className="jd-match-row">
-                      <div className="jd-match-row-l">
-                        <Icon name="check-square" size={12}/>Skill match
+              {/* Match analysis — only renders when the profile has enough
+                  signal to score against. A blank/two-word resume hits the
+                  fallback below: a single CTA card explaining that scoring
+                  is paused until the user adds skills or a target title.
+                  Previously we computed bogus per-component percentages
+                  client-side (titlePct=60, locPct=100) and rendered them
+                  as full-color bars, which is what produced the user's
+                  "100% title alignment + 100% location & seniority on a
+                  blank resume" report. */}
+              {profileMeaningful ? (
+                <section className="jd-match">
+                  <div className="jd-match-ring">
+                    <svg viewBox="0 0 200 200">
+                      <defs>
+                        <linearGradient id={gradId} x1="0" y1="0" x2="1" y2="1">
+                          <stop offset="0%"  stopColor={ringColor} stopOpacity=".95"/>
+                          <stop offset="100%" stopColor={ringColor} stopOpacity=".55"/>
+                        </linearGradient>
+                      </defs>
+                      <circle cx="100" cy="100" r={RING_R} fill="none"
+                              stroke="var(--bdr)" strokeWidth="9"/>
+                      <circle cx="100" cy="100" r={RING_R} fill="none"
+                              stroke={`url(#${gradId})`}
+                              strokeWidth="9" strokeLinecap="round"
+                              strokeDasharray={RING_C} strokeDashoffset={ringOff}
+                              transform="rotate(-90 100 100)"
+                              style={{ transition: 'stroke-dashoffset 1.4s cubic-bezier(.16,1,.3,1)' }}/>
+                    </svg>
+                    <div className="jd-match-ring-c">
+                      <div className="jd-match-num" style={{ color: ringColor }}>
+                        <CountUp to={score}/><i>%</i>
                       </div>
-                      <div className="jd-match-bar">
-                        <div className="jd-match-bar-fill" style={{
-                          width: skillPct + '%',
-                          background: 'linear-gradient(90deg, var(--good), var(--accent2))',
-                          boxShadow: '0 0 12px var(--good-d)',
-                        }}/>
+                      <div className={'jd-match-verdict ' + verdict.tone}>
+                        {verdict.label}
                       </div>
-                      <div className="jd-match-row-r" style={{ color: 'var(--good)' }}>{skillPct}%</div>
-                    </div>
-                    <div className="jd-match-row">
-                      <div className="jd-match-row-l">
-                        <Icon name="target" size={12}/>Title alignment
-                      </div>
-                      <div className="jd-match-bar">
-                        <div className="jd-match-bar-fill" style={{
-                          width: titlePct + '%',
-                          background: 'linear-gradient(90deg, var(--accent), var(--accent3))',
-                          boxShadow: '0 0 12px var(--accent-d)',
-                        }}/>
-                      </div>
-                      <div className="jd-match-row-r" style={{ color: 'var(--accent-h)' }}>{titlePct}%</div>
-                    </div>
-                    <div className="jd-match-row">
-                      <div className="jd-match-row-l">
-                        <Icon name="map-pin" size={12}/>Location & seniority
-                      </div>
-                      <div className="jd-match-bar">
-                        <div className="jd-match-bar-fill" style={{
-                          width: locPct + '%',
-                          background: 'linear-gradient(90deg, var(--accent2), var(--accent-h))',
-                          boxShadow: '0 0 12px var(--accent2-d)',
-                        }}/>
-                      </div>
-                      <div className="jd-match-row-r" style={{ color: 'var(--accent2)' }}>{locPct}%</div>
                     </div>
                   </div>
 
-                  <div className="jd-match-reason">{reasonText}</div>
-                </div>
-              </section>
+                  <div>
+                    <div className="jd-match-rows">
+                      <div className="jd-match-row">
+                        <div className="jd-match-row-l">
+                          <Icon name="check-square" size={12}/>Skill match
+                        </div>
+                        <div className="jd-match-bar">
+                          <div className="jd-match-bar-fill" style={{
+                            width: skillPct + '%',
+                            background: 'linear-gradient(90deg, var(--good), var(--accent2))',
+                            boxShadow: '0 0 12px var(--good-d)',
+                          }}/>
+                        </div>
+                        <div className="jd-match-row-r" style={{ color: 'var(--good)' }}>{skillPct}%</div>
+                      </div>
+                      <div className="jd-match-row">
+                        <div className="jd-match-row-l">
+                          <Icon name="target" size={12}/>Title alignment
+                        </div>
+                        <div className="jd-match-bar">
+                          <div className="jd-match-bar-fill" style={{
+                            width: titlePct + '%',
+                            background: 'linear-gradient(90deg, var(--accent), var(--accent3))',
+                            boxShadow: '0 0 12px var(--accent-d)',
+                          }}/>
+                        </div>
+                        <div className="jd-match-row-r" style={{ color: 'var(--accent-h)' }}>{titlePct}%</div>
+                      </div>
+                      <div className="jd-match-row">
+                        <div className="jd-match-row-l">
+                          <Icon name="map-pin" size={12}/>Location & seniority
+                        </div>
+                        <div className="jd-match-bar">
+                          <div className="jd-match-bar-fill" style={{
+                            width: locPct + '%',
+                            background: 'linear-gradient(90deg, var(--accent2), var(--accent-h))',
+                            boxShadow: '0 0 12px var(--accent2-d)',
+                          }}/>
+                        </div>
+                        <div className="jd-match-row-r" style={{ color: 'var(--accent2)' }}>{locPct}%</div>
+                      </div>
+                    </div>
+
+                    <div className="jd-match-reason">{reasonText}</div>
+                  </div>
+                </section>
+              ) : (
+                <section className="jd-match jd-match-locked">
+                  <div className="jd-match-ring jd-match-ring-locked" aria-hidden="true">
+                    <svg viewBox="0 0 200 200">
+                      <circle cx="100" cy="100" r={RING_R} fill="none"
+                              stroke="var(--bdr)" strokeWidth="9"
+                              strokeDasharray="3 6"/>
+                    </svg>
+                    <div className="jd-match-ring-c">
+                      <div className="jd-match-num jd-match-num-empty">—</div>
+                      <div className="jd-match-verdict jd-match-verdict-locked">
+                        Scoring paused
+                      </div>
+                    </div>
+                  </div>
+                  <div className="jd-match-locked-body">
+                    <div className="jd-match-locked-eyebrow">
+                      <Icon name="user-plus" size={11}/>
+                      <span>Profile incomplete</span>
+                    </div>
+                    <h3 className="jd-match-locked-h">
+                      Add skills or a target title to see real fit scores.
+                    </h3>
+                    <p className="jd-match-locked-p">
+                      Atlas refuses to fabricate match percentages for a profile that doesn’t have the signal to compute them. Add at least <b>2 hard skills</b> or <b>1 target title</b> to your profile and every job will score against the description and your background.
+                    </p>
+                    <div className="jd-match-locked-actions">
+                      <button className="jd-match-locked-cta primary"
+                              type="button"
+                              onClick={() => onClose?.() /* close detail; user navigates to profile via rail */}>
+                        <Icon name="user" size={13}/>
+                        Complete profile
+                        <span className="jd-match-locked-arrow">→</span>
+                      </button>
+                      {job.url && (
+                        <a className="jd-match-locked-cta ghost"
+                           href={job.url} target="_blank" rel="noopener noreferrer">
+                          <Icon name="external-link" size={13}/>
+                          Read posting on source
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                </section>
+              )}
 
               {/* ── DESCRIPTION + SKILLS — editorial 2-column layout ──
                   Left: reading column for the JD body (lead / responsibilities
@@ -4109,7 +4259,22 @@ function JobDetailView({ job, profile, allJobs, scoreData, allScores,
                       scoreData when available (description-aware) and falls
                       back to client-side computed signals when the lazy
                       score hasn't arrived. The user can finally see WHY a
-                      job is 78 vs 56. */}
+                      job is 78 vs 56. Hidden entirely when the profile is
+                      not meaningful — the hero match section already
+                      surfaces the "scoring paused" state, no point in
+                      rendering empty bars in the rail too. */}
+                  {!profileMeaningful && (
+                    <section className="jd-rail-card jd-rail-locked">
+                      <div className="jd-rail-eyebrow">
+                        <span className="jd-rail-bar"/>
+                        <span>Scoring paused</span>
+                      </div>
+                      <p className="jd-rail-locked-p">
+                        Match math runs once your profile has at least <b>2 hard skills</b> or <b>1 target title</b>. Until then, nothing to break down.
+                      </p>
+                    </section>
+                  )}
+                  {profileMeaningful && (
                   <section className="jd-rail-card jd-rail-breakdown">
                     <div className="jd-rail-eyebrow">
                       <span className="jd-rail-bar"/>
@@ -4196,6 +4361,7 @@ function JobDetailView({ job, profile, allJobs, scoreData, allScores,
                       </div>
                     )}
                   </section>
+                  )}
 
                   <section className="jd-rail-card jd-rail-facts">
                     <div className="jd-rail-eyebrow">

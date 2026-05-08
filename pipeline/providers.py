@@ -589,39 +589,147 @@ class AnthropicProvider(BaseProvider):
             reasoning=raw.get("reasoning", ""),
         )
 
-    def tailor_resume(self, job: dict, profile: dict, resume_text: str) -> dict:
+    def tailor_resume(self, job: dict, profile: dict, resume_text: str,
+                      *, selected_keywords: list[str] | None = None,
+                      source_format: str | None = None) -> dict:
+        from .tailored_schema import default_v2
+
+        text_node = {
+            "type": "object",
+            "properties": {
+                "text":     {"type": "string"},
+                "diff":     {"type": "string", "enum": ["unchanged", "modified", "added"]},
+                "original": {"type": "string"},
+            },
+            "required": ["text"],
+        }
+        role_obj = {
+            "type": "object",
+            "properties": {
+                "title":    {"type": "string"},
+                "company":  {"type": "string"},
+                "dates":    {"type": "string"},
+                "location": {"type": "string"},
+                "bullets":  {"type": "array", "items": text_node},
+            },
+        }
+        generic = {
+            "type": "object",
+            "properties": {
+                "title":   text_node,
+                "detail":  text_node,
+                "bullets": {"type": "array", "items": text_node},
+            },
+        }
+        project = {
+            "type": "object",
+            "properties": {
+                "name":        {"type": "string"},
+                "description": text_node,
+                "skills_used": {"type": "array", "items": text_node},
+                "bullets":     {"type": "array", "items": text_node},
+                "dates":       {"type": "string"},
+                "url":         {"type": "string"},
+            },
+        }
+        education = {
+            "type": "object",
+            "properties": {
+                "institution": {"type": "string"},
+                "degree":      {"type": "string"},
+                "dates":       {"type": "string"},
+                "gpa":         {"type": "string"},
+                "notes":       {"type": "array", "items": text_node},
+            },
+        }
+        skill_cat = {
+            "type": "object",
+            "properties": {
+                "name":  {"type": "string"},
+                "items": {"type": "array", "items": text_node},
+            },
+        }
+        custom = {
+            "type": "object",
+            "properties": {
+                "name":  {"type": "string"},
+                "items": {"type": "array", "items": generic},
+            },
+        }
+
         tool = {
-            "name": "tailored_resume",
-            "description": "Return tailored resume sections for this specific job.",
+            "name": "tailored_resume_v2",
+            "description": (
+                "Return a complete TailoredResume v2 covering every section in the source resume. "
+                "Each TextNode carries a diff marker — unchanged | modified | added — so the renderer "
+                "can paint changes in green. Never fabricate dates / titles / companies / institutions / GPAs."
+            ),
             "input_schema": {
                 "type": "object",
                 "properties": {
-                    "skills_reordered":   {"type": "array", "items": {"type": "string"}},
-                    "experience_bullets": {
-                        "type": "array",
-                        "items": {"type": "object", "properties": {
-                            "role":    {"type": "string"},
-                            "bullets": {"type": "array", "items": {"type": "string"}},
-                        }},
-                    },
-                    "ats_keywords_missing": {"type": "array", "items": {"type": "string"}},
+                    "schema_version":       {"type": "integer"},
+                    "name":                 {"type": "string"},
+                    "email":                {"type": "string"},
+                    "phone":                {"type": "string"},
+                    "linkedin":             {"type": "string"},
+                    "github":               {"type": "string"},
+                    "location":             {"type": "string"},
+                    "website":              {"type": "string"},
+                    "summary":              text_node,
+                    "skills":               {"type": "array", "items": skill_cat},
+                    "experience":           {"type": "array", "items": role_obj},
+                    "projects":             {"type": "array", "items": project},
+                    "education":            {"type": "array", "items": education},
+                    "awards":               {"type": "array", "items": generic},
+                    "certifications":       {"type": "array", "items": generic},
+                    "publications":         {"type": "array", "items": generic},
+                    "activities":           {"type": "array", "items": generic},
+                    "leadership":           {"type": "array", "items": generic},
+                    "volunteer":            {"type": "array", "items": generic},
+                    "coursework":           {"type": "array", "items": generic},
+                    "languages":            {"type": "array", "items": generic},
+                    "custom_sections":      {"type": "array", "items": custom},
                     "section_order":        {"type": "array", "items": {"type": "string"}},
+                    "ats_keywords_added":   {"type": "array", "items": {"type": "string"}},
+                    "ats_keywords_missing": {"type": "array", "items": {"type": "string"}},
+                    "ats_score_before":     {"type": "integer"},
+                    "ats_score_after":      {"type": "integer"},
                 },
-                "required": ["skills_reordered", "ats_keywords_missing"],
+                "required": ["name", "skills", "experience", "education", "section_order"],
             },
         }
+
+        skeleton = default_v2(profile)
+        sel = list(selected_keywords or [])
+        declined = [
+            r for r in (job.get("requirements") or [])
+            if isinstance(r, str) and r and r not in sel
+        ]
+        skeleton_json = json.dumps(skeleton, ensure_ascii=False)
+        if len(skeleton_json) > 8000:
+            skeleton_json = skeleton_json[:8000] + "…"
+
         prompt = (
-            f"Tailor this resume for: {job['title']} at {job['company']}.\n"
-            "Rules: reorder skills to front-load JD keywords, rephrase bullets naturally — "
-            "NEVER fabricate, never change dates/titles/companies. "
-            "Do NOT include a summary or objective section.\n"
-            "ATS check: flag top JD keywords missing from resume.\n\n"
-            f"JD Requirements: {', '.join(job.get('requirements', []))}\n"
-            f"JD Description: {job.get('description', '')}\n\n"
-            f"Candidate Skills: {', '.join(profile.get('top_hard_skills', []))}\n\n"
-            f"Current Resume:\n{resume_text}"
+            f"Tailor this resume for: {job.get('title','')} at {job.get('company','')}.\n\n"
+            "INPUT — full structured profile (you must preserve every section):\n"
+            f"{skeleton_json}\n\n"
+            f"JD Requirements: {', '.join(job.get('requirements', []) or [])}\n"
+            f"JD Description: {(job.get('description') or '')[:2000]}\n\n"
+            f"USER-SELECTED keywords to weave in: "
+            f"{', '.join(sel) if sel else '(none — default to all must-have JD keywords missing from the resume)'}\n"
+            f"USER-DECLINED keywords (do NOT include): {', '.join(declined[:20])}\n\n"
+            "RULES:\n"
+            "1. NEVER fabricate. NEVER change titles/companies/dates/institutions/degrees/GPA.\n"
+            "2. For each user-selected keyword: REPHRASE an existing bullet (set diff=modified) when it fits, "
+            "else ADD a new bullet (set diff=added) under the most relevant role.\n"
+            "3. Reorder bullets within each role by JD relevance (no diff change for reorder alone).\n"
+            "4. Keep every section present in the source — even Awards / Publications / Coursework / "
+            "Activities / Leadership / Volunteer / Languages / custom sections.\n"
+            "5. Set diff=unchanged on every TextNode you didn't modify.\n"
+            "6. Return the FULL TailoredResume — every section, every bullet, every role.\n"
+            f"Source format hint: {source_format or 'pdf'}\n"
         )
-        return self._tool_call(tool, prompt, max_tokens=4096, thinking=True)
+        return self._tool_call(tool, prompt, max_tokens=8192, thinking=True)
 
     def generate_cover_letter(self, job: dict, profile: dict) -> str:
         name = profile.get("name") or OWNER_NAME
@@ -1758,15 +1866,18 @@ class DemoProvider(BaseProvider):
         return _build_rubric_result(job, req_raw, industry_raw, loc_seniority_raw,
                                     matched=matched, missing=missing)
 
-    def tailor_resume(self, job: dict, profile: dict, resume_text: str) -> dict:
-        # Demo mode IS the heuristic — delegate to the shared module so the
+    def tailor_resume(self, job: dict, profile: dict, resume_text: str,
+                      *, selected_keywords: list[str] | None = None,
+                      source_format: str | None = None) -> dict:
+        # Demo mode IS the heuristic — delegate to the shared v2 module so the
         # output matches what phase4_tailor_resume falls back to when the
-        # configured LLM glitches.  This means demo and "Ollama-with-bad-output"
-        # paths now produce structurally identical resumes (skills reordered,
-        # bullets reordered per role, missing JD keywords flagged but never
-        # silently appended to the user's skill list).
-        from .heuristic_tailor import heuristic_tailor_resume
-        return heuristic_tailor_resume(job, profile, resume_text)
+        # configured LLM glitches.  Demo always returns a TailoredResume v2
+        # dict; downstream callers (renderer + frontend) consume v2 directly.
+        from .heuristic_tailor import heuristic_tailor_resume_v2
+        return heuristic_tailor_resume_v2(
+            job, profile, resume_text,
+            selected_keywords=selected_keywords,
+        )
 
     def generate_cover_letter(self, job: dict, profile: dict) -> str:
         name       = profile.get("name") or OWNER_NAME
@@ -1823,9 +1934,11 @@ class DemoProvider(BaseProvider):
         # gracefully instead of bubbling a NotImplementedError.
         return (
             "Demo mode doesn't include a live chat assistant — switch to Ollama "
-            "(free, local) or Anthropic Claude (Pro plan) in Settings to enable "
-            "Ask Atlas. The job description and your profile are still loaded for "
-            "scoring and tailoring; only the chat advisor is gated."
+            "in Settings to enable Ask Atlas. Local models on the Pi work on the "
+            "Free tier; Pro unlocks the higher-quality cloud models. (Anthropic "
+            "Claude is in active development and will land in Pro when it ships.) "
+            "The job description and your profile are still loaded for scoring "
+            "and tailoring; only the chat advisor is gated."
         )
 
 
@@ -1840,14 +1953,49 @@ class OllamaProvider(BaseProvider):
     deployment is the RPi's own Ollama, not the visiting user's laptop.
     """
 
-    def __init__(self, model: str = "llama3.2"):
+    def __init__(self, model: str = ""):
         # Read OLLAMA_URL per-instance so tests can monkeypatch the env after
         # import. Class-body reads happen at module-import time and are
         # effectively frozen for the process lifetime.
         import os as _os
         self.OLLAMA_URL = _os.environ.get("OLLAMA_URL", "http://localhost:11434").rstrip("/")
-        self.model = model
+        # Resolve the model name without baking in a literal: explicit
+        # constructor arg first, then DEFAULT_OLLAMA_MODEL env var, finally
+        # auto-detect from whatever the daemon has pulled. Hardcoding a
+        # specific tag here used to break across machines that didn't
+        # happen to have that exact model on disk.
+        resolved = (model or _os.environ.get("DEFAULT_OLLAMA_MODEL") or "").strip()
+        if not resolved:
+            resolved = self._detect_pulled_model() or ""
+        if not resolved:
+            raise ValueError(
+                "OllamaProvider needs a model name. Pass model=, set "
+                "DEFAULT_OLLAMA_MODEL in the environment, or pull at least "
+                "one model on the daemon (`ollama pull <name>`)."
+            )
+        self.model = resolved
         self._check_ollama()
+
+    def _detect_pulled_model(self, *, prefer_cloud: bool = False) -> str:
+        """Best-effort: ask the daemon what's available and return a sensible
+        default. Returns "" when Ollama is unreachable or empty. Mirrors
+        `app._pick_default_ollama_model` but kept local so providers.py
+        doesn't depend on app.py.
+        """
+        import urllib.request as _ur
+        import json as _json
+        try:
+            with _ur.urlopen(f"{self.OLLAMA_URL}/api/tags", timeout=3) as resp:
+                data = _json.loads(resp.read().decode())
+        except Exception:
+            return ""
+        names = [m.get("name") for m in (data.get("models") or []) if m.get("name")]
+        is_cloud = lambda n: str(n).lower().endswith("cloud")
+        cloud = sorted(n for n in names if is_cloud(n))
+        local = sorted(n for n in names if not is_cloud(n))
+        if prefer_cloud and cloud:
+            return cloud[0]
+        return (local[0] if local else (cloud[0] if cloud else ""))
 
     def _check_ollama(self):
         import urllib.request as _ur
@@ -2142,27 +2290,43 @@ class OllamaProvider(BaseProvider):
             reasoning=parsed.get("reasoning", ""),
         )
 
-    def tailor_resume(self, job: dict, profile: dict, resume_text: str) -> dict:
-        prompt = (
-            f"Tailor this resume for '{job['title']}' at '{job['company']}'.\n"
-            "Return ONLY a JSON object with:\n"
-            "  skills_reordered (array, JD-matching skills first),\n"
-            "  experience_bullets (array of {role, bullets[]}),\n"
-            "  ats_keywords_missing (array of JD keywords not in resume),\n"
-            "  section_order (array of section names, do NOT include Summary or Objective).\n"
-            "Do NOT include a summary or objective field. "
-            "NEVER fabricate experience. Only rephrase what exists.\n\n"
-            f"JD Requirements: {', '.join(job.get('requirements', []))}\n"
-            f"Candidate Skills: {', '.join(profile.get('top_hard_skills', []))}\n\n"
-            f"Resume (excerpt):\n{resume_text[:2000]}"
+    def tailor_resume(self, job: dict, profile: dict, resume_text: str,
+                      *, selected_keywords: list[str] | None = None,
+                      source_format: str | None = None) -> dict:
+        """Ollama: ask for v2 JSON via response_format json_object."""
+        from .tailored_schema import default_v2
+
+        skeleton = default_v2(profile)
+        sel = list(selected_keywords or [])
+        requirements = list(job.get("requirements") or [])
+        declined = [
+            r for r in requirements
+            if isinstance(r, str) and r and r not in sel
+        ]
+        skeleton_json = json.dumps(skeleton, ensure_ascii=False)
+        if len(skeleton_json) > 6000:
+            skeleton_json = skeleton_json[:6000] + "…"
+
+        system_msg = (
+            "You are a resume tailoring assistant. Output ONLY valid JSON matching "
+            "the TailoredResume v2 schema. Preserve every section from the input "
+            "skeleton — do not drop any. Diff markers: 'unchanged' (default), "
+            "'modified' (you rewrote the text), 'added' (new content). Never fabricate "
+            "titles, companies, dates, institutions, degrees, or GPAs."
         )
-        raw = self._chat(prompt)
-        return self._parse_json(raw, {
-            "skills_reordered":     profile.get("top_hard_skills", []),
-            "experience_bullets":   [],
-            "ats_keywords_missing": [],
-            "section_order":        ["Skills", "Projects", "Experience", "Education"],
-        })
+        user_msg = (
+            f"Tailor for: {job.get('title','')} at {job.get('company','')}\n\n"
+            f"INPUT skeleton:\n{skeleton_json}\n\n"
+            f"JD requirements: {', '.join(requirements)}\n"
+            f"JD description: {(job.get('description') or '')[:1500]}\n\n"
+            f"USER-SELECTED keywords: {', '.join(sel) or '(default to all missing must-haves)'}\n"
+            f"USER-DECLINED keywords: {', '.join(declined[:15])}\n\n"
+            "Return ONLY the full TailoredResume v2 JSON, no markdown, no commentary. "
+            "Required top-level keys: schema_version, name, skills, experience, education, section_order."
+        )
+        prompt = system_msg + "\n\n" + user_msg
+        raw = self._chat(prompt, json_mode=True)
+        return self._parse_json(raw, {})
 
     def generate_cover_letter(self, job: dict, profile: dict) -> str:
         prompt = (
@@ -2210,7 +2374,11 @@ def get_provider(args) -> BaseProvider:
         console.print("[dim]Mode: Demo (no API key required)[/dim]")
         return DemoProvider()
     if args.ollama:
-        console.print(f"[dim]Mode: Ollama local LLM (model: {args.model})[/dim]")
-        return OllamaProvider(model=args.model)
+        # `args.model` is None when the user didn't pass --model; the
+        # OllamaProvider constructor then resolves DEFAULT_OLLAMA_MODEL or
+        # auto-detects from the daemon's pulled models.
+        provider = OllamaProvider(model=args.model or "")
+        console.print(f"[dim]Mode: Ollama LLM (model: {provider.model})[/dim]")
+        return provider
     console.print("[dim]Mode: Anthropic Claude Opus 4.6[/dim]")
     return AnthropicProvider()

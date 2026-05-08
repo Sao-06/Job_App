@@ -44,6 +44,14 @@ class SearchFilters:
     blacklist: Sequence[str] = field(default_factory=tuple)           # company names (case-insensitive)
     whitelist: Sequence[str] = field(default_factory=tuple)
     include_unknown_education: bool = True
+    # Most ingested rows have experience_level = NULL/'unknown' because the
+    # source didn't carry a clean tag. Treating the chip as a hard exclude
+    # squashes the entire NULL-bucket — e.g. picking "Internship" and
+    # searching "marketing" returned 0 because every marketing intern role
+    # was untagged. Default to including unknowns so the chip narrows
+    # rather than nukes; advanced UI can flip this off when a user
+    # explicitly wants strict-match.
+    include_unknown_experience: bool = True
     # Coarse industry / job-family filter — values must match the labels emitted
     # by ``pipeline.helpers.infer_job_category`` (e.g. 'engineering', 'sales',
     # 'healthcare', 'general'). Multiple values OR together at the SQL layer.
@@ -501,9 +509,23 @@ def search(*, conn: sqlite3.Connection,
         order_extra = ""
 
     if filters.experience_levels:
-        placeholders = ",".join("?" * len(filters.experience_levels))
-        where.append(f"jp.experience_level IN ({placeholders})")
-        where_params.extend(filters.experience_levels)
+        # See SearchFilters docstring: most rows have experience_level NULL/
+        # unknown, so a strict IN excludes the entire untagged bucket. Mirror
+        # the education-filter behavior — fold 'unknown' into the IN list and
+        # also accept SQL NULL via an explicit OR. Without the NULL branch
+        # SQL `IN ('unknown')` doesn't match `NULL` (per ANSI), and a chunk
+        # of ingested rows persist as NULL rather than the literal 'unknown'.
+        levels = list(filters.experience_levels)
+        if filters.include_unknown_experience:
+            levels = list(set(levels) | {"unknown"})
+        placeholders = ",".join("?" * len(levels))
+        if filters.include_unknown_experience:
+            where.append(
+                f"(jp.experience_level IS NULL OR jp.experience_level IN ({placeholders}))"
+            )
+        else:
+            where.append(f"jp.experience_level IN ({placeholders})")
+        where_params.extend(levels)
     if filters.education_levels:
         edus = list(filters.education_levels)
         if filters.include_unknown_education:

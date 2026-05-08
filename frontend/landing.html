@@ -44,13 +44,26 @@
   --serif:     'Inter', system-ui, -apple-system, sans-serif;
 }
 *,*::before,*::after { box-sizing: border-box; margin: 0; padding: 0 }
-html { scroll-behavior: smooth; font-size: 16px }
+html {
+  scroll-behavior: smooth; font-size: 16px;
+  /* Belt-and-suspenders against horizontal scroll bugs. The scroll-driven
+     scrubber sometimes positions decorative elements off-canvas; this
+     keeps a stray transform from dragging a horizontal scrollbar across
+     the whole viewport. */
+  overflow-x: hidden;
+}
 body {
   font-family: var(--sans); background: var(--bg); color: var(--t1);
   -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
   letter-spacing: -.005em; overflow-x: hidden;
 }
+/* Common offenders for horizontal scroll on small screens. */
+img, video, iframe, canvas, svg, embed, object {
+  max-width: 100%;
+  height: auto;
+}
+iframe { display: block; }
 em, i, cite, var { font-style: normal }
 ::-webkit-scrollbar { width: 6px; height: 6px }
 ::-webkit-scrollbar-track { background: transparent }
@@ -1074,6 +1087,50 @@ em, i, cite, var { font-style: normal }
   .scr-rail-num { font-size: 8.5px; letter-spacing: .12em }
   .scr-rail-lbl { font-size: 11.5px }
   .recap-stat-n { font-size: 36px }
+}
+
+/* ── Mobile hardening (catch-all responsive defaults) ────────────────────
+   The landing page only had three @media blocks (920 / 720 / 420). This
+   block fills in the gaps so the page never produces horizontal scroll
+   and every section behaves on phones / small tablets. Late in the
+   cascade so it overrides the earlier desktop-first declarations. */
+
+@supports (padding: max(0px)) {
+  .nav { padding-left: max(20px, env(safe-area-inset-left));
+         padding-right: max(20px, env(safe-area-inset-right)); }
+}
+
+@media (max-width: 720px) {
+  .nav { padding: 0 18px; height: 56px }
+  /* Hero, sections, CTA — generic side padding tighten. */
+  .hero, .recap, .providers, .cta, section {
+    padding-left: 18px;
+    padding-right: 18px;
+  }
+  /* The scroll-driven scrubber in the hero is intentionally tall on
+     desktop; cap it on mobile so the page doesn't feel like it's
+     scrolling forever before any content shows. */
+  .scrubber-stage { min-height: 100vh; min-height: 100dvh }
+}
+
+@media (max-width: 600px) {
+  .nav { padding: 0 14px }
+  .nav-link { padding: 6px 8px; font-size: 13.5px }
+  /* Hide secondary nav links on mid-size phones — keep just the brand
+     and the launch CTA. */
+  .nav-link:not(.nav-cta) { display: none }
+  /* Wrap any flex row that didn't already opt in. */
+  .recap-stats, .providers-grid, .features-grid, .pricing-grid {
+    flex-wrap: wrap;
+    gap: 14px;
+  }
+  /* Long monospaced phrases / URLs — break instead of overflowing. */
+  .mono, code, pre { word-break: break-all }
+}
+
+/* Touch-target floor for any pointer-coarse device (mostly phones/tablets). */
+@media (hover: none) and (pointer: coarse) {
+  .nav-link, .nav-cta, button, .btn, .cta-btn { min-height: 40px }
 }
 </style>
 </head>

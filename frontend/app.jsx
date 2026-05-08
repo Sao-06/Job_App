@@ -1567,14 +1567,13 @@ function Dashboard({ state, setPage, refresh }) {
         </div>
       </section>
 
-      {/* ── Career Cockpit HUD strip — desktop-only telemetry band ──── */}
-      <CockpitStrip
-        state={state}
-        done={done}
-        apps={apps}
-        jobs={jobs}
-        matches={matches}
-      />
+      {/* CockpitStrip removed — duplicated the hero's greeting / streak /
+          phase progress and rendered as an empty band on desktop windows
+          where its 7-col grid (170+280+240+170 = 860 px min) couldn't fit
+          its content cleanly alongside the hero. The hero already carries
+          the same telemetry (streak in the eyebrow, pipeline progress in
+          the ring + step row). The component is kept in the file in case
+          a future iteration wants to bring it back as its own page. */}
 
       {/* ── Resume Intelligence + Mission Control row ──────────────── */}
       <section className="dossier-row">

@@ -1442,7 +1442,11 @@ function Dashboard({ state, setPage, refresh }) {
   // ResumeIntelligencePanel below — its proper home — and on the dedicated
   // Resume page header.
 
-  const streak = Math.max(1, done.size + (apps.length > 0 ? 2 : 0));
+  // No streak math here — the previous version was
+  // `done.size + (apps.length > 0 ? 2 : 0)`, which produced numbers like
+  // "3-day streak" with no relation to actual day-over-day login activity.
+  // We don't track per-user daily-active timestamps yet, so any "streak"
+  // value would be a lie. The eyebrow now stands on its own.
 
   const hr = new Date().getHours();
   const greet = hr < 5 ? 'Burning the midnight oil'
@@ -1478,8 +1482,14 @@ function Dashboard({ state, setPage, refresh }) {
             <div className="hero-eyebrow">
               <span className="hero-pulse"/>
               <span>Career cockpit · session live</span>
-              <span className="hero-eyebrow-sep">/</span>
-              <span className="hero-streak"><Icon name="flame" size={11}/> {streak}-day streak</span>
+              {matches > 0 && (
+                <>
+                  <span className="hero-eyebrow-sep">/</span>
+                  <span className="hero-eyebrow-stat">
+                    <Icon name="target" size={10}/> {matches} high-fit
+                  </span>
+                </>
+              )}
             </div>
             <h1 className="hero-h">
               {greet}, <em>{firstName}</em>.
@@ -1531,8 +1541,8 @@ function Dashboard({ state, setPage, refresh }) {
               </svg>
               <div className="hero-ring-c">
                 <div className="hrc-pct"><CountUp to={phasePct}/><i>%</i></div>
-                <div className="hrc-lbl">pipeline complete</div>
-                <div className="hrc-sub">{done.size}/7 phases · {jobs.length} jobs scanned</div>
+                <div className="hrc-lbl">pipeline</div>
+                <div className="hrc-sub">{done.size} of 7 phases</div>
               </div>
             </div>
           </div>
@@ -3551,6 +3561,17 @@ function JobDetailView({ job, profile, allJobs, scoreData, allScores,
       points:Math.round(20 * locFraction),
       hint:'Geographic fit and seniority alignment' },
   ];
+  // Sum of the rubric components — the panel's header + footer show this
+  // so the panel is internally consistent. Differs from `score` (the hero
+  // ring) when no lazy data has arrived: the rerank composite (job.score)
+  // and the rubric sum measure different things, so showing both honestly
+  // is more useful than papering over the gap.
+  const breakdownTotal = breakdown.reduce((s, b) => s + b.points, 0);
+  const breakdownTone =
+      breakdownTotal >= 85 ? 'good'
+    : breakdownTotal >= 70 ? 'accent'
+    : breakdownTotal >= 55 ? 'warn'
+    :                        'bad';
   const verdict =
       score >= 85 ? { label: 'Strong Match', tone: 'good' }
     : score >= 70 ? { label: 'Good Match',   tone: 'accent' }
@@ -3938,6 +3959,99 @@ function JobDetailView({ job, profile, allJobs, scoreData, allScores,
                     </section>
                   )}
 
+                  {/* Empty-state: render a useful fallback when Atlas couldn't
+                      fetch / parse the description (most often: source site
+                      requires a captcha, JS-rendered HTML, or auth). The page
+                      previously collapsed to dead space; now we surface what
+                      we DO have (tagged requirements, key facts) and route
+                      the user to read it on the source. */}
+                  {!detailsLoading && (
+                    !details ||
+                    (
+                      !details.lead_paragraph &&
+                      (details.responsibilities || []).length === 0 &&
+                      (details.required_qualifications || []).length === 0 &&
+                      (details.preferred_qualifications || []).length === 0 &&
+                      (details.benefits || []).length === 0
+                    )
+                  ) && (
+                    <section className="jd-empty-card">
+                      <div className="jd-empty-eyebrow">
+                        <span className="jd-empty-pulse"/>
+                        <span>Description not available</span>
+                      </div>
+                      <h2 className="jd-empty-h">
+                        Atlas couldn’t pull the full posting from the source.
+                      </h2>
+                      <p className="jd-empty-lead">
+                        {detailsError
+                          ? <>The fetcher returned <code className="jd-empty-code">{detailsError}</code> — usually a CAPTCHA, JS-only render, or auth wall on the source.</>
+                          : <>This posting’s body wasn’t parseable by Atlas. The posting itself is still live on <b>{platformPretty || job.source}</b>.</>}
+                        {' '}You can still apply directly, and below is what we know from the listing card.
+                      </p>
+
+                      <div className="jd-empty-grid">
+                        {jobReqs.length > 0 && (
+                          <div className="jd-empty-block">
+                            <div className="jd-empty-block-h">
+                              <Icon name="tag" size={11}/>
+                              <span>Tagged requirements</span>
+                              <span className="jd-empty-count">{jobReqs.length}</span>
+                            </div>
+                            <div className="jd-empty-chips">
+                              {jobReqs.map((r, i) => {
+                                const isMatch = matched.includes(r) || userSkills.some(s => s && (r.toLowerCase().includes(s) || s.includes(r.toLowerCase())));
+                                return (
+                                  <span key={i} className={'jd-empty-chip' + (isMatch ? ' on' : '')}>
+                                    {isMatch && <Icon name="check" size={10}/>}
+                                    {r}
+                                  </span>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="jd-empty-block">
+                          <div className="jd-empty-block-h">
+                            <Icon name="layout-list" size={11}/>
+                            <span>Key facts</span>
+                          </div>
+                          <dl className="jd-empty-facts">
+                            {job.loc && (<><dt>Location</dt><dd>{job.loc}</dd></>)}
+                            <dt>Work model</dt><dd>{remoteLabel}</dd>
+                            {expHuman && expHuman !== 'Open level' && (<><dt>Experience</dt><dd>{expHuman}</dd></>)}
+                            {eduHuman && eduHuman !== 'Any education' && (<><dt>Education</dt><dd>{eduHuman}</dd></>)}
+                            {job.salary && job.salary !== 'Unknown' && (<><dt>Compensation</dt><dd>{job.salary}</dd></>)}
+                            <dt>Posted</dt><dd>{postedAgo}</dd>
+                            <dt>Source</dt><dd className="jd-empty-source">{platformPretty || job.source || '—'}</dd>
+                          </dl>
+                        </div>
+                      </div>
+
+                      <div className="jd-empty-actions">
+                        {job.url && (
+                          <a className="jd-empty-cta primary" href={job.url} target="_blank" rel="noopener noreferrer">
+                            <Icon name="external-link" size={13}/>
+                            Read on {platformPretty || 'source'}
+                            <span className="jd-empty-cta-arrow">→</span>
+                          </a>
+                        )}
+                        <button className="jd-empty-cta ghost" type="button" onClick={() => onAsk?.(job)}>
+                          <Icon name="message-circle" size={13}/>
+                          Ask Atlas anyway
+                        </button>
+                        <button className="jd-empty-cta ghost" type="button" onClick={() => onTailor?.(job)}>
+                          <Icon name="wand-2" size={13}/>
+                          Tailor from title
+                        </button>
+                      </div>
+                      <p className="jd-empty-hint">
+                        Atlas falls back to scoring against the title + tagged requirements. The match panel on the right reflects that title-only score until the description arrives.
+                      </p>
+                    </section>
+                  )}
+
                   {/* Benefits */}
                   {!detailsLoading && (details?.benefits || []).length > 0 && (
                     <section className="jd-section">
@@ -3971,12 +4085,12 @@ function JobDetailView({ job, profile, allJobs, scoreData, allScores,
                     <div className="jd-rail-eyebrow">
                       <span className="jd-rail-bar"/>
                       <span>Why this score</span>
-                      <span className={'jd-rail-pct jd-rail-pct-' + verdict.tone}>{score}</span>
+                      <span className={'jd-rail-pct jd-rail-pct-' + breakdownTone}>{breakdownTotal}</span>
                     </div>
                     <div className="jd-bd-source">
                       {haveLazy
                         ? <>Computed against the full job description.</>
-                        : <>Preview score from title + listing tags. Click anywhere on the page to load the full description.</>}
+                        : <>Preview math from title + listing tags. The hero ring shows the live ranking score (<b>{score}</b>); these three rows show how the description-aware rubric weighs your fit.</>}
                     </div>
                     <ul className="jd-bd-rows">
                       {breakdown.map(b => (
@@ -3996,7 +4110,7 @@ function JobDetailView({ job, profile, allJobs, scoreData, allScores,
                     </ul>
                     <div className="jd-bd-total">
                       <span>Total</span>
-                      <b>{breakdown.reduce((s, b) => s + b.points, 0)}<i>/100</i></b>
+                      <b>{breakdownTotal}<i>/100</i></b>
                     </div>
                   </section>
 

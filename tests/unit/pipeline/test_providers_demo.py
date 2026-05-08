@@ -156,13 +156,15 @@ class TestScoreJob:
 
 
 class TestTailorResume:
+    def _flat_skills(self, out):
+        return [it["text"] for cat in out.get("skills") or [] for it in cat.get("items") or []]
+
     def test_reorders_skills_jd_keywords_first(self, provider):
         profile = {"top_hard_skills": ["Python", "Verilog", "MATLAB"]}
         job = {"title": "FPGA Intern", "company": "Acme",
                "requirements": ["verilog", "fpga"]}
         out = provider.tailor_resume(job, profile, "")
-        # Verilog should appear before Python in the reordered list (JD-matching first).
-        ordered = out["skills_reordered"]
+        ordered = self._flat_skills(out)
         assert ordered.index("Verilog") < ordered.index("Python")
 
     def test_ats_keywords_missing_includes_unmatched(self, provider):
@@ -175,11 +177,24 @@ class TestTailorResume:
         assert "uvm" in missing_lower
 
     def test_section_order_default(self, provider):
-        # Heuristic tailor returns the four canonical sections in some order;
-        # pin the SET, not the exact order, since the in-tree reordering
-        # heuristic may shuffle them and that's not what this test checks.
         out = provider.tailor_resume({"requirements": []}, {"top_hard_skills": []}, "")
         assert set(out["section_order"]) == {"Skills", "Projects", "Experience", "Education"}
+
+    def test_returns_v2_schema(self, provider):
+        from pipeline.heuristic_tailor import validate_v2_or_none
+        profile = {
+            "name": "Jane",
+            "top_hard_skills": ["Python", "Verilog"],
+            "experience": [{"title": "Intern", "company": "Acme", "dates": "2024",
+                             "bullets": ["Built it"]}],
+            "education": [{"degree": "BS", "institution": "Cal", "year": "2025"}],
+        }
+        job = {"title": "HW Eng", "company": "X",
+               "requirements": ["Verilog", "FPGA verification"]}
+        out = provider.tailor_resume(job, profile, "Jane resume",
+                                      selected_keywords=["FPGA verification"])
+        assert validate_v2_or_none(out) is not None
+        assert out["schema_version"] == 2
 
 
 # ── generate_cover_letter ───────────────────────────────────────────────────

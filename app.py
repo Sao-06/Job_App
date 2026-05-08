@@ -420,6 +420,12 @@ def _default_state() -> dict:
     "hidden_ids": set(),
     "dev_tweaks": {},
     "feedback": [],
+    # One-shot flag set by /api/pipeline/reset so the user's NEXT Phase 2 run
+    # forces a synchronous ingestion tick (`force_live=True`) before searching.
+    # Without this, "Reset run" would just clear the cached jobs and re-search
+    # the same persistent index with the same query — returning the same top-N
+    # rows. Consumed (and cleared) by /api/phase/2/run.
+    "force_phase2_next_run": False,
     # Theme + dev "Test as Customer" toggle. Both are user-tunable via
     # POST /api/config and exposed in GET /api/state — they belong here so
     # the schema is self-consistent and `/api/reset` preserves them via the
@@ -2833,6 +2839,13 @@ def reset_pipeline(request: Request):
                     continue
             _S[bucket_key] = bucket
 
+        # Arm Phase 2 to force a fresh ingestion tick on its next run.
+        # Without this, "Reset run" would clear the cached jobs but the NEXT
+        # phase-2 search would hit the same persistent SQLite index with the
+        # same query and return identical top-N results. The flag is
+        # consumed (single-shot) inside /api/phase/2/run.
+        _S["force_phase2_next_run"] = True
+
         # Persist inline — same reasoning as /api/reset: avoid the race
         # between the post-response middleware save and a /api/state poll.
         if sid:
@@ -2842,6 +2855,14 @@ def reset_pipeline(request: Request):
                 _session_store.save_state(sid, state)
             else:
                 _memory_sessions[sid] = state
+
+    # Wipe the legacy server-wide phase-2 cache files. These pre-date the
+    # SQLite job index but still get consulted by some code paths; leaving
+    # them in place means a reset can return the same stale snapshot. Best-
+    # effort — missing files are not an error.
+    for cache in (RESOURCES_DIR / "sample_jobs_quick.json",
+                  RESOURCES_DIR / "sample_jobs_deep.json"):
+        cache.unlink(missing_ok=True)
 
     return {"ok": True, "preserved": "resume, profile, settings, documents"}
 
@@ -5581,6 +5602,14 @@ def run_phase2(request: Request = None):
     deep = str(params.get("deep", "")).lower() in ("1", "true", "yes")
     append = str(params.get("append", "")).lower() in ("1", "true", "yes")
     force_live = str(params.get("force", "")).lower() in ("1", "true", "yes") or append
+    # Consume the one-shot flag set by /api/pipeline/reset. The whole point of
+    # Reset Run is to find NEW jobs — without this, the next search hits the
+    # same persistent index with the same query and returns identical top-N
+    # rows. Pop+set ensures the flag fires exactly once: the next phase-2 run
+    # after the reset gets fresh ingestion, subsequent runs do not.
+    if _S.get("force_phase2_next_run"):
+        force_live = True
+        _S["force_phase2_next_run"] = False
 
     def _fn():
         prov = _make_provider()

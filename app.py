@@ -179,6 +179,7 @@ from pipeline.phases import (
     phase2_discover_jobs,
     phase3_score_jobs,
     phase4_tailor_resume,
+    _ats_score,
     _load_existing_applications,
     phase6_update_tracker,
     phase7_run_report,
@@ -343,10 +344,17 @@ def serve_output_file(path: str, request: Request):
 # OLLAMA_URL: env-driven so deployments can point at a different host (e.g. a
 #   beefier Tailnet machine). On the production RPi this resolves to the RPi's
 #   own Ollama daemon, NOT the visiting user's laptop.
-# DEFAULT_OLLAMA_MODEL: which model new sessions get + which model the boot-time
-#   auto-pull ensures is on disk.
+# LOCAL_OLLAMA_MODEL / CLOUD_OLLAMA_MODEL: the canonical model names for
+#   the Free vs Pro tiers. Free users default to the local one (small,
+#   fast, runs on the Pi). Pro upgrades unlock the cloud one (proxied to
+#   Ollama Turbo). Both must be `ollama pull`-ed on the daemon — the boot
+#   auto-pull handles the local one for free.
+# DEFAULT_OLLAMA_MODEL: which model new sessions get + which model the
+#   boot-time auto-pull ensures is on disk. Falls back to the local tier.
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434").rstrip("/")
-DEFAULT_OLLAMA_MODEL = os.environ.get("DEFAULT_OLLAMA_MODEL", "ministral-3:14b-cloud")
+LOCAL_OLLAMA_MODEL = "smollm2:135m"
+CLOUD_OLLAMA_MODEL = "gemma4:31b-cloud"
+DEFAULT_OLLAMA_MODEL = os.environ.get("DEFAULT_OLLAMA_MODEL", LOCAL_OLLAMA_MODEL)
 
 
 # ── Session state ─────────────────────────────────────────────────────────────
@@ -907,6 +915,70 @@ def _release_phase(session_id: str | None, phase: int) -> None:
                 _session_running_phases.pop(session_id, None)
 
 
+# Per-session phase progress with bounded recent-log buffer. Surfaced via
+# /api/state.running_phases so the SPA can show "this phase is still running
+# on the server" when the user starts a phase, navigates to another page,
+# and comes back. The local AgentPage `running` state is lost on unmount —
+# without this server-side mirror the UI wrongly reports "idle" while the
+# worker thread is still busy.
+_session_phase_progress: dict[str, dict[int, dict]] = {}
+_session_phase_progress_lock = threading.Lock()
+_PHASE_PROGRESS_LOG_BUFFER = 60   # last N log lines kept in memory per phase
+
+
+def _phase_progress_open(session_id: str | None, phase: int) -> None:
+    if not session_id:
+        return
+    with _session_phase_progress_lock:
+        bucket = _session_phase_progress.setdefault(session_id, {})
+        bucket[phase] = {"started_at": time.time(), "recent_logs": []}
+
+
+def _phase_progress_log(session_id: str | None, phase: int, line: str) -> None:
+    if not session_id or not line:
+        return
+    line = line.rstrip()
+    if not line:
+        return
+    with _session_phase_progress_lock:
+        bucket = _session_phase_progress.get(session_id) or {}
+        rec = bucket.get(phase)
+        if rec is None:
+            return
+        rec["recent_logs"].append(line)
+        if len(rec["recent_logs"]) > _PHASE_PROGRESS_LOG_BUFFER:
+            del rec["recent_logs"][:-_PHASE_PROGRESS_LOG_BUFFER]
+
+
+def _phase_progress_close(session_id: str | None, phase: int) -> None:
+    if not session_id:
+        return
+    with _session_phase_progress_lock:
+        bucket = _session_phase_progress.get(session_id, {})
+        bucket.pop(phase, None)
+        if not bucket:
+            _session_phase_progress.pop(session_id, None)
+
+
+def _phase_progress_snapshot(session_id: str | None) -> list[dict]:
+    """Public-facing list of running phases for /api/state. Caps the
+    per-phase log tail so a long-running phase doesn't bloat the polled
+    payload — the SPA only needs enough lines to feel "live"."""
+    if not session_id:
+        return []
+    with _session_phase_progress_lock:
+        bucket = _session_phase_progress.get(session_id) or {}
+        out = []
+        for phase, rec in sorted(bucket.items()):
+            out.append({
+                "phase":       phase,
+                "started_at":  rec["started_at"],
+                "elapsed_s":   round(time.time() - rec["started_at"], 1),
+                "recent_logs": list(rec["recent_logs"])[-20:],
+            })
+        return out
+
+
 def _is_local_request(request: Request) -> bool:
     host = getattr(request.client, "host", "") if request.client else ""
     return host in ("127.0.0.1", "::1", "localhost")
@@ -937,6 +1009,25 @@ def _load_session_state(session_id: str) -> dict:
     # default so every poll of /api/state returns a still-valid mode.
     if state.get("mode") == "demo":
         state["mode"] = "ollama"
+    # Claude is under active development — non-devs who saved `mode='anthropic'`
+    # before that change would otherwise hit the coming-soon gate on every
+    # phase run. Coerce them back to Ollama so the app stays usable. Devs
+    # keep their config so they can continue testing the in-progress
+    # integration.
+    user = state.get("user") or {}
+    if state.get("mode") == "anthropic" and not user.get("is_developer"):
+        state["mode"] = "ollama"
+    # Cloud Ollama models are Pro-only. A free user whose session was saved
+    # while they were Pro (or before the gate landed) would otherwise silently
+    # keep using a paid model after downgrade. Snap them to the canonical
+    # free-tier local model; the SettingsPage UI does the same on next render.
+    plan = (user.get("plan_tier") or "free").lower()
+    model = str(state.get("ollama_model") or "")
+    if (state.get("mode") == "ollama"
+            and model.lower().endswith("cloud")
+            and plan != "pro"
+            and not user.get("is_developer")):
+        state["ollama_model"] = LOCAL_OLLAMA_MODEL
     return state
 
 
@@ -1083,8 +1174,13 @@ async def session_state_middleware(request: Request, call_next):
 # ── Resume helpers ────────────────────────────────────────────────────────────
 
 def _new_resume_record(filename: str, text: str, latex_source=None,
-                       original_path: str | None = None) -> dict:
+                       original_path: str | None = None,
+                       source_format: str | None = None) -> dict:
     now = datetime.now().isoformat()
+    if source_format is None and filename:
+        suffix = Path(filename).suffix.lower().lstrip(".")
+        if suffix in ("tex", "docx", "pdf", "txt", "md"):
+            source_format = suffix
     return {
         "id": uuid.uuid4().hex,
         "filename": filename,
@@ -1095,6 +1191,10 @@ def _new_resume_record(filename: str, text: str, latex_source=None,
         # rather than just the extracted text. None for the demo resume and
         # for paste-as-text records — the SPA falls back to the text view.
         "original_path": original_path,
+        # "tex" | "docx" | "pdf" | "txt" | "md" | None — drives which
+        # tailoring renderer runs in /api/resume/tailor. None means "use
+        # the default template-library path".
+        "source_format": source_format,
         "profile": None,
         "primary": False,
         "created_at": now,
@@ -1103,11 +1203,25 @@ def _new_resume_record(filename: str, text: str, latex_source=None,
 
 
 def _get_primary_resume() -> dict | None:
-    for r in (_S.get("resumes") or []):
-        if r.get("primary"):
-            return r
+    primary = None
     rs = _S.get("resumes") or []
-    return rs[0] if rs else None
+    for r in rs:
+        if r.get("primary"):
+            primary = r
+            break
+    if primary is None and rs:
+        primary = rs[0]
+    if primary is None:
+        return None
+    # Backfill source_format on legacy records (uploaded before this field existed).
+    if "source_format" not in primary or primary.get("source_format") is None:
+        suffix = ""
+        if primary.get("original_path"):
+            suffix = Path(primary["original_path"]).suffix.lower().lstrip(".")
+        elif primary.get("filename"):
+            suffix = Path(primary["filename"]).suffix.lower().lstrip(".")
+        primary["source_format"] = suffix if suffix in ("tex", "docx", "pdf", "txt", "md") else None
+    return primary
 
 
 def _get_resume_by_id(rid: str) -> dict | None:
@@ -1464,6 +1578,8 @@ def _serialize_resume(r: dict) -> dict:
         "original_url": original_url,
         "original_kind": original_kind,
         "preview_pdf_url": preview_pdf_url,
+        # Drives the tailoring renderer choice in /api/resume/tailor.
+        "source_format": r.get("source_format") or original_kind or None,
     }
 
 
@@ -1680,16 +1796,18 @@ def _run_phase_sse(phase: int, fn, state: dict | None = None, session_id: str | 
             "message": "Server is in maintenance mode — phase runs are paused",
         })
         return
-    # Belt-and-suspenders plan gate: defends against state set before a downgrade
-    # or sneaking around the /api/config gate. Anthropic provider requires Pro.
+    # Belt-and-suspenders gate: defends against `mode='anthropic'` sneaking past
+    # the /api/config check (e.g. saved before Claude moved to coming-soon).
+    # Anthropic is dev-only until launch — non-devs get bounced with the same
+    # `coming_soon` code the SPA already understands.
     if state and state.get("mode") == "anthropic":
-        plan = ((state.get("user") or {}).get("plan_tier")) or "free"
-        if plan != "pro":
+        user = (state.get("user") or {})
+        if not user.get("is_developer"):
             yield _sse({
                 "type": "error",
                 "phase": phase,
-                "message": "Claude requires the Pro plan. Switch provider in Settings or upgrade.",
-                "code": "plan_required",
+                "message": "Anthropic Claude is under active development — coming soon. Switch to Ollama in Settings.",
+                "code": "coming_soon",
             })
             return
     if not _try_claim_phase(session_id, phase):
@@ -1706,19 +1824,43 @@ def _run_phase_sse(phase: int, fn, state: dict | None = None, session_id: str | 
     _phase_logs[(session_id, phase)] = log_q
     lock = _session_lock(session_id)
 
+    # Open the server-side progress buffer BEFORE spawning the worker so
+    # /api/state.running_phases reports the in-flight phase the moment the
+    # SSE generator yields its first event. The worker's finally always
+    # closes the buffer (even if the SSE client navigates away mid-phase).
+    _phase_progress_open(session_id, phase)
+
+    class _ProgressLogCapture(_LogCapture):
+        """`_LogCapture` plus a fan-out into the per-session progress
+        buffer. Lets a returning user see the same recent log lines the
+        original SSE client saw — even if they closed the tab and the
+        SSE generator received GeneratorExit before the worker finished.
+        """
+        def write(self, text):
+            n = super().write(text)
+            if text and text.strip():
+                _phase_progress_log(session_id, phase, text)
+            return n
+
     def _worker():
         import sys
         old_stdout = sys.stdout
         try:
             if state is not None:
                 _bind_thread_state(state, session_id)
-            sys.stdout = _LogCapture(old_stdout, log_q)
+            sys.stdout = _ProgressLogCapture(old_stdout, log_q)
             val = fn()
             result_q.put(("ok", val))
         except Exception as exc:
             result_q.put(("err", str(exc)))
         finally:
             sys.stdout = old_stdout
+            # Always tear down the progress buffer in the WORKER's finally,
+            # not the generator's — the worker outlives the SSE connection
+            # when the user navigates away mid-phase. Closing this on the
+            # generator's GeneratorExit would clear the buffer while the
+            # work is still in progress, defeating the whole point.
+            _phase_progress_close(session_id, phase)
 
     t = threading.Thread(target=_worker, daemon=True)
     t.start()
@@ -1779,30 +1921,53 @@ def _run_phase_sse(phase: int, fn, state: dict | None = None, session_id: str | 
 
 def _build_tailored_item(*, job: dict, tailored: dict, resume_ref: str,
                           profile: dict, score=None,
-                          status: str = "Tailored", notes: str = "") -> dict:
+                          status: str = "Tailored", notes: str = "",
+                          files: dict | None = None) -> dict:
     """Build the SPA-facing item dict for a single tailored resume.
 
-    Used by both the phase 4 batch serializer (_serialize for phase==4) and
-    the per-job ``POST /api/resume/tailor`` endpoint, so both paths return
-    the same shape and the React TailoredResumeCard renders identically
-    whether the user batch-ran phase 4 or clicked Tailor on one job.
+    Handles both legacy v1 dicts and v2 (TailoredResume) dicts. v2 entries
+    include the full structured resume + diff markers under ``v2`` so the
+    SPA can render the green-highlighted preview iframe.
+
+    `files` is the {tex, pdf, docx, html_preview, base, template_id, ...}
+    dict returned by `_save_tailored_resume`. When set, we expose
+    ``html_preview_url`` + template metadata to the client.
     """
     profile = profile or {}
     tailored = tailored or {}
+    files = files or {}
+    is_v2 = tailored.get("schema_version") == 2
+
     profile_skills_lower = {
         str(s).lower().strip()
         for s in (profile.get("top_hard_skills") or []) if s and str(s).strip()
     }
-    skills_raw = tailored.get("skills_reordered") or []
-    skills = [s.get("skill", str(s)) if isinstance(s, dict) else str(s) for s in skills_raw]
 
-    bullets_full = []
-    for entry in (tailored.get("experience_bullets") or []):
-        if not isinstance(entry, dict):
-            continue
-        bullets = [str(b) for b in (entry.get("bullets") or []) if str(b).strip()]
-        if entry.get("role") or bullets:
-            bullets_full.append({"role": entry.get("role", ""), "bullets": bullets})
+    # ── Flatten skills + experience bullets into the legacy SPA shape ───────
+    if is_v2:
+        skills: list[str] = []
+        for cat in tailored.get("skills") or []:
+            for it in cat.get("items") or []:
+                if it.get("text"):
+                    skills.append(str(it["text"]))
+        bullets_full: list[dict] = []
+        for r in tailored.get("experience") or []:
+            blist = [b.get("text", "") for b in (r.get("bullets") or []) if b.get("text")]
+            if r.get("title") or blist:
+                title = r.get("title") or ""
+                if r.get("company"):
+                    title = f"{title} — {r['company']}" if title else r["company"]
+                bullets_full.append({"role": title, "bullets": blist})
+    else:
+        skills_raw = tailored.get("skills_reordered") or []
+        skills = [s.get("skill", str(s)) if isinstance(s, dict) else str(s) for s in skills_raw]
+        bullets_full = []
+        for entry in (tailored.get("experience_bullets") or []):
+            if not isinstance(entry, dict):
+                continue
+            bullets = [str(b) for b in (entry.get("bullets") or []) if str(b).strip()]
+            if entry.get("role") or bullets:
+                bullets_full.append({"role": entry.get("role", ""), "bullets": bullets})
 
     reqs = [str(r).strip() for r in (job.get("requirements") or []) if r and str(r).strip()]
     keyword_comparison = []
@@ -1819,8 +1984,8 @@ def _build_tailored_item(*, job: dict, tailored: dict, resume_ref: str,
         })
 
     ats_before = int(tailored.get("ats_score_before") or 0)
-    ats_after  = int(tailored.get("ats_score_after") or 0)
-    return {
+    ats_after = int(tailored.get("ats_score_after") or 0)
+    item: dict = {
         "co":               job.get("company", "") or job.get("co", ""),
         "role":             job.get("title", "")   or job.get("role", ""),
         "loc":              job.get("location", "") or job.get("loc", ""),
@@ -1842,6 +2007,49 @@ def _build_tailored_item(*, job: dict, tailored: dict, resume_ref: str,
         "has_cl":           bool(tailored.get("cover_letter")),
         "cover_letter":     str(tailored.get("cover_letter") or "")[:2000],
     }
+
+    if is_v2:
+        item["schema_version"] = 2
+        item["v2"] = {
+            "name":     tailored.get("name", ""),
+            "email":    tailored.get("email", ""),
+            "phone":    tailored.get("phone", ""),
+            "linkedin": tailored.get("linkedin", ""),
+            "github":   tailored.get("github", ""),
+            "location": tailored.get("location", ""),
+            "website":  tailored.get("website", ""),
+            "summary":  tailored.get("summary"),
+            "skills":   tailored.get("skills") or [],
+            "experience": tailored.get("experience") or [],
+            "projects":   tailored.get("projects") or [],
+            "education":  tailored.get("education") or [],
+            "ats_keywords_added": tailored.get("ats_keywords_added") or [],
+        }
+        for bucket in ("awards", "certifications", "publications", "activities",
+                       "leadership", "volunteer", "coursework", "languages",
+                       "custom_sections"):
+            if tailored.get(bucket):
+                item["v2"][bucket] = tailored[bucket]
+
+    if files.get("html_preview") and files.get("base") is not None:
+        # files["html_preview"] is just a filename; the resume_ref already
+        # contains the session-relative path prefix (sessions/{sid}/) when
+        # set, so the URL reuses that prefix.
+        prefix = ""
+        if resume_ref:
+            # resume_ref like "sessions/abc/Foo_Resume_X.pdf" → "sessions/abc/"
+            slash = resume_ref.rfind("/")
+            if slash >= 0:
+                prefix = resume_ref[: slash + 1]
+        item["html_preview_url"] = f"/output/{prefix}{files['html_preview']}"
+    if files.get("template_id"):
+        item["template_id"] = files["template_id"]
+        if files.get("template_confidence") is not None:
+            item["template_confidence"] = files["template_confidence"]
+    if files.get("docx"):
+        item["docx_file"] = files["docx"]
+
+    return item
 
 
 def _serialize(phase: int, val) -> dict:
@@ -2184,19 +2392,26 @@ def load_demo_resume(request: Request):
 async def update_config(req: Request):
     auth_user = _require_auth_user(req)
     body = await req.json()
-    # Mode whitelist — `demo` was retired in favor of always-on Ollama (or
-    # Anthropic for Pro). The DemoProvider class still exists as Ollama's
-    # internal-fallback, but is no longer user-selectable.
+    # Mode whitelist — `demo` was retired in favor of always-on Ollama. The
+    # `anthropic` value is still accepted in the schema so developers can
+    # exercise the in-progress Claude integration, but customer access is
+    # gated below ("coming soon" until Claude launches publicly).
     if body.get("mode") not in (None, "ollama", "anthropic"):
         raise HTTPException(400, f"Invalid mode: {body.get('mode')!r} (expected 'ollama' or 'anthropic')")
-    # Plan gates — devs bypass all of them.
     plan = (auth_user or {}).get("plan_tier") or "free"
     is_dev = _is_underlying_dev_request(req)
-    if body.get("mode") == "anthropic" and plan != "pro" and not is_dev:
+    # Anthropic Claude is under active development — reserved for developers
+    # until it launches. Non-devs get a 503 + `coming_soon` code so the SPA
+    # can show the right copy instead of an "upgrade to Pro" upsell.
+    if body.get("mode") == "anthropic" and not is_dev:
         return JSONResponse(
-            {"ok": False, "error": "Claude requires the Pro plan", "code": "plan_required"},
-            status_code=402,
+            {"ok": False,
+             "error": "Anthropic Claude is under active development — coming soon.",
+             "code": "coming_soon"},
+            status_code=503,
         )
+    # Cloud Ollama models (Ollama Turbo proxied through the Pi) require Pro.
+    # Local Ollama models stay free.
     if (body.get("ollama_model")
             and str(body["ollama_model"]).lower().endswith("cloud")
             and plan != "pro" and not is_dev):
@@ -2470,6 +2685,12 @@ def get_state(request: Request):
         "liked_ids": list(_S.get("liked_ids") or []),
         "hidden_ids": list(_S.get("hidden_ids") or []),
         "dev_tweaks": _S.get("dev_tweaks") or {},
+
+        # Phases currently executing on the server. Lets the Agent page
+        # rehydrate "running" state when the user navigates away and back —
+        # without this, the local React `running` flag is lost on unmount
+        # and the UI lies about pipeline activity.
+        "running_phases": _phase_progress_snapshot(_S.session_id()),
     }
 
 @app.post("/api/reset")
@@ -2515,6 +2736,273 @@ def reset_state(request: Request):
     shutil.rmtree(out_dir, ignore_errors=True)
     out_dir.mkdir(parents=True, exist_ok=True)
     return {"ok": True}
+
+
+# ── Pipeline reset (non-destructive) ─────────────────────────────────────────
+#
+# Distinct from `/api/reset` (Settings page → "Reset all data") which is the
+# scorched-earth flow that wipes the resume, profile, and every generated
+# file. `/api/pipeline/reset` only clears the run-specific outputs (jobs,
+# scoring, applications, tracker, report) so the user can start a fresh
+# pipeline without re-uploading their resume or losing the documents they've
+# already produced. Generated files are PRESERVED — the user manages them
+# from the Documents page.
+
+# Phase-result keys that get wiped on a pipeline reset. Phase 1 (profile
+# extraction) is intentionally NOT in this list — the profile is upstream of
+# the pipeline and a reset shouldn't force the user to wait for re-extraction.
+_PIPELINE_RESULT_KEYS = (
+    "jobs", "scored", "applications",
+    "tracker_path", "tracker_data", "report",
+)
+
+
+@app.post("/api/pipeline/reset")
+def reset_pipeline(request: Request):
+    """Clear pipeline run data only.
+
+    Preserves: resume, profile, settings, generated documents, auth, and
+    all UI state (liked/hidden ids, dev tweaks, light mode). Use this when
+    the user wants to re-run discovery → scoring → tailoring against a
+    fresh starting point without losing their account or files.
+
+    Refuses with 409 while a phase is currently executing — clearing state
+    out from under a running worker thread would corrupt the result the
+    worker is about to write.
+    """
+    _require_auth_user(request)
+    sid = _S.session_id()
+
+    progress = _phase_progress_snapshot(sid)
+    if progress:
+        running = ", ".join(f"phase {p['phase']}" for p in progress)
+        raise HTTPException(
+            409,
+            f"Cannot reset while {running} is running. Wait for it to finish or reload the page.",
+        )
+
+    with _session_lock(sid):
+        for k in _PIPELINE_RESULT_KEYS:
+            _S[k] = None
+        _S["tailored_map"] = {}
+
+        # Drop phases 2..7 from done/error/elapsed. Keep phase 1 because the
+        # profile is upstream of the pipeline and we never invalidated it.
+        done = _S.get("done")
+        if not isinstance(done, set):
+            done = set(done or [])
+        for p in range(2, 8):
+            done.discard(p)
+        _S["done"] = done
+
+        for bucket_key in ("error", "elapsed"):
+            bucket = _S.get(bucket_key) or {}
+            for p in list(bucket.keys()):
+                try:
+                    if int(p) >= 2:
+                        bucket.pop(p, None)
+                except (TypeError, ValueError):
+                    continue
+            _S[bucket_key] = bucket
+
+        # Persist inline — same reasoning as /api/reset: avoid the race
+        # between the post-response middleware save and a /api/state poll.
+        if sid:
+            state = _S.current()
+            user = state.get("user") or {}
+            if (user.get("id") or user.get("email")) and _session_store is not None:
+                _session_store.save_state(sid, state)
+            else:
+                _memory_sessions[sid] = state
+
+    return {"ok": True, "preserved": "resume, profile, settings, documents"}
+
+
+# ── Documents API ────────────────────────────────────────────────────────────
+#
+# The Documents page lets users manage every artifact the pipeline produces
+# — tailored resumes (.tex / .pdf), trackers (.xlsx), run reports (.md),
+# cover letters (.txt), etc. The static /output/sessions/{sid}/{name} route
+# already handles downloads (with auth + session-scoping); these endpoints
+# add list / edit / rename / delete on top.
+
+# Suffixes the Documents page is allowed to surface and mutate. Mirrors the
+# allowlist on /output/{path} but excludes types that are inputs (we never
+# manage uploaded resumes here — that's the Resume page) or that aren't
+# user-facing (databases, lock files).
+_DOCUMENT_SUFFIXES = {
+    ".pdf", ".tex", ".docx", ".doc", ".txt", ".md",
+    ".xlsx", ".xls", ".csv",
+}
+# Subset of the above that the SPA can edit in-place via a textarea. Binary
+# formats (PDF / Excel / Word) are download-or-delete-only.
+_DOCUMENT_EDITABLE_SUFFIXES = {".tex", ".txt", ".md", ".csv"}
+# Sub-folders inside the session output dir that the Documents page should
+# NOT traverse (uploads/ is the originals stash for the Resume page).
+_DOCUMENT_HIDDEN_DIRS = {"uploads"}
+
+
+def _classify_document(name: str) -> str:
+    """Group a filename into a UI-facing kind. The classifier is
+    deliberately tolerant — anything we can't confidently bucket lands
+    in 'other' and the SPA renders it under a catch-all section."""
+    n = name.lower()
+    if n.endswith((".xlsx", ".xls", ".csv")) and "tracker" in n:
+        return "tracker"
+    flat = n.replace("_", "").replace("-", "")
+    if "coverletter" in flat:
+        return "cover_letter"
+    if n.endswith((".tex", ".pdf")) and ("_resume_" in n or n.startswith("resume_")):
+        return "resume"
+    if n.endswith(".md") and ("report" in n or "run-report" in n):
+        return "report"
+    return "other"
+
+
+def _safe_document_path(name: str, *, must_exist: bool = True) -> Path:
+    """Resolve `name` against the bound session's output dir and refuse
+    anything that escapes it, or that isn't on the document suffix
+    allowlist. Pass `must_exist=False` for the destination of a rename
+    (the file isn't there yet — that's the point)."""
+    if not name or not isinstance(name, str):
+        raise HTTPException(400, "Document name is required")
+    # Reject path components / hidden files / traversal up front so a
+    # malicious name can't hit the resolve() codepath.
+    if "/" in name or "\\" in name or name.startswith(".") or ".." in name:
+        raise HTTPException(400, "Invalid document name")
+    out_dir = _session_output_dir().resolve()
+    target = (out_dir / name).resolve()
+    try:
+        target.relative_to(out_dir)
+    except ValueError:
+        raise HTTPException(400, "Document is outside the session directory") from None
+    if target.suffix.lower() not in _DOCUMENT_SUFFIXES:
+        raise HTTPException(400, f"Document type {target.suffix!r} is not allowed")
+    # Guard against accidentally targeting one of our hidden sub-dirs.
+    parts = {p.lower() for p in target.relative_to(out_dir).parts[:-1]}
+    if parts & _DOCUMENT_HIDDEN_DIRS:
+        raise HTTPException(400, "Cannot manage documents inside this folder")
+    if must_exist and (not target.exists() or not target.is_file()):
+        raise HTTPException(404, "Document not found")
+    return target
+
+
+def _serialize_document(p: Path) -> dict:
+    stat = p.stat()
+    return {
+        "name":     p.name,
+        "kind":     _classify_document(p.name),
+        "size_kb":  round(stat.st_size / 1024, 1),
+        "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
+        "url":      _output_url(p),
+        "ext":      p.suffix.lstrip(".").lower(),
+        "editable": p.suffix.lower() in _DOCUMENT_EDITABLE_SUFFIXES,
+    }
+
+
+@app.get("/api/documents")
+def documents_list(request: Request):
+    """List every artifact the pipeline has produced for the bound session.
+
+    Excludes the `uploads/` sub-folder (those are originals managed by
+    the Resume page) and any file whose suffix isn't on the allowlist.
+    Sorted newest-first by mtime so freshly-tailored resumes lead.
+    """
+    _require_auth_user(request)
+    out_dir = _session_output_dir()
+    items: list[dict] = []
+    if out_dir.exists():
+        for p in out_dir.iterdir():
+            if not p.is_file():
+                continue
+            if p.name.startswith("."):
+                continue
+            if p.suffix.lower() not in _DOCUMENT_SUFFIXES:
+                continue
+            try:
+                items.append(_serialize_document(p))
+            except OSError:
+                continue
+    items.sort(key=lambda d: d.get("modified") or "", reverse=True)
+    return {"documents": items, "total": len(items)}
+
+
+@app.get("/api/documents/{name}/content")
+def document_content(name: str, request: Request):
+    """Return the plaintext body of an editable document. 400s for binary
+    formats — the SPA only offers an editor for the editable suffixes."""
+    _require_auth_user(request)
+    target = _safe_document_path(name)
+    if target.suffix.lower() not in _DOCUMENT_EDITABLE_SUFFIXES:
+        raise HTTPException(400, f"Cannot edit {target.suffix} files in-app")
+    try:
+        content = target.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        raise HTTPException(500, f"Could not read {target.name}: {exc}") from exc
+    return {"name": target.name, "content": content,
+            "editable": True, "ext": target.suffix.lstrip(".").lower()}
+
+
+@app.post("/api/documents/{name}/content")
+async def document_save_content(name: str, request: Request):
+    """Persist edits to an editable document. The content is written
+    atomically so a crashed write can't half-update the file."""
+    _require_auth_user(request)
+    body = await request.json()
+    text = body.get("content")
+    if not isinstance(text, str):
+        raise HTTPException(400, "content must be a string")
+    target = _safe_document_path(name)
+    if target.suffix.lower() not in _DOCUMENT_EDITABLE_SUFFIXES:
+        raise HTTPException(400, f"Cannot edit {target.suffix} files in-app")
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    try:
+        tmp.write_text(text, encoding="utf-8")
+        tmp.replace(target)
+    except OSError as exc:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise HTTPException(500, f"Could not save {target.name}: {exc}") from exc
+    return {"ok": True, "name": target.name,
+            "modified": datetime.fromtimestamp(target.stat().st_mtime).isoformat(timespec="seconds")}
+
+
+@app.post("/api/documents/{name}/rename")
+async def document_rename(name: str, request: Request):
+    """Rename a document within the session's output dir. Source must
+    exist; destination must not. The new name is path-validated through
+    the same guard as the source, so the rename can never escape the
+    session directory or land on a forbidden suffix."""
+    _require_auth_user(request)
+    body = await request.json()
+    new_name = (body.get("name") or "").strip()
+    if not new_name:
+        raise HTTPException(400, "New name is required")
+    src = _safe_document_path(name)
+    dst = _safe_document_path(new_name, must_exist=False)
+    if dst.exists():
+        raise HTTPException(409, f"A document named {new_name!r} already exists")
+    try:
+        src.rename(dst)
+    except OSError as exc:
+        raise HTTPException(500, f"Could not rename: {exc}") from exc
+    return {"ok": True, "name": dst.name}
+
+
+@app.delete("/api/documents/{name}")
+def document_delete(name: str, request: Request):
+    """Permanently delete a document. The /output/sessions/{sid}/{name}
+    download URL becomes 404 immediately — the SPA's Documents page
+    just removes the row from its local state."""
+    _require_auth_user(request)
+    target = _safe_document_path(name)
+    try:
+        target.unlink()
+    except OSError as exc:
+        raise HTTPException(500, f"Could not delete {target.name}: {exc}") from exc
+    return {"ok": True, "name": target.name}
 
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
@@ -3001,17 +3489,108 @@ async def resume_render_preview(resume_id: str, request: Request):
     return {"ok": True, "preview_pdf_url": _output_url(OUTPUT_DIR / rel)}
 
 
+def _resolve_source_format() -> tuple[str | None, Path | None]:
+    """Inspect the primary resume record to decide which renderer path the
+    tailoring endpoint should hand to ``_save_tailored_resume``.
+
+    Returns ``(source_format, source_bytes_path)``:
+      • ``source_format`` is one of "tex" | "docx" | "pdf" | "txt" | "md" | None
+      • ``source_bytes_path`` is the absolute path to the original upload bytes
+        (only meaningful for the docx in-place renderer; others reuse
+        latex_source / format_profile already in session state)
+
+    Backfills missing ``source_format`` from the original upload's suffix —
+    works for legacy resume records uploaded before this metadata was added.
+    """
+    primary = _get_primary_resume() or {}
+    src = primary.get("source_format")
+    if not src and primary.get("original_path"):
+        suffix = Path(primary["original_path"]).suffix.lower().lstrip(".")
+        if suffix in ("tex", "docx", "pdf", "txt", "md"):
+            src = suffix
+            primary["source_format"] = src
+    bytes_path: Path | None = None
+    if primary.get("original_path"):
+        candidate = OUTPUT_DIR / primary["original_path"]
+        if candidate.exists():
+            bytes_path = candidate
+    return src, bytes_path
+
+
+@app.post("/api/resume/tailor/analyze")
+async def resume_tailor_analyze(request: Request):
+    """Step 1 of the two-step tailoring flow: classify JD keywords as
+    must-have / nice-to-have and report which are already on the resume.
+
+    Heuristic-only — no LLM call. Returns:
+      {
+        must_have:    [{keyword, present, suggested_section}],
+        nice_to_have: [{keyword, present, suggested_section}],
+        ats_score_current: int,
+        estimated_after:   int,
+      }
+    """
+    _require_auth_user(request)
+    profile = _S.get("profile") or {}
+    if not profile:
+        raise HTTPException(400, "Upload a resume first.")
+    body = await request.json()
+    job_id = (body.get("job_id") or "").strip()
+    if not job_id:
+        raise HTTPException(400, "job_id is required")
+    job = _find_job_by_id(job_id)
+    if not job:
+        raise HTTPException(404, f"Job not found: {job_id!r}")
+
+    requirements = [str(r).strip() for r in (job.get("requirements") or []) if str(r).strip()]
+    skills = [str(s).strip() for s in (profile.get("top_hard_skills") or []) if str(s).strip()]
+    resume_text = _S.get("resume_text") or ""
+
+    half = max(1, len(requirements) // 2)
+    must = requirements[:half]
+    nice = requirements[half:]
+
+    haystack = " ".join(skills + [resume_text]).lower()
+
+    def _classify(kws: list[str]) -> list[dict]:
+        out: list[dict] = []
+        for kw in kws:
+            present = kw.lower() in haystack
+            out.append({
+                "keyword": kw,
+                "present": present,
+                "suggested_section": "skills" if not present else "experience",
+            })
+        return out
+
+    must_classified = _classify(must)
+    nice_classified = _classify(nice)
+    missing_count = sum(
+        1 for c in must_classified + nice_classified if not c["present"]
+    )
+    current = _ats_score(resume_text + " " + " ".join(skills), requirements)
+    estimated = min(100, current + missing_count * 4)
+
+    return {
+        "must_have":         must_classified,
+        "nice_to_have":      nice_classified,
+        "ats_score_current": current,
+        "estimated_after":   estimated,
+    }
+
+
 @app.post("/api/resume/tailor")
 async def resume_tailor(request: Request):
-    """Per-job, on-demand resume tailoring.
+    """Per-job, on-demand resume tailoring (TailoredResume v2).
 
-    This is the jobright.ai-style entry point: the user clicks "Tailor for
-    this job" on a single JobCard and we run phase 4 against just that job,
-    without requiring phases 2/3 to have been kicked off in this session.
+    Step 2 of the jobright.ai-style flow: the user has already reviewed the
+    keyword list via ``/tailor/analyze`` and submits selected_keywords here.
+    Callers without a review pass omit ``selected_keywords`` and we default
+    to the heuristic's "all must-haves missing from resume" behavior.
 
-    Body: { job_id: str, cover_letter?: bool }
-    Returns: same shape as one entry from ``GET /api/phase/4/run``'s
-    ``items`` list, so the SPA can reuse <TailoredResumeCard/>.
+    Body: { job_id, cover_letter?, selected_keywords?: [str] }
+    Returns: same item shape as ``GET /api/phase/4/run``.items[] so the SPA
+    reuses <TailoredResumeCard/> + the new green-highlight preview.
     """
     auth_user = _require_auth_user(request)
 
@@ -3019,13 +3598,12 @@ async def resume_tailor(request: Request):
     if not profile:
         raise HTTPException(400, "Upload a resume first — no profile to tailor against.")
 
-    if _S.get("mode") == "anthropic" and not (
-        bool(auth_user.get("is_developer")) or auth_user.get("plan_tier") == "pro"
-    ):
+    if _S.get("mode") == "anthropic" and not bool(auth_user.get("is_developer")):
         return JSONResponse(
-            {"ok": False, "error": "Claude tailoring requires the Pro plan. Switch to Ollama or Demo, or upgrade.",
-             "code": "plan_required"},
-            status_code=402,
+            {"ok": False,
+             "error": "Anthropic Claude is under active development — coming soon. Switch to Ollama in Settings.",
+             "code": "coming_soon"},
+            status_code=503,
         )
 
     body = await request.json()
@@ -3033,6 +3611,10 @@ async def resume_tailor(request: Request):
     if not job_id:
         raise HTTPException(400, "job_id is required")
     include_cover = bool(body.get("cover_letter", _S.get("cover_letter", False)))
+    selected_keywords = [
+        str(k).strip() for k in (body.get("selected_keywords") or [])
+        if str(k).strip()
+    ]
 
     job = _find_job_by_id(job_id)
     if not job:
@@ -3043,10 +3625,14 @@ async def resume_tailor(request: Request):
     except Exception as exc:
         raise HTTPException(500, f"Provider unavailable: {exc}") from exc
 
+    source_format, source_bytes_path = _resolve_source_format()
+
     try:
         tailored = phase4_tailor_resume(
             job, profile, _S.get("resume_text", ""), prov,
             include_cover_letter=include_cover,
+            selected_keywords=selected_keywords,
+            source_format=source_format,
         )
         resume_files = _save_tailored_resume(
             job, tailored, profile,
@@ -3054,19 +3640,25 @@ async def resume_tailor(request: Request):
             resume_text=_S.get("resume_text", ""),
             output_dir=_session_output_dir(),
             format_profile=_primary_format_profile(),
+            source_format=source_format,
+            source_bytes_path=source_bytes_path,
         )
     except Exception as exc:
         raise HTTPException(500, f"Tailoring failed: {type(exc).__name__}: {exc}") from exc
 
-    resume_file = resume_files.get("pdf") or resume_files.get("tex") or ""
+    # Pick the primary downloadable artifact: prefer .docx (in-place editable)
+    # if produced, else .pdf, else .tex.
+    resume_file = (
+        resume_files.get("docx")
+        or resume_files.get("pdf")
+        or resume_files.get("tex")
+        or ""
+    )
     resume_ref = ""
     if resume_file:
         resume_path = _session_output_dir() / resume_file
         resume_ref = Path(_output_url(resume_path)).as_posix().removeprefix("/output/")
 
-    # Persist into the session's tailored_map so a later GET /api/state (and
-    # the phase 4 batch view) sees this single-job result alongside any
-    # batch-tailored entries. The key matches phase 4's ``jk`` derivation.
     jk = job.get("id") or job.get("title", "")
     tmap = _S.get("tailored_map") or {}
     tmap[jk] = {"job": job, "tailored": tailored, "resume_file": resume_ref}
@@ -3080,6 +3672,7 @@ async def resume_tailor(request: Request):
         score=job.get("score", 0),
         status="Tailored",
         notes="",
+        files=resume_files,
     )
     return {"item": item}
 
@@ -3753,6 +4346,83 @@ def jobs_facets(request: Request):
     return {"kind": kind, "buckets": buckets}
 
 
+@app.get("/api/jobs/{job_id}/details")
+def jobs_details(job_id: str, request: Request):
+    """Full per-job detail payload for the JobDetailView sub-page.
+
+    Composes:
+      • full description re-fetched from the upstream source's per-job API
+        (greenhouse / lever / ashby / workable) and parsed into
+        responsibilities / required / preferred / benefits buckets.
+      • a Wikipedia-derived company summary + image when available.
+
+    The fetch is cached for 1 h per job (24 h per company) so opening the
+    same posting twice doesn't re-hit the upstream APIs.
+
+    Returns ``has_description=False`` when the source isn't supported or
+    the upstream fetch failed — the SPA renders a "view original posting"
+    fallback. Wikipedia data is best-effort and returns empty strings on
+    miss; the SPA falls back to the curated lookup links.
+    """
+    _require_auth_user(request)
+
+    # Resolve the job — try the persistent index first (handles the common
+    # case of a feed-served job), then fall back to the in-session pools
+    # for jobs that came in via Phase 2/3 with a different id shape.
+    rec = None
+    if _session_store is not None:
+        try:
+            from pipeline import job_repo
+            with _session_store.connect() as conn:
+                rec = job_repo.get_job(conn, job_id)
+        except Exception as exc:
+            print(f"[jobs/details] job_repo.get_job failed for {job_id!r}: "
+                  f"{type(exc).__name__}: {exc}", file=sys.stderr)
+    if rec is None:
+        rec = _find_job_by_id(job_id)
+    if not rec:
+        raise HTTPException(404, f"Job not found: {job_id!r}")
+
+    # Normalize across the two shapes ('url' from job_repo, 'application_url'
+    # from session pools).
+    canonical_url = (rec.get("url") or rec.get("application_url") or "").strip()
+    source        = (rec.get("source") or "").strip()
+    company       = (rec.get("company") or rec.get("co") or "").strip()
+
+    try:
+        from pipeline import job_details as _details
+        payload = _details.get_job_details(job_id, canonical_url, source, company)
+    except Exception as exc:
+        # Surface a structured failure rather than a 500 — the SPA shows the
+        # "view original posting" fallback regardless.
+        print(f"[jobs/details] get_job_details failed for {job_id!r}: "
+              f"{type(exc).__name__}: {exc}", file=sys.stderr)
+        payload = {
+            "description":              "",
+            "lead_paragraph":           "",
+            "responsibilities":         [],
+            "required_qualifications":  [],
+            "preferred_qualifications": [],
+            "benefits":                 [],
+            "has_description":          False,
+            "fetched_at":               None,
+            "company_summary":          "",
+            "company_short_description": "",
+            "company_image":            "",
+            "company_wiki_url":         "",
+            "fetch_error":              f"{type(exc).__name__}: {exc}",
+        }
+
+    # Echo back the resolved meta the SPA already had — this lets the
+    # detail view render the source-platform tag even before the rest of
+    # the payload renders, and confirms which row we matched on a stale id.
+    payload["job_id"]        = job_id
+    payload["canonical_url"] = canonical_url
+    payload["source"]        = source
+    payload["company"]       = company
+    return payload
+
+
 @app.get("/api/jobs/source-status")
 def jobs_source_status(request: Request):
     """Per-source health snapshot for the dev page."""
@@ -3773,14 +4443,42 @@ def jobs_source_status(request: Request):
 
 @app.post("/api/jobs/source-status")
 async def jobs_source_status_force(request: Request):
-    """Force-tick one source (or all if body is empty). Restricted to dev."""
+    """Force-tick one source (or all if body is empty). Restricted to dev.
+
+    Single-source path runs synchronously (with a 30 s cap) so the caller
+    sees the result. Force-all path fires-and-forgets in a daemon thread —
+    18 sources × HTTP timeouts × the SQLite write lock can take 30-60 s
+    in aggregate, and the SPA's "Refresh" button is itself fire-and-forget
+    on this endpoint, so blocking the response thread serves nobody.
+    """
     if not _is_dev_request(request):
         raise HTTPException(403, "Developer access required")
     body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
     name = (body or {}).get("source") or None
     from pipeline import ingest as _job_ingest
-    results = _job_ingest.force_run(name)
-    return {"ok": True, "results": results}
+
+    if name:
+        # Specific source: run synchronously off the event loop, capped at 30 s.
+        import asyncio as _asyncio
+        try:
+            results = await _asyncio.wait_for(
+                _asyncio.to_thread(_job_ingest.force_run, name, 30.0),
+                timeout=35.0,
+            )
+        except _asyncio.TimeoutError:
+            results = [{"source": name, "ok": False, "error": "request timeout (>35 s)"}]
+        return {"ok": True, "results": results}
+
+    # Force all: kick a background thread and return immediately. The thread
+    # honors its own 60 s wall-clock cap inside force_run.
+    threading.Thread(
+        target=_job_ingest.force_run,
+        kwargs={"source_name": None, "wall_clock_timeout": 60.0},
+        daemon=True,
+        name="force-run-all",
+    ).start()
+    return {"ok": True, "started": True,
+            "note": "Running all sources in background — poll /api/jobs/source-status to track."}
 
 
 # ── Feedback ──────────────────────────────────────────────────────────────────

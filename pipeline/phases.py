@@ -646,69 +646,79 @@ def _tailoring_is_empty(tailored: dict) -> bool:
 
 def phase4_tailor_resume(job: dict, profile: dict, resume_text: str,
                           provider: BaseProvider, include_cover_letter: bool = False,
-                          section_order: list = None) -> dict:
-    """Produce a tailoring dict for *job* against *profile*.
+                          section_order: list = None, *,
+                          selected_keywords: list[str] | None = None,
+                          source_format: str | None = None) -> dict:
+    """Produce a TailoredResume v2 dict for *job* against *profile*.
 
     Pipeline:
-      1. Ask the configured provider.
-      2. Structurally validate the response (low-end local LLMs frequently
-         return wrong shapes — wrong types, ``null`` fields, dicts where
-         strings were expected).  Validation downgrades malformed output
-         to ``None`` so we don't render garbage.
-      3. If validation rejects, retry once.
-      4. If still bad, fall back to the deterministic heuristic.  The
-         heuristic NEVER fabricates: it reorders existing skills and
-         bullets and surfaces missing JD keywords as ``ats_keywords_missing``.
-      5. If validation accepts but a field is empty, merge the LLM's good
-         fields with heuristic defaults for the empties (hybrid mode).
+      1. Compute heuristic v2 baseline (cheap; used as safety net + merge target).
+      2. Ask provider for v2 (passing user-selected keywords + source_format hint).
+      3. Validate v2 shape; retry once on failure.
+      4. If still bad, fall back to heuristic.
+      5. Hybrid merge: keep LLM's good fields, heuristic backfills empties.
+      6. Compute ATS scores (before / after) over skills + bullets.
     """
-    # Always compute the heuristic first — it's cheap and serves as the
-    # safety net for every code path below.
-    heuristic = heuristic_tailor_resume(job, profile, resume_text)
+    from .heuristic_tailor import (
+        heuristic_tailor_resume_v2, merge_with_heuristic_v2, validate_v2_or_none,
+    )
+
+    heuristic = heuristic_tailor_resume_v2(
+        job, profile, resume_text, selected_keywords=selected_keywords,
+    )
 
     raw = None
     try:
-        raw = provider.tailor_resume(job, profile, resume_text) or {}
+        raw = provider.tailor_resume(
+            job, profile, resume_text,
+            selected_keywords=selected_keywords, source_format=source_format,
+        ) or {}
+    except TypeError:
+        # Backward-compat: legacy provider didn't accept kwargs
+        try:
+            raw = provider.tailor_resume(job, profile, resume_text) or {}
+        except Exception as e:
+            console.print(f"  [yellow]Tailoring provider error: {e}[/yellow]")
     except Exception as e:
         console.print(f"  [yellow]Tailoring provider error: {e}[/yellow]")
 
-    validated = validate_tailoring(raw)
-
+    validated = validate_v2_or_none(raw)
     if validated is None:
-        console.print(
-            "  [yellow][!] Tailoring response unusable — retrying once.[/yellow]"
-        )
+        console.print("  [yellow][!] Tailoring response unusable — retrying once.[/yellow]")
         try:
-            retry = provider.tailor_resume(job, profile, resume_text) or {}
+            retry = provider.tailor_resume(
+                job, profile, resume_text,
+                selected_keywords=selected_keywords, source_format=source_format,
+            ) or {}
         except Exception as e:
             console.print(f"  [yellow]Retry failed: {e}[/yellow]")
             retry = {}
-        validated = validate_tailoring(retry)
+        validated = validate_v2_or_none(retry)
 
     if validated is None:
-        console.print(
-            "  [yellow][!] Falling back to heuristic tailoring "
-            "(skills + bullets reordered, no fabrication).[/yellow]"
-        )
+        console.print("  [yellow][!] Falling back to heuristic v2 tailoring.[/yellow]")
         tailored = heuristic
     else:
-        # Hybrid: LLM filled some fields, heuristic backfills the rest.
-        tailored = merge_with_heuristic(validated, heuristic)
+        tailored = merge_with_heuristic_v2(validated, heuristic)
 
     if section_order:
         tailored["section_order"] = section_order
     if include_cover_letter:
         tailored["cover_letter"] = provider.generate_cover_letter(job, profile)
 
-    # ── ATS scoring (before/after) ─────────────────────────────────────────────
+    # ── ATS scoring (before / after) — text harvested from skills + bullets ─
     requirements = job.get("requirements") or []
-    before_text  = (resume_text or "") + " " + _profile_to_text(profile)
-    after_extras = " ".join(tailored.get("skills_reordered") or [])
-    for entry in (tailored.get("experience_bullets") or []):
-        after_extras += " " + " ".join(entry.get("bullets") or [])
-    after_text = before_text + " " + after_extras
+    before_text = (resume_text or "") + " " + _profile_to_text(profile)
+    after_extras: list[str] = []
+    for cat in tailored.get("skills") or []:
+        for it in cat.get("items") or []:
+            after_extras.append(it.get("text") or "")
+    for r in tailored.get("experience") or []:
+        for b in r.get("bullets") or []:
+            after_extras.append(b.get("text") or "")
+    after_text = before_text + " " + " ".join(after_extras)
     tailored["ats_score_before"] = _ats_score(before_text, requirements)
-    tailored["ats_score_after"]  = _ats_score(after_text,  requirements)
+    tailored["ats_score_after"] = _ats_score(after_text, requirements)
     return tailored
 
 

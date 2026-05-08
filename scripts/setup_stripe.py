@@ -25,8 +25,9 @@ from pathlib import Path
 
 PRODUCT_NAME = "Jobs AI Pro"
 PRODUCT_DESCRIPTION = (
-    "Unlock Anthropic Claude and cloud Ollama models in Jobs AI. "
-    "Bring your own ANTHROPIC_API_KEY — Pro covers the orchestration."
+    "Unlock the high-quality cloud Ollama models in Jobs AI — frontier-class "
+    "scoring, tailoring, and résumé critique, hosted by us, no API keys needed. "
+    "Anthropic Claude is in active development and will be included when it ships."
 )
 PRICE_AMOUNT_CENTS = 400          # $4.00
 PRICE_CURRENCY = "usd"

@@ -3744,98 +3744,83 @@ function JobDetailView({ job, profile, allJobs, isLiked, isHidden,
                 </div>
               </section>
 
-              {/* ── LIVE-FETCHED JOB BODY (description + responsibilities + qualifications + benefits) ── */}
+              {/* ── DESCRIPTION + SKILLS — editorial 2-column layout ──
+                  Left: reading column for the JD body (lead / responsibilities
+                  / qualifications / benefits). Right: sticky rail with the
+                  skill match panel and key facts. The rail is intentionally
+                  narrow so the reading column gets ~64ch — comfortable for
+                  the 6-12 line bullets that dominate JDs. */}
+              <div className="jd-detail-grid">
+                <div className="jd-detail-main">
 
-              {/* Loading skeleton */}
-              {detailsLoading && (
-                <section className="jd-section">
-                  <h2 className="jd-section-h">
-                    <span className="jd-section-icon"><Icon name="file-text" size={14}/></span>
-                    Loading the full posting…
-                  </h2>
-                  <div className="jd-jd-loading">
-                    <div className="jd-jd-skel title"/>
-                    <div className="jd-jd-skel"/>
-                    <div className="jd-jd-skel"/>
-                    <div className="jd-jd-skel short"/>
-                    <div className="jd-jd-skel"/>
-                    <div className="jd-jd-skel short"/>
-                  </div>
-                </section>
-              )}
-
-              {/* About this role — short lead paragraph */}
-              {!detailsLoading && details?.lead_paragraph && (
-                <section className="jd-lead-card">
-                  <div className="jd-lead-eyebrow">
-                    <Icon name="file-text" size={11}/>
-                    <span>About this role</span>
-                  </div>
-                  <div className="jd-lead-text">
-                    {_highlightSkills(details.lead_paragraph, profile?.top_hard_skills || [])}
-                  </div>
-                </section>
-              )}
-
-              {/* What you'll do — responsibilities */}
-              {!detailsLoading && (details?.responsibilities || []).length > 0 && (
-                <section className="jd-section">
-                  <h2 className="jd-section-h">
-                    <span className="jd-section-icon"><Icon name="layout-grid" size={14}/></span>
-                    What you'll do
-                  </h2>
-                  <ul className="jd-bullet-list">
-                    {details.responsibilities.map((b, i) => (
-                      <li key={i} className="jd-bullet-item">
-                        <span className="jd-bullet-marker accent">{i + 1}</span>
-                        <span>{_highlightSkills(b, profile?.top_hard_skills || [])}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </section>
-              )}
-
-              {/* Qualifications — Required + Preferred two-col, with skill chip cloud above */}
-              {!detailsLoading && details && (
-                ((details.required_qualifications  || []).length > 0)
-                || ((details.preferred_qualifications || []).length > 0)
-              ) && (() => {
-                const allQuals = [
-                  ...(details.required_qualifications  || []),
-                  ...(details.preferred_qualifications || []),
-                ];
-                const cloud = _extractQualSkills(allQuals, profile?.top_hard_skills || []);
-                return (
-                  <section className="jd-section">
-                    <h2 className="jd-section-h">
-                      <span className="jd-section-icon"><Icon name="check-square" size={14}/></span>
-                      Qualifications
-                    </h2>
-                    {(cloud.matched.length > 0 || cloud.gaps.length > 0) && (
-                      <div className="jd-skill-cloud">
-                        <div className="jd-skill-cloud-h">
-                          <Icon name="zap" size={10}/>
-                          <span>Skills tagged in this posting</span>
-                          <span className="jd-cloud-tip">
-                            Green = you have it · Gray = consider adding
-                          </span>
-                        </div>
-                        {cloud.matched.map((s, i) => (
-                          <span key={`m-${i}`} className="jd-cloud-chip on">
-                            <Icon name="check" size={10}/>{s}
-                          </span>
-                        ))}
-                        {cloud.gaps.map((s, i) => (
-                          <span key={`g-${i}`} className="jd-cloud-chip off">{s}</span>
-                        ))}
+                  {/* Loading skeleton */}
+                  {detailsLoading && (
+                    <section className="jd-section">
+                      <h2 className="jd-section-h">
+                        <span className="jd-section-icon"><Icon name="file-text" size={14}/></span>
+                        Loading the full posting…
+                      </h2>
+                      <div className="jd-jd-loading">
+                        <div className="jd-jd-skel title"/>
+                        <div className="jd-jd-skel"/>
+                        <div className="jd-jd-skel"/>
+                        <div className="jd-jd-skel short"/>
+                        <div className="jd-jd-skel"/>
+                        <div className="jd-jd-skel short"/>
                       </div>
-                    )}
-                    <div className="jd-qual-grid">
+                    </section>
+                  )}
+
+                  {/* About this role */}
+                  {!detailsLoading && details?.lead_paragraph && (
+                    <section className="jd-lead-card">
+                      <div className="jd-lead-eyebrow">
+                        <Icon name="file-text" size={11}/>
+                        <span>About this role</span>
+                      </div>
+                      <div className="jd-lead-text">
+                        {_highlightSkills(details.lead_paragraph, profile?.top_hard_skills || [])}
+                      </div>
+                    </section>
+                  )}
+
+                  {/* What you'll do */}
+                  {!detailsLoading && (details?.responsibilities || []).length > 0 && (
+                    <section className="jd-section">
+                      <h2 className="jd-section-h">
+                        <span className="jd-section-num">01</span>
+                        What you'll do
+                      </h2>
+                      <ul className="jd-bullet-list">
+                        {details.responsibilities.map((b, i) => (
+                          <li key={i} className="jd-bullet-item">
+                            <span className="jd-bullet-marker accent">{i + 1}</span>
+                            <span>{_highlightSkills(b, profile?.top_hard_skills || [])}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </section>
+                  )}
+
+                  {/* Qualifications — single column for reading width. Required
+                      and Preferred stack vertically, separated by a subtle rule. */}
+                  {!detailsLoading && details && (
+                    ((details.required_qualifications  || []).length > 0)
+                    || ((details.preferred_qualifications || []).length > 0)
+                  ) && (
+                    <section className="jd-section">
+                      <h2 className="jd-section-h">
+                        <span className="jd-section-num">02</span>
+                        Qualifications
+                      </h2>
                       {(details.required_qualifications || []).length > 0 && (
-                        <div className="jd-qual-col required">
-                          <div className="jd-qual-col-h">
+                        <div className="jd-qual-block required">
+                          <div className="jd-qual-block-h">
                             <Icon name="shield-check" size={11}/>
-                            Required
+                            <span>Required</span>
+                            <span className="jd-qual-count">
+                              {details.required_qualifications.length}
+                            </span>
                           </div>
                           <ul className="jd-bullet-list">
                             {details.required_qualifications.map((b, i) => (
@@ -3849,11 +3834,18 @@ function JobDetailView({ job, profile, allJobs, isLiked, isHidden,
                           </ul>
                         </div>
                       )}
+                      {(details.preferred_qualifications || []).length > 0
+                        && (details.required_qualifications || []).length > 0 && (
+                        <div className="jd-qual-divider"><span/></div>
+                      )}
                       {(details.preferred_qualifications || []).length > 0 && (
-                        <div className="jd-qual-col preferred">
-                          <div className="jd-qual-col-h">
+                        <div className="jd-qual-block preferred">
+                          <div className="jd-qual-block-h">
                             <Icon name="star" size={11}/>
-                            Preferred
+                            <span>Preferred</span>
+                            <span className="jd-qual-count">
+                              {details.preferred_qualifications.length}
+                            </span>
                           </div>
                           <ul className="jd-bullet-list">
                             {details.preferred_qualifications.map((b, i) => (
@@ -3867,30 +3859,138 @@ function JobDetailView({ job, profile, allJobs, isLiked, isHidden,
                           </ul>
                         </div>
                       )}
-                    </div>
-                  </section>
-                );
-              })()}
+                    </section>
+                  )}
 
-              {/* Benefits & perks — only when the source returned them */}
-              {!detailsLoading && (details?.benefits || []).length > 0 && (
-                <section className="jd-section">
-                  <h2 className="jd-section-h">
-                    <span className="jd-section-icon"><Icon name="sparkles" size={14}/></span>
-                    Benefits &amp; perks
-                  </h2>
-                  <ul className="jd-bullet-list">
-                    {details.benefits.map((b, i) => (
-                      <li key={i} className="jd-bullet-item">
-                        <span className="jd-bullet-marker good">
-                          <Icon name="check" size={11}/>
-                        </span>
-                        <span>{b}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </section>
-              )}
+                  {/* Benefits */}
+                  {!detailsLoading && (details?.benefits || []).length > 0 && (
+                    <section className="jd-section">
+                      <h2 className="jd-section-h">
+                        <span className="jd-section-num">03</span>
+                        Benefits &amp; perks
+                      </h2>
+                      <ul className="jd-bullet-list">
+                        {details.benefits.map((b, i) => (
+                          <li key={i} className="jd-bullet-item">
+                            <span className="jd-bullet-marker good">
+                              <Icon name="check" size={11}/>
+                            </span>
+                            <span>{b}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </section>
+                  )}
+                </div>
+
+                {/* Sticky right rail: skill match panel + key facts */}
+                <aside className="jd-detail-rail" aria-label="Skill match and key facts">
+                  <section className="jd-rail-card jd-rail-skills">
+                    <div className="jd-rail-eyebrow">
+                      <span className="jd-rail-bar"/>
+                      <span>Skill match</span>
+                      <span className="jd-rail-pct">{skillPct}%</span>
+                    </div>
+                    <div className="jd-rail-meter" aria-hidden="true">
+                      <div className="jd-rail-meter-fill" style={{ width: `${skillPct}%` }}/>
+                    </div>
+                    <div className="jd-rail-skill-summary">
+                      <b>{matched.length}</b> of <b>{jobReqs.length || '—'}</b> tagged
+                      requirement{jobReqs.length === 1 ? '' : 's'} match your profile
+                    </div>
+
+                    {matched.length > 0 && (
+                      <div className="jd-rail-skill-group on">
+                        <div className="jd-rail-skill-h">
+                          <Icon name="check-circle-2" size={10}/>
+                          You bring
+                        </div>
+                        <div className="jd-rail-skill-chips">
+                          {matched.map((s, i) => (
+                            <span key={`m-${i}`} className="jd-rail-chip on">
+                              <Icon name="check" size={10}/>{s}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {gaps.length > 0 && (
+                      <div className="jd-rail-skill-group off">
+                        <div className="jd-rail-skill-h">
+                          <Icon name="zap" size={10}/>
+                          Consider adding
+                        </div>
+                        <div className="jd-rail-skill-chips">
+                          {gaps.map((s, i) => (
+                            <span key={`g-${i}`} className="jd-rail-chip off">{s}</span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {jobReqs.length === 0 && (
+                      <div className="jd-rail-skill-empty">
+                        Atlas couldn't tag any requirements from this listing.
+                        Open the original posting for the full list.
+                      </div>
+                    )}
+                  </section>
+
+                  <section className="jd-rail-card jd-rail-facts">
+                    <div className="jd-rail-eyebrow">
+                      <span className="jd-rail-bar cyan"/>
+                      <span>Key facts</span>
+                    </div>
+                    <dl className="jd-rail-facts-list">
+                      {job.loc && (
+                        <div className="jd-rail-fact">
+                          <dt><Icon name="map-pin" size={11}/>Location</dt>
+                          <dd>{job.loc}</dd>
+                        </div>
+                      )}
+                      <div className="jd-rail-fact">
+                        <dt><Icon name="building-2" size={11}/>Work model</dt>
+                        <dd>{remoteLabel}</dd>
+                      </div>
+                      <div className="jd-rail-fact">
+                        <dt><Icon name="graduation-cap" size={11}/>Level</dt>
+                        <dd>{expHuman}</dd>
+                      </div>
+                      {eduHuman !== 'Any education' && (
+                        <div className="jd-rail-fact">
+                          <dt><Icon name="book-open" size={11}/>Education</dt>
+                          <dd>{eduHuman}</dd>
+                        </div>
+                      )}
+                      {job.salary && job.salary !== 'Unknown' && (
+                        <div className="jd-rail-fact">
+                          <dt><Icon name="dollar-sign" size={11}/>Salary</dt>
+                          <dd className="good">{job.salary}</dd>
+                        </div>
+                      )}
+                      <div className="jd-rail-fact">
+                        <dt><Icon name="link-2" size={11}/>Source</dt>
+                        <dd>{platformPretty}</dd>
+                      </div>
+                      <div className="jd-rail-fact">
+                        <dt><Icon name="clock" size={11}/>Posted</dt>
+                        <dd>{postedAgo}</dd>
+                      </div>
+                      {cit === 'yes' && (
+                        <div className="jd-rail-fact">
+                          <dt><Icon name="shield" size={11}/>Citizenship</dt>
+                          <dd className="warn">US required</dd>
+                        </div>
+                      )}
+                    </dl>
+                  </section>
+
+                  <button className="jd-rail-apply" onClick={handleApply} disabled={!job.url}>
+                    <Icon name="zap" size={13} color="#fff"/>
+                    Apply on {platformPretty}
+                    <Icon name="arrow-up-right" size={11} color="#fff"/>
+                  </button>
+                </aside>
+              </div>
 
               {/* Source-not-supported / fetch-error fallback. Shown when the live
                   fetch returned no description and we have nothing parsed. */}
@@ -3938,52 +4038,9 @@ function JobDetailView({ job, profile, allJobs, isLiked, isHidden,
                 </section>
               )}
 
-              {/* Skill alignment */}
-              <section className="jd-section">
-                <h2 className="jd-section-h">
-                  <span className="jd-section-icon"><Icon name="check-square" size={14}/></span>
-                  Skill alignment
-                </h2>
-                <div className="jd-skills-grid">
-                  <div className="jd-skills-col match">
-                    <div className="jd-skills-col-h">
-                      <Icon name="check-circle-2" size={11}/>
-                      <span>Skills you have</span>
-                      <span className="jd-skills-count">{matched.length}</span>
-                    </div>
-                    <div className="jd-skills-chips">
-                      {matched.length === 0
-                        ? <span className="jd-skills-empty">No direct overlap detected from this listing's tags.</span>
-                        : matched.map((s, i) => (
-                            <span key={i} className="jd-skill-chip match">
-                              <Icon name="check" size={10}/>{s}
-                            </span>
-                          ))}
-                    </div>
-                  </div>
-                  <div className="jd-skills-col gap">
-                    <div className="jd-skills-col-h">
-                      <Icon name="zap" size={11}/>
-                      <span>Consider adding</span>
-                      <span className="jd-skills-count">{gaps.length}</span>
-                    </div>
-                    <div className="jd-skills-chips">
-                      {gaps.length === 0
-                        ? <span className="jd-skills-empty">You cover the listed requirements.</span>
-                        : gaps.map((s, i) => (
-                            <span key={i} className="jd-skill-chip gap">
-                              <Icon name="plus" size={10}/>{s}
-                            </span>
-                          ))}
-                    </div>
-                  </div>
-                </div>
-                <p className="jd-skills-foot">
-                  Pulled from the job's tagged requirements and matched against your profile's
-                  {' '}<b>{userSkills.length}</b> hard {userSkills.length === 1 ? 'skill' : 'skills'}.
-                  Tailor your résumé from the action panel below to surface the matches first.
-                </p>
-              </section>
+              {/* (The standalone Skill alignment block was consolidated into
+                  the sticky rail inside .jd-detail-grid above so the skill
+                  match stays visible while the user reads the JD body.) */}
 
               {/* Listed requirements — fallback for sources that don't expose
                   per-job description APIs (RemoteOK / Adzuna / Jobicy / etc.).

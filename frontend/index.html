@@ -2611,9 +2611,16 @@ mark.diff-mod { background: rgba(74,222,128,.10); color: var(--good); border-bot
   overflow: hidden; transition: border-color .15s, box-shadow .15s;
 }
 .job-card:hover { border-color: var(--bdr2); box-shadow: 0 4px 20px rgba(0,0,0,.2) }
-.job-card.score-high { border-left: 3px solid var(--good) }
-.job-card.score-mid  { border-left: 3px solid var(--accent-h) }
-.job-card.score-low  { border-left: 3px solid var(--t4) }
+/* Score-tier left stripe — four brand colors so the list reads at a
+   glance. Mint = top, violet = solid, cyan = fair, magenta = reach.
+   Pending uses the muted t4 to clearly distinguish "still loading"
+   from any real score. The 3 → 4 → 4 weights bias visual emphasis
+   toward the top two tiers without making lower tiers feel skipped. */
+.job-card.score-strong  { border-left: 4px solid var(--good)     }
+.job-card.score-solid   { border-left: 4px solid var(--accent-h) }
+.job-card.score-fair    { border-left: 3px solid var(--accent2)  }
+.job-card.score-reach   { border-left: 3px solid var(--accent3)  }
+.job-card.score-pending { border-left: 3px solid var(--t4)       }
 .job-card-inner { display: flex; align-items: stretch }
 .job-body { flex: 1; padding: 16px; min-width: 0 }
 .job-header { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 10px }
@@ -2662,9 +2669,25 @@ mark.diff-mod { background: rgba(74,222,128,.10); color: var(--good); border-bot
   position: absolute; font-family: var(--mono); font-size: 15.5px;
   font-weight: 700; color: var(--t1);
 }
-.score-label { font-size: 13px; color: var(--t3); font-weight: 500 }
-.job-score-col.score-high .score-label { color: var(--good) }
-.job-score-col.score-mid  .score-label { color: var(--accent-h) }
+.score-label {
+  font-size: 12px;
+  color: var(--t3);
+  font-weight: 600;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.job-score-col.score-strong  .score-label { color: var(--good)     }
+.job-score-col.score-solid   .score-label { color: var(--accent-h) }
+.job-score-col.score-fair    .score-label { color: var(--accent2)  }
+.job-score-col.score-reach   .score-label { color: var(--accent3)  }
+.job-score-col.score-pending .score-label { color: var(--t4); text-transform: none; letter-spacing: 0; font-weight: 500 }
+/* Number inside the ring picks up the tier hue subtly — keeps the
+   number readable as the brand-color while the ring carries weight. */
+.job-score-col.score-strong  .score-pct   { color: var(--good)     }
+.job-score-col.score-solid   .score-pct   { color: var(--accent-h) }
+.job-score-col.score-fair    .score-pct   { color: var(--accent2)  }
+.job-score-col.score-reach   .score-pct   { color: var(--accent3)  }
+.job-score-col.score-pending .score-pct   { color: var(--t4)       }
 
 /* filters bar */
 .filters { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 4px }

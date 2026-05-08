@@ -281,3 +281,97 @@ def merge_with_heuristic(llm_tailored: dict | None, heuristic: dict) -> dict:
     if llm_tailored.get("cover_letter"):
         out["cover_letter"] = llm_tailored["cover_letter"]
     return out
+
+
+# ── v2 (TailoredResume schema) ───────────────────────────────────────────────
+
+from .tailored_schema import (  # noqa: E402
+    SCHEMA_VERSION, TailoredResume, default_v2, validate_v2,
+)
+
+
+def heuristic_tailor_resume_v2(
+    job: dict, profile: dict, resume_text: str = "",
+    selected_keywords: list[str] | None = None,
+) -> TailoredResume:
+    """Deterministic v2 tailoring. No LLM. No fabrication.
+
+    Reorders skills + bullets by JD overlap. Honors `selected_keywords` by
+    appending them to the appropriate skill category with diff='added'.
+    Surfaces unselected JD keywords in ats_keywords_missing.
+    """
+    job = job or {}
+    profile = profile or {}
+    selected_keywords = [k.strip() for k in (selected_keywords or []) if isinstance(k, str) and k.strip()]
+
+    base = default_v2(profile)
+
+    requirements = [str(r).strip() for r in (job.get("requirements") or []) if str(r).strip()]
+    profile_skills = [
+        s for s in (profile.get("top_hard_skills") or [])
+        if isinstance(s, str) and s.strip()
+    ]
+
+    # Reorder existing skills
+    reordered = _reorder_existing_skills(profile_skills, requirements)
+    skill_items: list[dict] = [{"text": s, "diff": "unchanged"} for s in reordered]
+    # Append user-selected keywords as added
+    existing_lower = {s.lower() for s in reordered}
+    for kw in selected_keywords:
+        if kw.lower() not in existing_lower:
+            skill_items.append({"text": kw, "diff": "added"})
+            existing_lower.add(kw.lower())
+    base["skills"] = [{"name": "", "items": skill_items}] if skill_items else []
+
+    # Reorder bullets within each role (no fabrication, all diff="unchanged")
+    jd_tokens: set[str] = set()
+    for r in requirements:
+        jd_tokens |= _tokens(r)
+
+    for role in base["experience"]:
+        original_texts = [b.get("text", "") for b in role.get("bullets") or []]
+        if not original_texts:
+            continue
+        ordered = _reorder_bullets_in_role(original_texts, jd_tokens)
+        role["bullets"] = [{"text": b, "diff": "unchanged"} for b in ordered]
+
+    # ATS gap surfacing — anything from JD that's missing AND not user-selected
+    selected_lower = {s.lower() for s in selected_keywords}
+    base["ats_keywords_missing"] = [
+        kw for kw in _missing_jd_keywords(requirements, profile_skills, resume_text)
+        if kw.lower() not in selected_lower
+    ]
+    base["ats_keywords_added"] = list(selected_keywords)
+    return base
+
+
+def validate_v2_or_none(raw):
+    """Thin wrapper exposing the schema validator under the heuristic_tailor
+    namespace so callers in phases.py have one import."""
+    return validate_v2(raw)
+
+
+def merge_with_heuristic_v2(
+    llm: TailoredResume | None, heuristic: TailoredResume,
+) -> TailoredResume:
+    """Hybrid merge: take any non-empty LLM field, fall back to heuristic."""
+    out: TailoredResume = dict(heuristic)
+    if not isinstance(llm, dict):
+        return out
+    for key in (
+        "summary", "skills", "experience", "projects", "education",
+        "awards", "certifications", "publications", "activities",
+        "leadership", "volunteer", "coursework", "languages",
+        "custom_sections", "section_order",
+        "ats_keywords_added", "ats_keywords_missing",
+    ):
+        if llm.get(key):
+            out[key] = llm[key]
+    for key in ("ats_score_before", "ats_score_after"):
+        v = llm.get(key)
+        if isinstance(v, int):
+            out[key] = v
+    # Pass through cover_letter when present
+    if llm.get("cover_letter"):
+        out["cover_letter"] = llm["cover_letter"]
+    return out

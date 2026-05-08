@@ -102,26 +102,43 @@ def _profile_terms(profile: dict | None, max_skills: int = 8,
 
 
 def _build_fts_query(filters: SearchFilters, profile: dict | None) -> str:
-    """Build a permissive FTS5 query string. Returns "" when no terms.
+    """Build the FTS5 query string. Returns "" when no terms.
 
-    SQLite FTS5 syntax: a list of bare tokens joined by space is an OR
-    in unicode61 tokenizer; quoting with double-quotes phrase-locks. We
-    OR the user's query tokens with the profile-derived ones so the
-    same query that drives the SQL filter also drives the relevance.
+    Two regimes:
+
+    * **User typed something** (``filters.q`` non-empty): every typed token
+      is REQUIRED (FTS5 implicit-AND). Profile terms are dropped from the
+      MATCH — they still influence relevance via skill_overlap and
+      title_match in the Python rerank below. Without this, a user who
+      types "hardware engineer" but whose profile is marketing-themed sees
+      the query OR'd with ~12 marketing tokens, the marketing jobs match
+      via OR, and the actual hardware-engineer hits get outranked off the
+      first page (the bug the user hit).
+
+    * **No typed query**: profile-driven feed. OR every profile term
+      together so any candidate role surfaces; the rerank picks order.
     """
-    parts: list[str] = []
-    parts.extend(_tokenize(filters.q))
-    parts.extend(_profile_terms(profile))
-    seen: set[str] = set()
-    deduped: list[str] = []
-    for p in parts:
-        if p and p not in seen and p.isascii():
-            seen.add(p)
-            deduped.append(p)
-    if not deduped:
+    user_tokens: list[str] = []
+    seen_user: set[str] = set()
+    for tok in _tokenize(filters.q):
+        if tok and tok not in seen_user and tok.isascii():
+            seen_user.add(tok)
+            user_tokens.append(tok)
+
+    if user_tokens:
+        # Quote each token to guard against FTS5 reserved words; whitespace-
+        # join means implicit AND in FTS5. Cap at 24 to bound query size.
+        return " ".join(f"\"{p}\"" for p in user_tokens[:24])
+
+    profile_tokens: list[str] = []
+    seen_profile: set[str] = set()
+    for tok in _profile_terms(profile):
+        if tok and tok not in seen_profile and tok.isascii():
+            seen_profile.add(tok)
+            profile_tokens.append(tok)
+    if not profile_tokens:
         return ""
-    # Quote each token to guard against FTS5 reserved words / operators.
-    return " OR ".join(f"\"{p}\"" for p in deduped[:24])
+    return " OR ".join(f"\"{p}\"" for p in profile_tokens[:24])
 
 
 def _decode_cursor(cursor: str | None) -> tuple[float, str, int] | None:

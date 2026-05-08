@@ -276,12 +276,39 @@ def _build_rubric_result(job: dict, req_raw: float, industry_raw: float,
 # ── 1. Anthropic (Claude) ──────────────────────────────────────────────────────
 
 class AnthropicProvider(BaseProvider):
-    """Uses Claude Opus 4.6 via the Anthropic SDK."""
+    """Uses Claude Opus 4.7 via the Anthropic SDK.
+
+    Launch-ready configuration (2026-05):
+      • Model: claude-opus-4-7 — most capable, 1M context, 128K max output.
+      • Adaptive thinking only (`budget_tokens` is removed on Opus 4.7).
+      • `output_config.effort = "high"` — best balance of quality vs cost for
+        extraction / scoring / tailoring; xhigh / max are options for the
+        most intelligence-sensitive paths.
+      • Prompt caching on the tailoring tool call — the resume skeleton +
+        JD context are reused across analyze/generate within one session
+        and across multiple jobs in the same run, so we mark the system
+        content with `cache_control: ephemeral`.
+      • JSON mode uses `output_config.format = json_object` (the legacy
+        assistant-turn `{` prefill returns 400 on Opus 4.6+).
+    """
+
+    MODEL = "claude-opus-4-7"
+    DEFAULT_EFFORT = "high"  # low | medium | high | xhigh | max (max is Opus-tier only)
 
     def __init__(self, api_key: str = None):
         import anthropic as _anthropic
         self.client = _anthropic.Anthropic(api_key=api_key)
-        self.model = "claude-opus-4-6"
+        self.model = self.MODEL
+
+    def _output_config(self, *, effort: str | None = None,
+                       json_object: bool = False) -> dict:
+        """Build `output_config` for messages.create. Effort is required-ish
+        for Opus 4.7 (it now matters more than any prior Opus). Pass
+        `json_object=True` to enforce JSON output without an assistant prefill."""
+        cfg: dict = {"effort": effort or self.DEFAULT_EFFORT}
+        if json_object:
+            cfg["format"] = {"type": "json_object"}
+        return cfg
 
     def chat(self, system: str, messages: list, max_tokens: int = 1024,
              json_mode: bool = False) -> str:
@@ -293,33 +320,36 @@ class AnthropicProvider(BaseProvider):
         ]
         if not clean:
             return ""
-        # JSON mode: prefill the assistant turn with `{` so Anthropic continues
-        # from there. We then prepend the brace to the response before parsing.
-        if json_mode and clean[-1]["role"] == "user":
-            clean.append({"role": "assistant", "content": "{"})
-        resp = self.client.messages.create(
+        kwargs: dict = dict(
             model=self.model,
             max_tokens=max_tokens,
             system=system or "",
             messages=clean,
+            output_config=self._output_config(json_object=json_mode),
         )
+        resp = self.client.messages.create(**kwargs)
         out_parts: list[str] = []
         for block in resp.content:
             if getattr(block, "type", None) == "text":
                 out_parts.append(getattr(block, "text", "") or "")
-        out = "".join(out_parts).strip()
-        if json_mode and out and not out.startswith("{"):
-            out = "{" + out
-        return out
+        return "".join(out_parts).strip()
 
     def _tool_call(self, tool_def: dict, prompt: str,
-                   max_tokens: int = 4096, thinking: bool = False) -> dict:
-        kwargs = dict(
+                   max_tokens: int = 4096, thinking: bool = False,
+                   *, system: str | list | None = None,
+                   effort: str | None = None) -> dict:
+        """Invoke a forced tool call. `system` may be a string OR a list of
+        content blocks (use the latter to attach `cache_control` to a stable
+        prefix). `effort` overrides the default (e.g. "xhigh" for tailoring)."""
+        kwargs: dict = dict(
             model=self.model, max_tokens=max_tokens,
             tools=[tool_def],
             tool_choice={"type": "tool", "name": tool_def["name"]},
             messages=[{"role": "user", "content": prompt}],
+            output_config=self._output_config(effort=effort),
         )
+        if system is not None:
+            kwargs["system"] = system
         if thinking:
             kwargs["thinking"] = {"type": "adaptive"}
         resp = self.client.messages.create(**kwargs)
@@ -706,8 +736,32 @@ class AnthropicProvider(BaseProvider):
             if isinstance(r, str) and r and r not in sel
         ]
         skeleton_json = json.dumps(skeleton, ensure_ascii=False)
-        if len(skeleton_json) > 8000:
-            skeleton_json = skeleton_json[:8000] + "…"
+        if len(skeleton_json) > 12000:
+            skeleton_json = skeleton_json[:12000] + "…"
+
+        # ── System prompt: stable across all tailoring calls in a session →
+        # mark with `cache_control: ephemeral` so the second + onward jobs
+        # served by /api/resume/tailor read instead of write the prefix.
+        system_blocks = [
+            {
+                "type": "text",
+                "text": (
+                    "You are tailoring resumes for specific job applications. "
+                    "Output the COMPLETE TailoredResume v2 — every section the "
+                    "candidate's source resume had — including Awards, "
+                    "Publications, Coursework, Activities, Leadership, "
+                    "Volunteer, Languages, and any custom sections. NEVER "
+                    "fabricate. NEVER change titles, companies, dates, "
+                    "institutions, degrees, or GPAs. For each user-selected "
+                    "keyword: REPHRASE an existing bullet (diff=modified) "
+                    "when it fits, else ADD a new bullet (diff=added) under "
+                    "the most relevant role. Reorder bullets within each role "
+                    "by JD relevance (no diff change for reorder alone). Set "
+                    "diff=unchanged on every TextNode you did not modify."
+                ),
+                "cache_control": {"type": "ephemeral"},
+            },
+        ]
 
         prompt = (
             f"Tailor this resume for: {job.get('title','')} at {job.get('company','')}.\n\n"
@@ -718,18 +772,14 @@ class AnthropicProvider(BaseProvider):
             f"USER-SELECTED keywords to weave in: "
             f"{', '.join(sel) if sel else '(none — default to all must-have JD keywords missing from the resume)'}\n"
             f"USER-DECLINED keywords (do NOT include): {', '.join(declined[:20])}\n\n"
-            "RULES:\n"
-            "1. NEVER fabricate. NEVER change titles/companies/dates/institutions/degrees/GPA.\n"
-            "2. For each user-selected keyword: REPHRASE an existing bullet (set diff=modified) when it fits, "
-            "else ADD a new bullet (set diff=added) under the most relevant role.\n"
-            "3. Reorder bullets within each role by JD relevance (no diff change for reorder alone).\n"
-            "4. Keep every section present in the source — even Awards / Publications / Coursework / "
-            "Activities / Leadership / Volunteer / Languages / custom sections.\n"
-            "5. Set diff=unchanged on every TextNode you didn't modify.\n"
-            "6. Return the FULL TailoredResume — every section, every bullet, every role.\n"
             f"Source format hint: {source_format or 'pdf'}\n"
         )
-        return self._tool_call(tool, prompt, max_tokens=8192, thinking=True)
+        # `xhigh` for tailoring — best for agentic / long-output rewriting on Opus 4.7.
+        # 12288 max_tokens — Opus 4.7 token counting differs vs 4.6, give headroom.
+        return self._tool_call(
+            tool, prompt, max_tokens=12288, thinking=True,
+            system=system_blocks, effort="xhigh",
+        )
 
     def generate_cover_letter(self, job: dict, profile: dict) -> str:
         name = profile.get("name") or OWNER_NAME

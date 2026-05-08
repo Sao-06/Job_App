@@ -116,7 +116,20 @@
 }
 
 *,*::before,*::after { box-sizing:border-box; margin:0; padding:0 }
-html { scroll-behavior:smooth; font-size:16px }
+html {
+  scroll-behavior:smooth;
+  font-size:16px;
+  /* Belt-and-suspenders against horizontal scroll bugs anywhere in the
+     SPA. A single overflowing element used to drag a horizontal scrollbar
+     across the entire viewport on mobile. */
+  overflow-x: hidden;
+  /* iOS & Android viewport units: 100dvh tracks the *dynamic* viewport
+     (chrome showing/hiding), 100vh tracks the largest viewport. Without
+     this fallback, the SPA would jump every time mobile Safari's URL
+     bar collapsed. */
+  min-height: 100vh;
+  min-height: 100dvh;
+}
 body {
   font-family: var(--sans);
   background: var(--bg);
@@ -128,8 +141,24 @@ body {
   line-height: 1.55;
   letter-spacing: -0.005em;     /* Inter reads cleaner with a hair of negative tracking */
   font-feature-settings: "ss01", "ss02", "cv11";  /* friendlier 'a' / 'g' / numbers */
-  overflow: hidden;
-  height: 100vh;
+  overflow-x: hidden;
+  /* Use min-height with a vh→dvh fallback. The previous `height: 100vh;
+     overflow: hidden` locked the page to the largest viewport, so on iOS
+     Safari the bottom edge would either bleed under the toolbar or leave
+     a strip of body color above it as the chrome animated. dvh fixes both. */
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+/* Common offenders for horizontal scroll on small screens — clip them. */
+img, video, iframe, canvas, svg, embed, object {
+  max-width: 100%;
+  height: auto;
+}
+iframe { display: block; }
+/* Long words / URLs in user content shouldn't push the layout. */
+.markdown, .md-body, .ask-body, .ask-bubble, pre, code {
+  overflow-wrap: anywhere;
+  word-break: normal;
 }
 /* Per the user: solid letters, never cursive. Browser defaults italicise
    <em>, <i>, <cite>, <var>, <address>, <dfn> — neutralise globally so a
@@ -162,8 +191,15 @@ input, select, textarea { font-family:var(--sans) }
   grid-template-areas: "brand promo" "rail main";
   grid-template-columns: var(--rail-w) 1fr;
   grid-template-rows: 48px 1fr;
+  /* `100dvh` tracks the dynamic viewport on mobile (URL bar showing /
+     hiding) so the page edge doesn't jump. `100vh` is the fallback for
+     browsers without `dvh` support. `100vw` would cause horizontal
+     scroll on browsers that include the scrollbar in vw — use 100% so
+     the grid never exceeds its container. */
   height: 100vh;
-  width: 100vw;
+  height: 100dvh;
+  width: 100%;
+  max-width: 100vw;
   overflow: hidden;
 }
 
@@ -8125,6 +8161,109 @@ code { font-family: var(--mono); font-size: 14px; background: var(--bg-3); paddi
   .rs-tile-val { font-size: 22px }
   .met b { font-size: 18px }
   .iv-stat-num { font-size: 26px }
+}
+
+/* ── MOBILE HARDENING (catch-all responsive defaults) ──────────────────────
+   The codebase already has page-specific @media blocks at 1280/1100/980/
+   720/420 for the largest layouts. This trailing layer adds:
+     • a single 1024px "tablet" pass that collapses the most common
+       two-column 280–320px / 1fr grids that didn't previously have one
+     • a 600px "phone" pass that catches mid-size phones the 720/420
+       pair was bracketing without covering
+     • iOS safe-area padding on the page shell
+     • tabular / horizontally-laid-out content that wasn't already wrapped
+       in `overflow-x: auto`
+   These are intentionally LATE in the cascade so they override earlier
+   fixed-width grids without each page needing its own breakpoint update. */
+
+/* Safe-area insets for notched / rounded-corner phones. */
+@supports (padding: max(0px)) {
+  .topbar, .head-cta, .topbar-l, .rail-foot {
+    padding-left: max(14px, env(safe-area-inset-left));
+    padding-right: max(14px, env(safe-area-inset-right));
+  }
+  .topbar { padding-top: max(10px, env(safe-area-inset-top)) }
+  .ob-shell, .auth-shell { padding-bottom: max(24px, env(safe-area-inset-bottom)) }
+}
+
+/* Tablet: collapse the most common 2-column shells. Keeps the existing
+   wider-breakpoint rules in place for desktop; this only fires below 1024. */
+@media (max-width: 1024px) {
+  /* Tracker spreadsheet, wide tables: scroll inside, never the page. */
+  .phase-detail > div[style*="overflow"] { max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch }
+  /* Resume details panel side-by-side -> stack */
+  .rs-overview-top, .rs-grid, .agent-meter-row { grid-template-columns: 1fr !important }
+  /* Long table-like cells: ellipsize instead of overflowing */
+  .tr-head-role { max-width: 100% }
+}
+
+/* Mid-size phones (600px) — covers most Android handsets in portrait. */
+@media (max-width: 600px) {
+  /* Universal page-shell padding tightening — every page uses one of
+     these wrappers. Reducing side padding from ~24px → 14px gives the
+     content meaningful room without breaking layouts that assumed gutters. */
+  .page, .ob-shell, .auth-shell, .home-shell, .jobs-shell,
+  .resume-shell, .profile-shell, .agent-shell, .settings-shell,
+  .feedback-shell, .dev-shell, .plans-shell {
+    padding-left: 14px !important;
+    padding-right: 14px !important;
+  }
+  /* Most multi-column grids -> single column. Scoped to known classes
+     so we don't accidentally break a designed-for-mobile chip strip. */
+  .agent-meter-stats, .home-grid, .rs-keystrip, .met-row,
+  .settings-grid, .plans-grid, .home-cards,
+  .iv-statbar, .filters-row {
+    grid-template-columns: 1fr !important;
+  }
+  /* Tracker / detail tables -> horizontal scroll inside their container. */
+  table { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch }
+  table thead, table tbody, table tr { display: table-row-group }
+  /* Ask-Atlas drawer takes the whole screen on phones — already true at
+     720px elsewhere, but ensure the overlay never has gutters. */
+  .ask-overlay { padding: 0 }
+  .ask-drawer, .tailor-drawer { width: 100vw !important; max-width: 100vw !important }
+  /* Tailor preview iframe — let it breathe but don't overflow. */
+  .tailor-preview-frame { height: 60vh; min-height: 320px }
+  /* Keyword review: pad the labels for easier tap targets on touch. */
+  .tailor-keyword-row { padding: 10px 8px; font-size: 14px }
+  .tailor-review-actions { flex-direction: column }
+  .tailor-review-actions button { width: 100%; padding: 12px 14px }
+  /* JD pill chips and tag rows — wrap instead of overflowing. */
+  .jd-company-tags, .filters, .tr-chips, .tag-row { flex-wrap: wrap }
+  /* Long monospaced URLs / IDs in lists. */
+  .mono, code, pre { word-break: break-all }
+  /* Resume uploaded-PDF embedded preview — always 100% width. */
+  iframe[src*=".pdf"] { width: 100% !important }
+  /* Hero & headlines step down. */
+  .ob-h1, .agent-h, .ag-h { font-size: 22px; line-height: 1.2 }
+  .rs-hero-text h1, .rs-hero-name { font-size: 24px }
+}
+
+/* Touch-target floor — applies on all touch devices regardless of width. */
+@media (hover: none) and (pointer: coarse) {
+  button, .btn, .btn-primary, .btn-ghost, .btn-tailor, .icon-btn,
+  .menu-item, .rail-item, .ph-hd, .nav-toggle, .head-cta,
+  input[type="checkbox"], input[type="radio"] {
+    min-height: 40px;
+  }
+  /* Apple's HIG recommends 44pt; spec'd inputs grow to 16px font so iOS
+     doesn't auto-zoom on focus. */
+  input[type="text"], input[type="email"], input[type="password"],
+  input[type="search"], input[type="number"], input[type="url"],
+  input[type="tel"], textarea, select {
+    font-size: 16px;
+    min-height: 40px;
+  }
+}
+
+/* Print: when the user prints a tailored resume preview, drop the SPA
+   chrome and let just the iframe content show. Mostly a defensive rule —
+   the actual download is via PDF, but Cmd+P should still produce
+   something sane if the user does it inside the SPA. */
+@media print {
+  .rail, .topbar, .head-cta, .icon-btn,
+  .ask-overlay, .tailor-drawer, .sim-pill { display: none !important }
+  body { background: #fff !important; color: #000 !important }
 }
 </style>
 </head>

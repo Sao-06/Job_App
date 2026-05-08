@@ -1153,7 +1153,7 @@ function Hero() {
         </div>
         <div className="hero-reassure">
           <span className="dot"/>
-          <span>NO CREDIT CARD · LOCAL OLLAMA WORKS WITHOUT KEYS</span>
+          <span>NO CREDIT CARD · FREE TIER RUNS LOCAL OLLAMA ON OUR SERVER</span>
         </div>
       </div>
       <a href="#scrubber" className="hero-scroll-hint" aria-label="Scroll to demo">
@@ -1665,30 +1665,30 @@ function Recap() {
    row (that mode was retired in this same redesign).
    ══════════════════════════════════════════════════════════════════════ */
 function Providers() {
-  const ollama = {
-    eyebrow: 'Local · free · private',
+  const localOllama = {
+    eyebrow: 'Free · local · on our server',
     name:    <>Local <em>Ollama</em></>,
     models:  'llama · mistral · qwen · gemma',
     list: [
-      'Resume text never leaves your network',
-      'Drop-in swap of any model you have pulled',
-      'Full pipeline runs on your hardware',
+      'Small open-weight models hosted on our Pi',
+      'Full 7-phase pipeline at zero cost',
+      'Fast, private, no API keys to wrangle',
     ],
     cost: '$0',
     costL: '/ forever',
-    recommended: true,
   };
-  const claude = {
-    eyebrow: 'Cloud · highest quality',
-    name:    <>Anthropic <em>Claude</em></>,
-    models:  'opus · sonnet · haiku',
+  const cloudOllama = {
+    eyebrow: 'Pro · cloud · much higher quality',
+    name:    <>Cloud <em>Ollama</em></>,
+    models:  'frontier-class · proxied via Ollama Turbo',
     list: [
-      'Tool-use forces strict JSON — no parse failures',
-      'Adaptive thinking on extraction & tailoring',
-      'Cents per resume run on Opus',
+      'Sharper scoring rubrics &amp; tailoring',
+      'Better résumé critique &amp; ATS gap analysis',
+      'No Pi-hardware ceiling — faster, more reliable runs',
     ],
     cost: '$4',
-    costL: '/ month · BYO API key',
+    costL: '/ month',
+    recommended: true,
   };
   return (
     <section className="providers" id="providers">
@@ -1698,16 +1698,18 @@ function Providers() {
           <span>Pick your engine</span>
         </div>
         <h2 className="providers-h">
-          Free <em>locally.</em> Pro for cloud.
+          Free for <em>local.</em> Pro for <em>cloud.</em>
         </h2>
         <p className="providers-sub">
-          Every LLM-touching step in the pipeline calls the same provider interface,
-          so you can switch mid-run without losing state.
+          Both tiers run through the same Ollama daemon on our server — Free uses small
+          local models, Pro routes through cloud-hosted frontier models. Switch in
+          Settings without losing pipeline state. Anthropic Claude is in active
+          development and will land in Pro at no extra cost.
         </p>
 
         <div className="provider-row">
-          <ProviderCard c={ollama}/>
-          <ProviderCard c={claude}/>
+          <ProviderCard c={localOllama}/>
+          <ProviderCard c={cloudOllama}/>
         </div>
       </div>
     </section>

@@ -1953,49 +1953,14 @@ class OllamaProvider(BaseProvider):
     deployment is the RPi's own Ollama, not the visiting user's laptop.
     """
 
-    def __init__(self, model: str = ""):
+    def __init__(self, model: str = "smollm2:135m"):
         # Read OLLAMA_URL per-instance so tests can monkeypatch the env after
         # import. Class-body reads happen at module-import time and are
         # effectively frozen for the process lifetime.
         import os as _os
         self.OLLAMA_URL = _os.environ.get("OLLAMA_URL", "http://localhost:11434").rstrip("/")
-        # Resolve the model name without baking in a literal: explicit
-        # constructor arg first, then DEFAULT_OLLAMA_MODEL env var, finally
-        # auto-detect from whatever the daemon has pulled. Hardcoding a
-        # specific tag here used to break across machines that didn't
-        # happen to have that exact model on disk.
-        resolved = (model or _os.environ.get("DEFAULT_OLLAMA_MODEL") or "").strip()
-        if not resolved:
-            resolved = self._detect_pulled_model() or ""
-        if not resolved:
-            raise ValueError(
-                "OllamaProvider needs a model name. Pass model=, set "
-                "DEFAULT_OLLAMA_MODEL in the environment, or pull at least "
-                "one model on the daemon (`ollama pull <name>`)."
-            )
-        self.model = resolved
+        self.model = model
         self._check_ollama()
-
-    def _detect_pulled_model(self, *, prefer_cloud: bool = False) -> str:
-        """Best-effort: ask the daemon what's available and return a sensible
-        default. Returns "" when Ollama is unreachable or empty. Mirrors
-        `app._pick_default_ollama_model` but kept local so providers.py
-        doesn't depend on app.py.
-        """
-        import urllib.request as _ur
-        import json as _json
-        try:
-            with _ur.urlopen(f"{self.OLLAMA_URL}/api/tags", timeout=3) as resp:
-                data = _json.loads(resp.read().decode())
-        except Exception:
-            return ""
-        names = [m.get("name") for m in (data.get("models") or []) if m.get("name")]
-        is_cloud = lambda n: str(n).lower().endswith("cloud")
-        cloud = sorted(n for n in names if is_cloud(n))
-        local = sorted(n for n in names if not is_cloud(n))
-        if prefer_cloud and cloud:
-            return cloud[0]
-        return (local[0] if local else (cloud[0] if cloud else ""))
 
     def _check_ollama(self):
         import urllib.request as _ur
@@ -2374,11 +2339,7 @@ def get_provider(args) -> BaseProvider:
         console.print("[dim]Mode: Demo (no API key required)[/dim]")
         return DemoProvider()
     if args.ollama:
-        # `args.model` is None when the user didn't pass --model; the
-        # OllamaProvider constructor then resolves DEFAULT_OLLAMA_MODEL or
-        # auto-detects from the daemon's pulled models.
-        provider = OllamaProvider(model=args.model or "")
-        console.print(f"[dim]Mode: Ollama LLM (model: {provider.model})[/dim]")
-        return provider
+        console.print(f"[dim]Mode: Ollama local LLM (model: {args.model})[/dim]")
+        return OllamaProvider(model=args.model)
     console.print("[dim]Mode: Anthropic Claude Opus 4.6[/dim]")
     return AnthropicProvider()

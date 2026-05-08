@@ -94,33 +94,48 @@ class TestConfig:
         s = client.get("/api/state").json()
         assert "hack_me" not in s
 
-    def test_anthropic_mode_blocked_for_free_tier(self, fastapi_client):
+    def test_anthropic_mode_blocked_for_non_devs(self, fastapi_client):
+        # Anthropic Claude is under active development — only developers can
+        # select it (regardless of plan tier). Non-dev callers get 503 +
+        # `coming_soon` so the SPA shows the right copy instead of an
+        # "upgrade to Pro" upsell.
         client, _, _ = fastapi_client
         r = client.post("/api/config", json={"mode": "anthropic"})
-        # 402 Payment Required.
-        assert r.status_code == 402
+        assert r.status_code == 503
         body = r.json()
-        assert body.get("code") == "plan_required"
+        assert body.get("code") == "coming_soon"
 
-    def test_demo_mode_allowed_for_free_tier(self, fastapi_client):
+    def test_demo_mode_rejected(self, fastapi_client):
+        # `demo` was retired from the user-selectable mode whitelist —
+        # DemoProvider still exists internally as the heuristic baseline /
+        # Ollama-down fallback, but POST /api/config rejects it as 400.
         client, _, _ = fastapi_client
         r = client.post("/api/config", json={"mode": "demo"})
-        assert r.status_code == 200
+        assert r.status_code == 400
 
     def test_ollama_mode_allowed_for_free_tier(self, fastapi_client):
         client, _, _ = fastapi_client
         r = client.post("/api/config", json={"mode": "ollama"})
         assert r.status_code == 200
 
-    def test_anthropic_mode_allowed_for_pro(self, fastapi_client, tmp_db):
+    def test_anthropic_mode_blocked_even_for_pro(self, fastapi_client, tmp_db):
+        # Anthropic Claude is reserved for developers until launch — paying
+        # Pro is no longer enough to access it. (When Claude ships, Pro users
+        # get it included; until then this test asserts the gate.)
         client, user_id, token = fastapi_client
-        # Promote to pro AND refresh the cached token payload so /api/state
-        # reflects pro on the next poll.
         tmp_db.set_user_plan_tier(user_id, "pro")
         tmp_db.create_auth_token(token, user_id, {
             "id": user_id, "email": "tester@example.com",
             "is_developer": False, "plan_tier": "pro",
         })
+        r = client.post("/api/config", json={"mode": "anthropic"})
+        assert r.status_code == 503
+        assert r.json().get("code") == "coming_soon"
+
+    def test_anthropic_mode_allowed_for_devs(self, dev_client):
+        # Developers can still exercise the in-progress Claude integration so
+        # they can test it before it ships to customers.
+        client, _, _ = dev_client
         r = client.post("/api/config", json={"mode": "anthropic"})
         assert r.status_code == 200
 

@@ -120,25 +120,10 @@ def _convert_to_pdf(docx_path: Path, pdf_path: Path) -> bool:
     return False
 
 
-def tailor_docx_in_place(
-    tailored: dict, source_path: Path, base: str, out_dir: Path,
-    format_profile: dict | None = None,
-) -> dict:
-    """Open the source .docx, edit text in-place, save under {base}.docx.
-
-    Outputs:
-      {base}.docx           — primary editable artifact
-      {base}_preview.html   — HTML preview (template-lib render, used by SPA)
-      {base}.pdf            — when docx2pdf or LibreOffice is available
-    """
-    from docx import Document
-
-    out_dir = Path(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    docx_path = out_dir / (base + ".docx")
-
-    doc = Document(str(source_path))
-
+def _apply_tailoring(doc, tailored: dict, *, clean: bool) -> None:
+    """Mutate ``doc`` in place per ``tailored``. When ``clean`` is True the
+    GREEN run colorization is suppressed on added/modified bullets, so the
+    resulting docx (and its converted PDF) reads as all-black body text."""
     # ── Section map: list[bucket-or-None per paragraph index] ───────────────
     section_map: list[str | None] = []
     current: str | None = None
@@ -168,7 +153,7 @@ def tailor_docx_in_place(
                 flat = ", ".join(t for t, _ in skill_text_parts)
                 _replace_paragraph_text(p, flat, color_green=False)
                 skills_replaced = True
-                if any(g for _, g in skill_text_parts) and p.runs:
+                if not clean and any(g for _, g in skill_text_parts) and p.runs:
                     from docx.shared import RGBColor
                     p.runs[0].font.color.rgb = RGBColor(*GREEN)
                 break
@@ -200,10 +185,11 @@ def tailor_docx_in_place(
                         _replace_paragraph_text(pj, "", color_green=False)
                     else:
                         b = bullets_to_apply.pop(0)
+                        is_changed = b.get("diff") in ("added", "modified")
                         _replace_paragraph_text(
                             pj,
                             b.get("text") or "",
-                            color_green=(b.get("diff") in ("added", "modified")),
+                            color_green=(is_changed and not clean),
                         )
                     j += 1
                 else:
@@ -212,30 +198,62 @@ def tailor_docx_in_place(
                 anchor = template_p
                 for b in bullets_to_apply:
                     anchor = _clone_bullet_paragraph(
-                        anchor, b.get("text") or "", color_green=True,
+                        anchor, b.get("text") or "", color_green=(not clean),
                     )
             i = j
             role_idx += 1
             continue
         i += 1
 
-    # ── Save .docx ──────────────────────────────────────────────────────────
-    doc.save(str(docx_path))
-    console.print(f"  [cyan]DOCX saved (in-place) -> {docx_path.name}[/cyan]")
 
-    # ── HTML preview ────────────────────────────────────────────────────────
+def tailor_docx_in_place(
+    tailored: dict, source_path: Path, base: str, out_dir: Path,
+    format_profile: dict | None = None,
+) -> dict:
+    """Open the source .docx, edit text in-place, save under {base}.docx.
+
+    Outputs:
+      {base}.docx           — diff-colored editable artifact
+      {base}_final.docx     — clean (all-black) editable artifact
+      {base}_preview.html   — HTML preview (template-lib render, used by SPA)
+      {base}.pdf            — diff PDF when docx2pdf or LibreOffice available
+      {base}_final.pdf      — clean PDF for sending to employers
+    """
+    from docx import Document
+
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # ── Diff-colored .docx + PDF ────────────────────────────────────────────
+    docx_path = out_dir / (base + ".docx")
+    diff_doc = Document(str(source_path))
+    _apply_tailoring(diff_doc, tailored, clean=False)
+    diff_doc.save(str(docx_path))
+    console.print(f"  [cyan]DOCX saved (in-place) -> {docx_path.name}[/cyan]")
+    pdf_path = out_dir / (base + ".pdf")
+    pdf_ok = _convert_to_pdf(docx_path, pdf_path)
+
+    # ── Clean .docx + PDF — fresh Document so the diff edits don't leak ─────
+    final_docx_path = out_dir / (base + "_final.docx")
+    clean_doc = Document(str(source_path))
+    _apply_tailoring(clean_doc, tailored, clean=True)
+    clean_doc.save(str(final_docx_path))
+    final_pdf_path = out_dir / (base + "_final.pdf")
+    final_pdf_ok = _convert_to_pdf(final_docx_path, final_pdf_path)
+    if final_pdf_ok:
+        console.print(f"  [green]Clean DOCX PDF saved -> {final_pdf_path.name}[/green]")
+
+    # ── HTML preview (template-lib render, drives the SPA iframe) ──────────
     html = render_html(tailored, "single_column_modern", format_profile=format_profile)
     html_path = out_dir / (base + "_preview.html")
     html_path.write_text(html, encoding="utf-8")
 
-    # ── PDF (best-effort) ───────────────────────────────────────────────────
-    pdf_path = out_dir / (base + ".pdf")
-    pdf_ok = _convert_to_pdf(docx_path, pdf_path)
-
     return {
         "tex": None,
         "pdf": pdf_path.name if pdf_ok else None,
+        "pdf_final": final_pdf_path.name if final_pdf_ok else None,
         "docx": docx_path.name,
+        "docx_final": final_docx_path.name,
         "html_preview": html_path.name,
         "base": base,
         "template_id": "in_place_docx",

@@ -4488,6 +4488,16 @@ function TailorDrawer({ job, mode, isPro, isDev, hasResume, onClose, onOpenDocum
                       </code>
                     </span>
                   </span>
+                  {item.final_pdf_url && (
+                    <a className="btn-primary"
+                      href={item.final_pdf_url}
+                      download
+                      style={{ padding: '5px 11px', fontSize: 13, textDecoration: 'none' }}
+                      title="Clean (all-black) PDF for sending to employers — no diff highlights">
+                      <Icon name="download" size={11}/>
+                      Final PDF
+                    </a>
+                  )}
                   {onOpenDocuments && (
                     <button className="btn-ghost"
                       style={{ padding: '5px 11px', fontSize: 13 }}

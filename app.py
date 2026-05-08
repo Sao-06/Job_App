@@ -2042,6 +2042,16 @@ def _build_tailored_item(*, job: dict, tailored: dict, resume_ref: str,
             if slash >= 0:
                 prefix = resume_ref[: slash + 1]
         item["html_preview_url"] = f"/output/{prefix}{files['html_preview']}"
+        # Clean / final-version downloads — generated alongside the diff artifacts
+        # so the user can attach the all-black PDF to applications without the
+        # green diff highlights bleeding through. Kept separate from the diff
+        # PDF served via `resume_file` so the preview iframe still shows changes.
+        if files.get("pdf_final"):
+            item["final_pdf_url"] = f"/output/{prefix}{files['pdf_final']}"
+        if files.get("docx_final"):
+            item["final_docx_url"] = f"/output/{prefix}{files['docx_final']}"
+        if files.get("tex_final"):
+            item["final_tex_url"] = f"/output/{prefix}{files['tex_final']}"
     if files.get("template_id"):
         item["template_id"] = files["template_id"]
         if files.get("template_confidence") is not None:
@@ -2254,22 +2264,20 @@ def _detect_pdf_format_profile(suffix: str, content: bytes) -> dict:
 
 
 def _render_preview_pdf(record: dict) -> str | None:
-    """Render a polished PDF preview of the resume's plaintext + extracted
-    profile, persist it under ``uploads/{id}_preview.pdf``, and return the
-    OUTPUT_DIR-relative path.
+    """Render a polished PDF preview of the resume, persist it under
+    ``uploads/{id}_preview.pdf``, and return the OUTPUT_DIR-relative path.
 
-    This is the fix for "PDF preview shows basic .txt": users who upload
-    plain-text or .docx resumes never have a real PDF to embed.  Instead
-    of dumping monospace text into the preview pane, render the same
-    reportlab layout the tailored-resume path uses, but with no tailoring
-    applied — so the user always sees a properly-formatted document.
+    Strategy by source format:
+      • .tex (or any record with a ``latex_source``) → run pdflatex on the
+        actual LaTeX so the preview shows the user's real layout, fonts,
+        and macros. Falls through to reportlab only if pdflatex isn't on
+        PATH or the compile fails.
+      • everything else (.txt, .md, .docx, plain-text uploads) → reportlab
+        render of the extracted profile + plaintext block.
 
-    Real PDF uploads keep their original (the iframe still prefers
-    ``original_url`` when it's a PDF); this helper is the fallback for
-    every other suffix.
-
-    Returns ``None`` if reportlab is unavailable or rendering fails — in
-    which case the SPA gracefully degrades to the plaintext view.
+    Real PDF uploads keep their original (the iframe prefers ``original_url``
+    when it's a PDF); this helper is the fallback for every other suffix.
+    Returns ``None`` if no backend can produce a PDF.
     """
     try:
         rid = record.get("id")
@@ -2278,6 +2286,19 @@ def _render_preview_pdf(record: dict) -> str | None:
         dest_dir = _session_output_dir() / "uploads"
         dest_dir.mkdir(parents=True, exist_ok=True)
         dest = dest_dir / f"{rid}_preview.pdf"
+
+        latex_source = record.get("latex_source")
+        if latex_source:
+            try:
+                from pipeline.latex import compile_latex_to_pdf
+                if compile_latex_to_pdf(latex_source, dest) and dest.exists():
+                    return dest.resolve().relative_to(OUTPUT_DIR.resolve()).as_posix()
+            except Exception as exc:
+                print(f"[preview pdf] LaTeX compile failed for {rid!r}: "
+                      f"{type(exc).__name__}: {exc}", file=sys.stderr)
+            # pdflatex unavailable or compile errored — fall through to the
+            # reportlab path so the user still sees something.
+
         # Use whatever profile we have. Before extraction completes the
         # profile is empty — _render_resume_pdf_reportlab handles that by
         # falling back to the raw resume text block.

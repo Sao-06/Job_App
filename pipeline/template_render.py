@@ -49,17 +49,41 @@ def _read_shared_css() -> tuple[str, str]:
     return base, diff
 
 
+# Neutral stylesheet that suppresses the green diff highlights. Used when
+# rendering the "final / clean" PDF the user actually sends — the in-page
+# preview iframe still uses the green diff.css so they can review changes.
+_CLEAN_DIFF_CSS = """\
+/* clean — neutralize diff highlights for the final-version PDF */
+mark.diff-add, mark.diff-mod {
+  background: transparent;
+  color: inherit;
+  border: none;
+  padding: 0;
+  text-decoration: none;
+}
+"""
+
+
 def render_html(
     tailored: dict,
     template_id: str,
     format_profile: dict | None = None,
+    clean: bool = False,
 ) -> str:
-    """Render the TailoredResume v2 into a self-contained HTML string."""
+    """Render the TailoredResume v2 into a self-contained HTML string.
+
+    ``clean=True`` swaps the green-highlight diff stylesheet for a neutral
+    one so the resulting PDF has all-black body text — used for the "final
+    version" download. The HTML preview iframe in the SPA continues to use
+    ``clean=False`` so reviewers still see what changed.
+    """
     if template_id not in _TEMPLATE_IDS:
         template_id = "single_column_classic"
     env = _load_jinja_env()
     tmpl = env.get_template(f"{template_id}.html.j2")
     base_css, diff_css = _read_shared_css()
+    if clean:
+        diff_css = _CLEAN_DIFF_CSS
     fp = format_profile or {}
     body_size = float(fp.get("body_font_size") or 10)
     body_size = max(8.5, min(12.5, body_size))

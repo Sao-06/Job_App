@@ -777,18 +777,28 @@ def _save_tailored_resume(job: dict, tailored: dict, profile: dict = None,
 
     # PDF / unknown / default → template library
     template_id, confidence = pick_template(format_profile, resume_text)
-    html = render_html(v2, template_id, format_profile=format_profile)
+    # 1. Diff/preview HTML — green-highlighted, drives the in-page iframe.
+    html_diff = render_html(v2, template_id, format_profile=format_profile)
     html_path = out_dir / (base + "_preview.html")
-    html_path.write_text(html, encoding="utf-8")
+    html_path.write_text(html_diff, encoding="utf-8")
     pdf_path = out_dir / (base + ".pdf")
-    pdf_ok = render_pdf(html, pdf_path)
+    pdf_ok = render_pdf(html_diff, pdf_path)
     if pdf_ok:
         console.print(f"  [green]PDF saved -> {pdf_path.name} (template={template_id})[/green]")
     else:
         console.print(f"  [yellow]No PDF backend available — only HTML preview at {html_path.name}.[/yellow]")
+    # 2. Clean/final PDF — same template, all-black body. This is the file
+    # users actually attach to applications. Best-effort: if WeasyPrint isn't
+    # available we leave it None, the diff PDF still works as a fallback.
+    final_pdf_path = out_dir / (base + "_final.pdf")
+    html_clean = render_html(v2, template_id, format_profile=format_profile, clean=True)
+    final_pdf_ok = render_pdf(html_clean, final_pdf_path)
+    if final_pdf_ok:
+        console.print(f"  [green]Clean PDF saved -> {final_pdf_path.name}[/green]")
     return {
         "tex": None,
         "pdf": pdf_path.name if pdf_ok else None,
+        "pdf_final": final_pdf_path.name if final_pdf_ok else None,
         "docx": None,
         "html_preview": html_path.name,
         "base": base,

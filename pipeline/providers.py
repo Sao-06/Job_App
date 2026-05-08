@@ -813,21 +813,57 @@ class AnthropicProvider(BaseProvider):
         return next(b.text for b in resp.content if b.type == "text")
 
     def generate_demo_jobs(self, profile: dict, titles: list, location: str) -> list:
-        skills = ", ".join(profile.get("top_hard_skills", [])[:5])
+        # Generalize the prompt to any candidate's domain — the previous version
+        # hardcoded "IC design, photonics, FPGA" which leaked into demo runs for
+        # users from completely different fields (marketing, healthcare, finance,
+        # design, etc.). Pull domain hints from the actual profile so the demo
+        # postings match whoever is logged in.
+        target_titles = [str(t) for t in (titles or []) if str(t).strip()][:5]
+        skills_top = [str(s) for s in (profile.get("top_hard_skills") or []) if str(s).strip()][:8]
+        edu = (profile.get("education") or [{}])[0] if profile.get("education") else {}
+        degree = str(edu.get("degree") or "").strip()
+        # Infer a coarse industry hint from the most-frequent target-title family.
+        industry_hint = ""
+        title_blob = " ".join(target_titles).lower()
+        for keyword, family in (
+            ("software", "software / web / SaaS"),
+            ("data", "data science / analytics"),
+            ("machine learning", "ML / applied AI"),
+            ("hardware", "hardware / electronics"),
+            ("design", "product / industrial / UX design"),
+            ("marketing", "marketing / growth"),
+            ("sales", "sales / business development"),
+            ("nurse", "healthcare / clinical"),
+            ("clinical", "healthcare / clinical"),
+            ("teacher", "education"),
+            ("finance", "finance / banking"),
+            ("accountant", "accounting"),
+        ):
+            if keyword in title_blob:
+                industry_hint = family
+                break
+
+        prompt = (
+            "Generate 12 realistic job postings tailored to the candidate below. "
+            "Each posting must match the candidate's domain, seniority, and skills "
+            "— do NOT default to a generic field if the profile is in a different one.\n\n"
+            f"Candidate target titles: {', '.join(target_titles) or '(none specified)'}\n"
+            f"Candidate top skills: {', '.join(skills_top) or '(none specified)'}\n"
+            f"Candidate education: {degree or '(unspecified)'}\n"
+            f"Candidate location preference: {location or 'flexible'} (or Remote)\n"
+            + (f"Industry hint (from titles): {industry_hint}.\n" if industry_hint else "")
+            + "\n"
+            "Return a JSON array only (no markdown). Each object: "
+            "id, title, company, location, remote (bool), "
+            f"posted_date (ISO, last 14 days from {date.today().isoformat()}), "
+            "description (2-3 sentences), requirements (array 5-8 strings), "
+            "salary_range (string or null), application_url, "
+            "platform (LinkedIn|Indeed|Glassdoor|Handshake|Company Site)."
+        )
         resp = self.client.messages.create(
             model=self.model, max_tokens=4096,
-            messages=[{"role": "user", "content": (
-                "Generate 12 realistic internship job postings.\n"
-                f"Titles: {', '.join(titles)}\nLocation: {location} or Remote\n"
-                f"Key skills: {skills}\n\n"
-                "Return a JSON array only (no markdown). Each object: "
-                "id, title, company, location, remote (bool), "
-                f"posted_date (ISO, last 14 days from {date.today().isoformat()}), "
-                "description (2-3 sentences), requirements (array 5-8 strings), "
-                "salary_range (string or null), application_url, "
-                "platform (LinkedIn|Indeed|Glassdoor|Handshake|Company Site).\n"
-                "Focus on IC design, photonics, FPGA, hardware at top EE companies."
-            )}],
+            messages=[{"role": "user", "content": prompt}],
+            output_config=self._output_config(),
         )
         raw = next(b.text for b in resp.content if b.type == "text")
         m = re.search(r'\[.*\]', raw, re.DOTALL)

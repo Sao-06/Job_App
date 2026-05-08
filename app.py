@@ -4328,30 +4328,60 @@ def jobs_feed(request: Request):
         # is the same shape as `exp`.
         job_categories=_csv(qs.get("industry")),
     )
+    profile_for_search = _profile_for_search()
+    profile_complete = _profile_is_meaningful(profile_for_search)
     with _session_store.connect() as conn:
-        page = search(conn=conn, filters=filters, profile=_profile_for_search(),
+        page = search(conn=conn, filters=filters, profile=profile_for_search,
                       cursor=qs.get("cursor") or None, limit=limit)
     # Drop hidden ids client-side intent applied here too.
     hidden = _S.get("hidden_ids") or set()
     visible = [j for j in page.jobs if j.id not in hidden]
     return {
-        "jobs": [_dto_to_json(j) for j in visible],
+        "jobs": [_dto_to_json(j, profile_complete) for j in visible],
         "next_cursor": page.next_cursor,
         "total_estimate": page.total_estimate,
+        # Surface profile-completeness so the SPA can render a
+        # "complete your profile to see real matches" banner instead of
+        # showing fake-looking scores. Reads as an out-of-band signal —
+        # neither the cursor nor the job objects depend on it.
+        "profile_complete": profile_complete,
     }
 
 
-def _dto_to_json(j) -> dict:
+def _profile_is_meaningful(profile: dict | None) -> bool:
+    """Does the profile have enough signal to score jobs against?
+
+    A "meaningful" profile has at least 2 hard skills OR at least 1 target
+    title. Below that, every score is mostly the rerank composite's
+    text-search base — which produces the "blank resume reads 68% on a
+    senior hardware role" failure mode. We'd rather render "—" with a
+    complete-your-profile prompt than fabricate a match.
+    """
+    if not profile:
+        return False
+    skills = profile.get("top_hard_skills") or []
+    titles = profile.get("target_titles") or []
+    return len([s for s in skills if s and str(s).strip()]) >= 2 \
+        or len([t for t in titles if t and str(t).strip()]) >= 1
+
+
+def _dto_to_json(j, profile_complete: bool = True) -> dict:
     """Adapt a JobDTO to the wire shape the SPA already speaks (matches the
     keys used by ``state.scored_summary.jobs``: ``id, co, role, loc, score,
-    skills, url, status``). Extra fields are added for richer cards."""
+    skills, url, status``). Extra fields are added for richer cards.
+
+    When ``profile_complete=False``, the score is set to None — the SPA
+    renders a neutral "—" with a "Complete profile" hint instead of a
+    misleading number derived purely from text-search relevance against an
+    empty profile.
+    """
     has_jd = bool((j.description or "").strip()) or bool(j.requirements)
     return {
         "id":      j.id,
         "co":      j.company,
         "role":    j.title,
         "loc":     j.location,
-        "score":   round(j.score * 100),    # 0..100 for the existing UI bar
+        "score":   round(j.score * 100) if profile_complete else None,
         "skills":  ", ".join(j.requirements[:6]),
         "url":     j.url,
         "remote":  j.remote,
@@ -4439,14 +4469,18 @@ async def jobs_score_batch(request: Request):
         return {"scores": []}
 
     profile = _S.get("profile") or {}
-    if not profile:
-        # No profile loaded → can't score against anything. Return null
-        # scores so the SPA falls back to the rerank-only sort.
+    if not _profile_is_meaningful(profile):
+        # Profile is empty or essentially empty (≤1 skill, no target titles)
+        # — every score against an empty profile would be derived from
+        # text-search relevance alone, producing fake-looking numbers like
+        # "68% match" on a senior hardware role from a blank resume. Return
+        # null with a clear reason so the SPA can render a "complete your
+        # profile" hint instead.
         return {"scores": [
             {"id": jid, "score": None, "has_jd": False,
-             "reason": "no profile loaded — score requires a resume"}
+             "reason": "incomplete profile — add hard skills or a target title to enable scoring"}
             for jid in job_ids
-        ]}
+        ], "profile_complete": False}
 
     from pipeline import job_repo, job_details, providers
 

@@ -717,57 +717,81 @@ def _save_tailored_resume(job: dict, tailored: dict, profile: dict = None,
                           resume_text: str = "",
                           output_dir: Path = None,
                           owner_name: str = None,
-                          format_profile: dict | None = None) -> dict:
-    """Write the tailored resume to OUTPUT_DIR and return file metadata.
+                          format_profile: dict | None = None,
+                          source_format: str | None = None,
+                          source_bytes_path: Path | None = None) -> dict:
+    """Write the tailored resume to OUTPUT_DIR.
 
-    Always produces BOTH a .tex source and a .pdf (when a PDF backend is
-    available).  Returns ``{"tex": filename, "pdf": filename_or_None,
-    "base": basename_no_ext}`` so callers can serve both formats.
+    Returns ``{"tex": str|None, "pdf": str|None, "docx": str|None,
+              "html_preview": str|None, "base": str, "template_id": str|None,
+              "template_confidence": float|None}``.
 
-    PDF generation strategy:
-      1. If *latex_source* is provided, tailor it via apply_tailoring_to_latex
-         and try to compile with pdflatex.
-      2. Otherwise (or if pdflatex unavailable), build a fresh LaTeX source
-         from the structured profile and render the PDF directly via reportlab.
+    Dispatch by source_format:
+      tex   → in-place LaTeX rewrite (preserves user's .tex template)
+      docx  → in-place python-docx rewrite (preserves runs/styles)
+      pdf   → template-library match, render via Jinja2 → WeasyPrint
+      else  → default template (single_column_classic)
+
+    Backwards-compatible: when source_format is None or the legacy v1 dict
+    is passed, falls through to the template-library path.
     """
+    from .tailored_schema import (
+        SCHEMA_VERSION, default_v2, legacy_to_v2, validate_v2,
+    )
+    from .template_match import pick_template
+    from .template_render import render_html, render_pdf
+
     safe = lambda s: re.sub(r"[^a-zA-Z0-9_\-]", "_", s)
     name = owner_name or OWNER_NAME
     base = (
         f"{safe(name)}_Resume_{safe(job.get('company', ''))}"
         f"_{safe(job.get('title', ''))}"
     )
-    profile = profile or {}
-
     out_dir = output_dir or OUTPUT_DIR
     out_dir.mkdir(parents=True, exist_ok=True)
-    tex_path = out_dir / (base + ".tex")
-    pdf_path = out_dir / (base + ".pdf")
 
-    # ── 1. Resolve LaTeX source ───────────────────────────────────────────────
-    if latex_source:
-        tailored_latex = apply_tailoring_to_latex(latex_source, tailored, job)
+    # ── Normalize tailored to v2 ────────────────────────────────────────────
+    if not isinstance(tailored, dict):
+        tailored = {}
+    if tailored.get("schema_version") == SCHEMA_VERSION:
+        v2 = validate_v2(tailored) or default_v2(profile)
     else:
-        tailored_latex = _render_resume_latex(profile, tailored, job, resume_text)
+        v2 = legacy_to_v2(tailored, profile)
+    if owner_name:
+        v2["name"] = owner_name
 
-    tex_path.write_text(tailored_latex, encoding="utf-8")
-    console.print(f"  [cyan]LaTeX saved -> {tex_path.name}[/cyan]")
-
-    # ── 2. Produce a PDF (pdflatex first, then reportlab fallback) ────────────
-    pdf_filename: str | None = None
-    if compile_latex_to_pdf(tailored_latex, pdf_path):
-        pdf_filename = pdf_path.name
-        console.print(f"  [green]PDF saved -> {pdf_path.name}[/green]")
-    elif _render_resume_pdf_reportlab(pdf_path, profile, tailored, job,
-                                       resume_text, format_profile=format_profile):
-        pdf_filename = pdf_path.name
-        console.print(f"  [green]PDF saved (reportlab) -> {pdf_path.name}[/green]")
-    else:
-        console.print("  [yellow]No PDF backend available - .tex only.[/yellow]")
-        # print() reaches the SSE log stream; console.print() only goes to the terminal.
-        print(
-            f"  [WARNING] No PDF generated for {tex_path.name} — neither pdflatex nor "
-            "reportlab is available. Applications will use the .tex source, not a PDF. "
-            "Install: pip install reportlab"
+    # ── Source-format dispatch ──────────────────────────────────────────────
+    src = (source_format or "").lower()
+    if src == "tex" and latex_source:
+        from .latex_tailor import tailor_latex_in_place
+        return tailor_latex_in_place(
+            v2, latex_source=latex_source, base=base, out_dir=out_dir,
+            format_profile=format_profile,
+        )
+    if src == "docx" and source_bytes_path and Path(source_bytes_path).exists():
+        from .docx_tailor import tailor_docx_in_place
+        return tailor_docx_in_place(
+            v2, source_path=Path(source_bytes_path), base=base, out_dir=out_dir,
+            format_profile=format_profile,
         )
 
-    return {"tex": tex_path.name, "pdf": pdf_filename, "base": base}
+    # PDF / unknown / default → template library
+    template_id, confidence = pick_template(format_profile, resume_text)
+    html = render_html(v2, template_id, format_profile=format_profile)
+    html_path = out_dir / (base + "_preview.html")
+    html_path.write_text(html, encoding="utf-8")
+    pdf_path = out_dir / (base + ".pdf")
+    pdf_ok = render_pdf(html, pdf_path)
+    if pdf_ok:
+        console.print(f"  [green]PDF saved -> {pdf_path.name} (template={template_id})[/green]")
+    else:
+        console.print(f"  [yellow]No PDF backend available — only HTML preview at {html_path.name}.[/yellow]")
+    return {
+        "tex": None,
+        "pdf": pdf_path.name if pdf_ok else None,
+        "docx": None,
+        "html_preview": html_path.name,
+        "base": base,
+        "template_id": template_id,
+        "template_confidence": round(float(confidence), 2),
+    }

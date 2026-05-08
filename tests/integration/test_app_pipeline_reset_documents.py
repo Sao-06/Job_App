@@ -124,6 +124,55 @@ class TestPipelineReset:
         r = client.post("/api/pipeline/reset")
         assert r.status_code == 401
 
+    def test_arms_phase2_force_live_for_next_run(self, fastapi_client):
+        """Reset run should make the next phase-2 search find NEW jobs.
+        It does this by setting `force_phase2_next_run` so the upcoming
+        /api/phase/2/run kicks a fresh ingestion tick before searching the
+        persistent index."""
+        import app as app_module
+        client, _, _ = fastapi_client
+        # /api/config is the simplest way to ensure the session state row
+        # exists before we read it back. peek_state returns None for sessions
+        # that haven't yet had any persisted mutation.
+        client.post("/api/config", json={"threshold": 90})
+        sid = client.cookies.get("jobs_ai_session")
+
+        r = client.post("/api/pipeline/reset")
+        assert r.status_code == 200
+
+        state = (app_module._memory_sessions.get(sid)
+                 or app_module._session_store.peek_state(sid))
+        assert state is not None, "session state should exist after /api/config"
+        # After reset, the flag is armed so the user's next phase-2 click
+        # forces a synchronous ingestion run before the search.
+        assert state.get("force_phase2_next_run") is True, (
+            "Reset run must arm force_phase2_next_run so the next phase 2 "
+            "kicks fresh ingestion — otherwise the search hits the same "
+            "persistent index with the same query and returns stale jobs."
+        )
+
+    def test_clears_legacy_phase2_caches(self, fastapi_client, tmp_path, monkeypatch):
+        """The legacy server-wide quick/deep job caches under RESOURCES_DIR
+        must be deleted on reset. Leaving them in place lets a stale
+        snapshot resurface the next time the user runs phase 2."""
+        import app as app_module
+        client, _, _ = fastapi_client
+        client.get("/api/state")
+
+        # Point RESOURCES_DIR at tmp_path so we don't pollute the real one
+        # (and so the test can reliably observe "deleted").
+        monkeypatch.setattr(app_module, "RESOURCES_DIR", tmp_path)
+        quick = tmp_path / "sample_jobs_quick.json"
+        deep = tmp_path / "sample_jobs_deep.json"
+        quick.write_text('{"jobs": []}', encoding="utf-8")
+        deep.write_text('{"jobs": []}', encoding="utf-8")
+        assert quick.exists() and deep.exists()
+
+        r = client.post("/api/pipeline/reset")
+        assert r.status_code == 200
+        assert not quick.exists(), "reset should delete sample_jobs_quick.json"
+        assert not deep.exists(), "reset should delete sample_jobs_deep.json"
+
 
 # ── /api/state.running_phases ───────────────────────────────────────────────
 

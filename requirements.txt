@@ -1,4 +1,4 @@
-anthropic>=0.40.0
+anthropic>=0.88.0  # 0.88+ required for Opus 4.7 + output_config.format + scope_id on files.list
 fastapi>=0.111.0
 uvicorn>=0.30.0
 python-multipart>=0.0.9

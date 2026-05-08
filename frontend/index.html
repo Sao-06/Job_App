@@ -7339,6 +7339,337 @@ code { font-family: var(--mono); font-size: 14px; background: var(--bg-3); paddi
   border-color: var(--bdr);
 }
 
+/* ── EDITORIAL 2-COL DETAIL GRID — description on the left, sticky
+   skill / facts rail on the right. The reading column caps at ~64ch so
+   bullets read at a comfortable rhythm; the rail is kept narrow so it
+   doesn't compete with the body. Collapses to single-column under
+   1100px (rail goes inline above the body, no longer sticky). */
+.jd-detail-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 28px;
+  align-items: start;
+}
+.jd-detail-main {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-width: 0;          /* lets long words wrap inside grid 1fr cell */
+}
+.jd-detail-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  position: sticky;
+  top: 16px;
+  align-self: start;
+  /* On long descriptions the rail might exceed viewport height — let it
+     scroll independently rather than clipping the apply CTA off-screen. */
+  max-height: calc(100vh - 80px);
+  overflow-y: auto;
+  padding-right: 4px;
+  scrollbar-width: thin;
+}
+.jd-detail-rail::-webkit-scrollbar { width: 6px; }
+.jd-detail-rail::-webkit-scrollbar-thumb {
+  background: var(--bdr2);
+  border-radius: 3px;
+}
+
+/* Rail card — denser than the main-column .jd-section, more refined edge.
+   The skill-match card gets an accent gradient sweep; facts stays neutral. */
+.jd-rail-card {
+  background: var(--surface);
+  border: 1px solid var(--bdr);
+  border-radius: 12px;
+  padding: 18px 18px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  position: relative;
+  overflow: hidden;
+}
+.jd-rail-skills {
+  background:
+    radial-gradient(circle at 100% 0%, var(--accent-d) 0%, transparent 70%),
+    var(--surface);
+  border-color: var(--accent-b);
+}
+.jd-rail-eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: .18em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--t2);
+}
+.jd-rail-bar {
+  display: inline-block;
+  width: 3px;
+  height: 14px;
+  border-radius: 2px;
+  background: var(--accent-h);
+  box-shadow: 0 0 8px var(--accent-d);
+}
+.jd-rail-bar.cyan {
+  background: var(--accent2);
+  box-shadow: 0 0 8px var(--accent2-d);
+}
+.jd-rail-pct {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: -.02em;
+  color: var(--accent-h);
+  text-shadow: 0 0 12px var(--accent-d);
+}
+.jd-rail-meter {
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, .06);
+  overflow: hidden;
+}
+.jd-rail-meter-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), var(--accent-h));
+  box-shadow: 0 0 12px var(--accent-d);
+  transition: width .65s cubic-bezier(.16, 1, .3, 1);
+}
+.jd-rail-skill-summary {
+  font-size: 13px;
+  color: var(--t2);
+  line-height: 1.55;
+}
+.jd-rail-skill-summary b {
+  color: var(--t1);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.jd-rail-skill-group {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding-top: 4px;
+  border-top: 1px solid var(--bdr);
+}
+.jd-rail-skill-h {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: .15em;
+  text-transform: uppercase;
+  font-weight: 700;
+}
+.jd-rail-skill-group.on  .jd-rail-skill-h { color: var(--good); }
+.jd-rail-skill-group.off .jd-rail-skill-h { color: var(--accent3); }
+.jd-rail-skill-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.jd-rail-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 9px;
+  border-radius: 6px;
+  font-size: 12.5px;
+  font-weight: 500;
+  letter-spacing: -.005em;
+  border: 1px solid;
+  white-space: nowrap;
+}
+.jd-rail-chip.on {
+  background: var(--good-d);
+  color: var(--good);
+  border-color: var(--good-b);
+}
+.jd-rail-chip.off {
+  background: rgba(255, 255, 255, .04);
+  color: var(--t3);
+  border-color: var(--bdr);
+}
+.jd-rail-skill-empty {
+  font-size: 12.5px;
+  color: var(--t3);
+  line-height: 1.55;
+  font-style: italic;
+}
+
+/* Key-facts panel — definition list with monospace labels, left-aligned
+   values. Tight vertical rhythm so the rail doesn't tower over short
+   descriptions. */
+.jd-rail-facts-list {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.jd-rail-fact {
+  display: grid;
+  grid-template-columns: 92px 1fr;
+  gap: 12px;
+  align-items: baseline;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.jd-rail-fact dt {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--t3);
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.jd-rail-fact dt svg { color: var(--t3); }
+.jd-rail-fact dd {
+  margin: 0;
+  color: var(--t1);
+  font-weight: 500;
+  letter-spacing: -.005em;
+  word-break: break-word;
+}
+.jd-rail-fact dd.good { color: var(--good); font-weight: 600; }
+.jd-rail-fact dd.warn { color: var(--warn); font-weight: 600; }
+
+/* Sticky rail apply CTA — visually anchors the rail's bottom and
+   matches the existing .jd-apply pill styling but full-width here. */
+.jd-rail-apply {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 18px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  font-family: var(--sans);
+  font-size: 13.5px;
+  font-weight: 700;
+  letter-spacing: -.005em;
+  color: #fff;
+  background: linear-gradient(135deg, var(--accent), var(--accent-h));
+  box-shadow:
+    0 6px 18px -8px var(--accent),
+    inset 0 1px 0 0 rgba(255, 255, 255, .14);
+  transition: transform .12s ease, box-shadow .12s ease, opacity .12s ease;
+}
+.jd-rail-apply:hover {
+  transform: translateY(-1px);
+  box-shadow:
+    0 10px 24px -8px var(--accent),
+    inset 0 1px 0 0 rgba(255, 255, 255, .22);
+}
+.jd-rail-apply:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+/* Section heading — replace the boxed icon with a numeric prefix that
+   gives editorial weight to each heading without stacking another
+   colored shape next to the section card. The accent rule under the
+   number reinforces the rhythm without crowding the title text. */
+.jd-section-num {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0;
+  position: relative;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .18em;
+  color: var(--accent-h);
+  padding-right: 14px;
+  margin-right: 4px;
+  text-transform: uppercase;
+}
+.jd-section-num::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  top: 50%;
+  width: 1px;
+  height: 16px;
+  background: var(--bdr2);
+  transform: translateY(-50%);
+}
+
+/* Qualifications — single-column block layout. Required and Preferred
+   stack vertically separated by a hairline rule rather than fighting
+   for half the reading width. The headers carry an accent dot that
+   distinguishes Required (violet) from Preferred (cyan). */
+.jd-qual-block {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.jd-qual-block-h {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--t1);
+}
+.jd-qual-block.required .jd-qual-block-h { color: var(--accent-h); }
+.jd-qual-block.preferred .jd-qual-block-h { color: var(--accent2); }
+.jd-qual-count {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, .05);
+  color: var(--t3);
+}
+.jd-qual-divider {
+  display: flex;
+  align-items: center;
+  margin: 14px 0 8px;
+}
+.jd-qual-divider span {
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--bdr2), transparent);
+}
+
+/* Bullet list refinement — slightly bigger leading + marker contrast so
+   the new wider reading column has better rhythm. */
+.jd-bullet-item {
+  font-size: 14.5px;
+  line-height: 1.65;
+}
+
+/* Mobile / narrow-window collapse — stack the rail above the body and
+   drop the sticky behavior so readers don't lose the apply CTA. */
+@media (max-width: 1100px) {
+  .jd-detail-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .jd-detail-rail {
+    position: static;
+    max-height: none;
+    overflow: visible;
+    order: -1;          /* skill match shows BEFORE the JD body on mobile */
+  }
+}
+
 /* "Open original posting" fallback when no source-side description */
 .jd-no-desc {
   background: var(--bg-2);

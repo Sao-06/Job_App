@@ -1791,36 +1791,67 @@ const POSTED_LABELS = ['2 days ago','1 week ago','3 days ago','Just posted','5 d
 const WORK_MODELS   = ['Onsite','Hybrid','Remote'];
 const EXP_LEVELS    = ['Internship','Entry-level','Mid-level','Senior'];
 
+// Score tier — single source of truth used by JobCard's left-border
+// stripe AND the ring color/label. Four tiers across the brand palette
+// so every score lands in a colored zone (no more gray "low" tier);
+// thresholds sit lower than 85/65 so the rerank-composite fallback —
+// which naturally peaks around 0.7 — still lights up.
+// Score tier — single source of truth used by JobCard's left-border
+// stripe AND the ring color/label. Four tiers across the brand palette
+// so every score lands in a colored zone (no more gray "low" tier);
+// thresholds sit lower than 85/65 so the rerank-composite fallback —
+// which naturally peaks around 0.7 — still lights up.
+//
+// `track` is the dimmed remainder ring behind the active stroke; `glow`
+// is an outer drop-shadow for the top tier so "Strong" cards visibly
+// punch out of a dense list.
+function _scoreTier(score) {
+  if (score == null || Number.isNaN(score)) {
+    return { key: 'pending', label: 'Scoring…', color: 'var(--t4)',
+             track: 'var(--bdr)',                glow: 'none' };
+  }
+  const pct = Math.max(0, Math.min(100, Math.round(score)));
+  if (pct >= 75) return {
+    key: 'strong', label: 'Strong', color: 'var(--good)',
+    track: 'rgba(61,255,154,.16)',
+    glow:  'drop-shadow(0 0 8px rgba(61,255,154,.45))',
+  };
+  if (pct >= 55) return {
+    key: 'solid',  label: 'Solid',  color: 'var(--accent-h)',
+    track: 'rgba(167,139,255,.18)',
+    glow:  'drop-shadow(0 0 5px rgba(167,139,255,.32))',
+  };
+  if (pct >= 35) return {
+    key: 'fair',   label: 'Fair',   color: 'var(--accent2)',
+    track: 'rgba(34,229,255,.16)',
+    glow:  'none',
+  };
+  return {
+    key: 'reach',  label: 'Reach',  color: 'var(--accent3)',
+    track: 'rgba(255,61,154,.16)',
+    glow:  'none',
+  };
+}
+
 function ScoreRing({ score, tooltip }) {
   const isPending = score == null || Number.isNaN(score);
-  const pct  = isPending ? 0 : Math.max(0, Math.min(100, Math.round(score)));
-  const C    = 26, circ = 2 * Math.PI * C;
-  const off  = circ - (circ * pct / 100);
-  const tone = isPending ? 'score-pending'
-              : pct >= 85 ? 'score-high'
-              : pct >= 65 ? 'score-mid'
-              : 'score-low';
-  const color = isPending ? 'var(--t4)'
-              : pct >= 85 ? 'var(--good)'
-              : pct >= 65 ? 'var(--accent-h)'
-              : 'var(--t3)';
-  const label = isPending ? 'Scoring…'
-              : pct >= 85 ? 'Strong'
-              : pct >= 65 ? 'Good'
-              : pct >= 50 ? 'Fair'
-              : 'Reach';
+  const pct       = isPending ? 0 : Math.max(0, Math.min(100, Math.round(score)));
+  const tier      = _scoreTier(score);
+  const C         = 26, circ = 2 * Math.PI * C;
+  const off       = circ - (circ * pct / 100);
   return (
-    <div className={'job-score-col ' + tone} title={tooltip || undefined}>
+    <div className={'job-score-col score-' + tier.key} title={tooltip || undefined}>
       <div className="score-ring">
-        <svg width="56" height="56" viewBox="0 0 56 56">
-          <circle cx="28" cy="28" r={C} fill="none" strokeWidth="4" stroke="var(--bdr)"/>
-          <circle cx="28" cy="28" r={C} fill="none" strokeWidth="4" stroke={color}
-            strokeLinecap="round" strokeDasharray={circ} strokeDashoffset={off}
-            style={{ transition:'stroke-dashoffset .8s cubic-bezier(.16,1,.3,1)' }}/>
+        <svg width="56" height="56" viewBox="0 0 56 56" style={{ filter: tier.glow }}>
+          <circle cx="28" cy="28" r={C} fill="none" strokeWidth="4" stroke={tier.track}/>
+          <circle cx="28" cy="28" r={C} fill="none" strokeWidth="4"
+                  stroke={tier.color} strokeLinecap="round"
+                  strokeDasharray={circ} strokeDashoffset={off}
+                  style={{ transition: 'stroke-dashoffset .8s cubic-bezier(.16,1,.3,1), stroke .25s ease' }}/>
         </svg>
         <div className="score-pct">{isPending ? '—' : pct}</div>
       </div>
-      <div className="score-label">{label}</div>
+      <div className="score-label">{tier.label}</div>
     </div>
   );
 }
@@ -1846,10 +1877,7 @@ function JobCard({ job, idx, isLiked, onLike, onHide, onAsk, onTailor, onSelect,
   const pct       = lazyScore != null
                       ? Math.round(lazyScore)
                       : (fallback != null ? Math.round(fallback) : null);
-  const stripe    = pct == null ? 'score-pending'
-                  : pct >= 85   ? 'score-high'
-                  : pct >= 65   ? 'score-mid'
-                  :               'score-low';
+  const stripe    = 'score-' + _scoreTier(pct).key;   // strong / solid / fair / reach / pending
   const tags    = (job.skills || '').split(',').map(s => s.trim()).filter(Boolean).slice(0,3);
 
   // Clicking the card body opens the rich detail sub-page (jobright-style).

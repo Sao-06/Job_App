@@ -500,9 +500,9 @@ function Sparkline({ values, color = 'var(--accent-h)', w = 88, h = 24 }) {
 function ScoreHisto({ jobs }) {
   const buckets = [
     { label: '90+',   range: [90, 101], color: 'var(--good)',     n: 0 },
-    { label: '80–89', range: [80, 90],  color: '#34d399',         n: 0 },
+    { label: '80–89', range: [80, 90],  color: 'var(--good)',     n: 0 },
     { label: '70–79', range: [70, 80],  color: 'var(--accent-h)', n: 0 },
-    { label: '60–69', range: [60, 70],  color: '#7c83a8',         n: 0 },
+    { label: '60–69', range: [60, 70],  color: 'var(--t3)',       n: 0 },
     { label: '<60',   range: [0,  60],  color: 'var(--t4)',       n: 0 },
   ];
   jobs.forEach(j => {
@@ -552,7 +552,7 @@ function SkillDonut({ profileSkills, jobs }) {
               <stop offset="100%" stopColor="#22e5ff"/>
             </linearGradient>
           </defs>
-          <circle cx="60" cy="60" r={C} fill="none" stroke="rgba(255,255,255,.06)" strokeWidth="10"/>
+          <circle cx="60" cy="60" r={C} fill="none" stroke="var(--bdr)" strokeWidth="10"/>
           <circle cx="60" cy="60" r={C} fill="none" stroke="url(#donutGrad)" strokeWidth="10"
             strokeLinecap="round" strokeDasharray={circ} strokeDashoffset={off}
             transform="rotate(-90 60 60)"
@@ -1100,7 +1100,7 @@ function ResumeIntelligencePanel({ profile, resumes, setPage, refresh }) {
                 <stop offset="100%" stopColor={ringColor} stopOpacity=".55"/>
               </linearGradient>
             </defs>
-            <circle cx="80" cy="80" r={R} fill="none" stroke="rgba(255,255,255,.06)" strokeWidth="9"/>
+            <circle cx="80" cy="80" r={R} fill="none" stroke="var(--bdr)" strokeWidth="9"/>
             <circle cx="80" cy="80" r={R} fill="none" stroke="url(#intelRingGrad)" strokeWidth="9"
               strokeLinecap="round" strokeDasharray={CIRC} strokeDashoffset={off}
               transform="rotate(-90 80 80)"
@@ -1436,23 +1436,11 @@ function Dashboard({ state, setPage, refresh }) {
   const done       = new Set(state?.done || []);
   const phasePct   = Math.round((done.size / 7) * 100);
 
-  // Hero-row Re-scan CTA: a previous iteration of this button only lived
-  // inside ResumeIntelligencePanel's footer, where users had to scroll
-  // and visually hunt for it.  Surfacing it in the hero row is the fix —
-  // it's the action people use most often, so it belongs above the fold.
-  const primary = (state?.resumes || []).find(r => r.primary) || (state?.resumes || [])[0];
-  const [rescanningHero, setRescanningHero] = useState(false);
-  const rescanBusy = rescanningHero || !!primary?.extracting;
-  const rescanResume = async () => {
-    if (rescanBusy) return;
-    if (!primary) { setPage('resume'); return; }
-    setRescanningHero(true);
-    try {
-      await api.post('/api/profile/extract', { resume_id: primary.id, force: true });
-      await refresh?.();
-    } catch (e) { /* extraction state surfaces via /api/state */ }
-    finally { setRescanningHero(false); }
-  };
+  // Re-scan CTA was here when the hero hosted a button row; the button is
+  // now gone (lived inside .hero-cta-row, which dropped out of the visible
+  // layout). The Re-scan action remains available in the
+  // ResumeIntelligencePanel below — its proper home — and on the dedicated
+  // Resume page header.
 
   const streak = Math.max(1, done.size + (apps.length > 0 ? 2 : 0));
 
@@ -1469,10 +1457,12 @@ function Dashboard({ state, setPage, refresh }) {
     Array.from({ length: 12 }, (_, i) =>
       Math.max(0, Math.round(amp + amp * Math.sin((i + offset) * 0.55) + (i * 0.3))));
 
-  const profileSkills = (state?.profile?.skills || state?.profile?.hard_skills || []).map(s =>
+  // Canonical key emitted by pipeline/profile_extractor.py is `top_hard_skills`.
+  // Earlier `skills` / `hard_skills` reads were stale — both undefined on every
+  // /api/state response, which silently emptied SkillDonut + MarketPulse.
+  const profileSkills = (state?.profile?.top_hard_skills || []).map(s =>
     typeof s === 'string' ? s : (s.name || s.skill || ''));
 
-  const phaseLabels = ['Ingest','Discover','Score','Tailor','Submit','Track','Report'];
 
   return (
     <div className="page-body solo home-v2">
@@ -1499,44 +1489,26 @@ function Dashboard({ state, setPage, refresh }) {
                 ? <>You have <strong>{matches}</strong> high-confidence roles open in the queue. Atlas finished phase&nbsp;<strong>{done.size}/7</strong> — <em>your move</em>.</>
                 : <>Atlas is warming up. Run discovery to surface the freshest roles tuned to your profile.</>}
             </p>
-            <div className="hero-cta-row">
-              <button className="hero-cta-p" onClick={() => setPage('jobs')}>
-                <Icon name="zap" size={14}/> {matches > 0 ? 'Review matches' : 'Find matches'}
-              </button>
-              <button className="hero-cta-g" onClick={() => setPage('agent')}>
-                <Icon name="sparkles" size={14}/> Open agent
-              </button>
-              <button className="hero-cta-g" onClick={() => setPage('resume')}>
-                <Icon name="file-text" size={14}/> Tune résumé
-              </button>
-              {/* Prominent Re-scan CTA right in the hero — the previous
-                  placement (footer of the dossier card below) was too
-                  buried; users had to dig into Resume → Deep dive to
-                  trigger a re-scan. */}
-              <button className={'hero-cta-g hero-cta-rescan' + (rescanBusy ? ' busy' : '')}
-                      onClick={rescanResume}
-                      disabled={rescanBusy}
-                      title={primary
-                        ? `Re-run AI scan on ${primary.filename}`
-                        : 'Upload a résumé to scan it'}>
-                {rescanBusy
-                  ? <span className="spin" style={{ width:12, height:12, borderWidth:1.5 }}/>
-                  : <Icon name="refresh-cw" size={14}/>}
-                {rescanBusy ? 'Scanning…' : 'Re-scan résumé'}
-              </button>
-            </div>
-            <div className="hero-pipeline">
-              {phaseLabels.map((lbl, i) => {
-                const n = i + 1;
-                const isDone = done.has(n);
-                return (
-                  <div key={n} className={'pp-step' + (isDone ? ' done' : '')}>
-                    <span className="pp-dot">{isDone ? <Icon name="check" size={10}/> : n}</span>
-                    <span className="pp-lbl">{lbl}</span>
-                  </div>
-                );
-              })}
-            </div>
+            {/* The CTA row and 7-step pipeline strip lived here previously
+                but were dropping out of the visible layout — even though
+                the JSX rendered them, they appeared as zero-height children
+                on desktop, leaving the hero with empty space below the
+                body paragraph (the "out of line" complaint).
+
+                Both were also duplicates of surfaces elsewhere in the SPA:
+                  • The left rail already handles all nav (Home / Jobs /
+                    Resume / Profile / Agent / Documents) — adding pill
+                    buttons inside the hero just gave the same destinations
+                    a second visual weight.
+                  • The agent page carries the canonical 7-phase pipeline
+                    strip (large, with logs and reruns) — a tiny inline
+                    version on the home page didn't add information beyond
+                    the percentage in the hero ring on the right.
+
+                Hero is now a compact greeting band: eyebrow + title + body
+                paragraph on the left, the percentage ring on the right.
+                The dossier-row below (Resume Intelligence + Mission
+                Control) is the user's real launchpad. */}
           </div>
           <div className="hero-right">
             <div className="hero-ring">
@@ -1548,8 +1520,8 @@ function Dashboard({ state, setPage, refresh }) {
                     <stop offset="100%" stopColor="#34d399"/>
                   </linearGradient>
                 </defs>
-                <circle cx="90" cy="90" r="74" fill="none" stroke="rgba(255,255,255,.05)" strokeWidth="2"/>
-                <circle cx="90" cy="90" r="60" fill="none" stroke="rgba(255,255,255,.08)" strokeWidth="1" strokeDasharray="2 6"/>
+                <circle cx="90" cy="90" r="74" fill="none" stroke="var(--bdr)" strokeWidth="2"/>
+                <circle cx="90" cy="90" r="60" fill="none" stroke="var(--bdr2)" strokeWidth="1" strokeDasharray="2 6"/>
                 <circle cx="90" cy="90" r="74" fill="none" stroke="url(#ringGrad)" strokeWidth="6"
                   strokeLinecap="round"
                   strokeDasharray={2 * Math.PI * 74}
@@ -1610,7 +1582,7 @@ function Dashboard({ state, setPage, refresh }) {
           <div className="kpi-n"><CountUp to={avgScore}/><i className="kpi-unit">/100</i></div>
           <div className="kpi-foot">
             <span>across {jobs.length} roles</span>
-            <Sparkline values={spark(seed + 5, 6)} color="#a855f7"/>
+            <Sparkline values={spark(seed + 5, 6)} color="var(--accent-h)"/>
           </div>
         </div>
         <div className="kpi" style={{ animationDelay:'280ms' }}>
@@ -1828,7 +1800,7 @@ function ScoreRing({ score, tooltip }) {
               : pct >= 85 ? 'score-high'
               : pct >= 65 ? 'score-mid'
               : 'score-low';
-  const color = isPending ? 'rgba(255,255,255,.18)'
+  const color = isPending ? 'var(--t4)'
               : pct >= 85 ? 'var(--good)'
               : pct >= 65 ? 'var(--accent-h)'
               : 'var(--t3)';
@@ -1841,7 +1813,7 @@ function ScoreRing({ score, tooltip }) {
     <div className={'job-score-col ' + tone} title={tooltip || undefined}>
       <div className="score-ring">
         <svg width="56" height="56" viewBox="0 0 56 56">
-          <circle cx="28" cy="28" r={C} fill="none" strokeWidth="4" stroke="rgba(255,255,255,.07)"/>
+          <circle cx="28" cy="28" r={C} fill="none" strokeWidth="4" stroke="var(--bdr)"/>
           <circle cx="28" cy="28" r={C} fill="none" strokeWidth="4" stroke={color}
             strokeLinecap="round" strokeDasharray={circ} strokeDashoffset={off}
             style={{ transition:'stroke-dashoffset .8s cubic-bezier(.16,1,.3,1)' }}/>
@@ -3678,7 +3650,7 @@ function JobDetailView({ job, profile, allJobs, isLiked, isHidden,
                       </linearGradient>
                     </defs>
                     <circle cx="100" cy="100" r={RING_R} fill="none"
-                            stroke="rgba(255,255,255,.06)" strokeWidth="9"/>
+                            stroke="var(--bdr)" strokeWidth="9"/>
                     <circle cx="100" cy="100" r={RING_R} fill="none"
                             stroke={`url(#${gradId})`}
                             strokeWidth="9" strokeLinecap="round"
@@ -4590,9 +4562,7 @@ function TailorDrawer({ job, mode, isPro, isDev, hasResume, onClose, onOpenDocum
                   ? 'Comparing JD requirements against your resume — finding the keywords you might want to weave in.'
                   : (mode === 'anthropic'
                       ? 'Claude is rewriting bullets and skills with your selected keywords. Usually 15–25 s.'
-                      : (mode === 'ollama'
-                          ? 'Your local model is running — speed depends on the model size and your hardware.'
-                          : 'Demo: deterministic reorder + keyword merge.'))}
+                      : 'Your local model is running — speed depends on the model size and your hardware.')}
               </div>
             </div>
           )}
@@ -4832,7 +4802,7 @@ function ScoreHero({ score, verifiedBy, notes, verifiedError }) {
     <div className="rs-hero">
       <div className="rs-hero-ring">
         <svg width="140" height="140" viewBox="0 0 140 140">
-          <circle cx="70" cy="70" r={C} fill="none" strokeWidth="8" stroke="rgba(255,255,255,.06)"/>
+          <circle cx="70" cy="70" r={C} fill="none" strokeWidth="8" stroke="var(--bdr)"/>
           <circle cx="70" cy="70" r={C} fill="none" strokeWidth="8" stroke={color}
             strokeLinecap="round" strokeDasharray={circ} strokeDashoffset={off}
             transform="rotate(-90 70 70)"

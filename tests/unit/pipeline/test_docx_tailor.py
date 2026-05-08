@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from pipeline.docx_tailor import tailor_docx_in_place
-from pipeline.tailored_schema import default_v2
+from tests.fakes import jane_doe_tailored_v2
 
 pytestmark = pytest.mark.unit
 
@@ -14,31 +14,8 @@ FIXTURE = (
 
 
 def _v2():
-    profile = {
-        "name": "Jane Doe",
-        "top_hard_skills": ["Python", "Verilog", "C++", "MATLAB"],
-        "experience": [
-            {"title": "Intern", "company": "Acme Corp", "dates": "2024",
-             "bullets": ["Built a thing for the team", "Tested another thing"]},
-            {"title": "Research Assistant", "company": "Cal Photonics Lab", "dates": "2023",
-             "bullets": ["Aligned an interferometer"]},
-        ],
-        "education": [{"degree": "B.S. Electrical Engineering",
-                        "institution": "University of California, Berkeley", "year": "2025"}],
-    }
-    v2 = default_v2(profile)
-    v2["experience"][0]["bullets"][0] = {
-        "text": "Built a Verilog testbench for the team",
-        "original": "Built a thing for the team",
-        "diff": "modified",
-    }
-    v2["skills"][0]["items"].append({"text": "FPGA verification", "diff": "added"})
-    v2["experience"][0]["bullets"].append({
-        "text": "Wrote AXI4 transaction generators",
-        "original": "",
-        "diff": "added",
-    })
-    return v2
+    """DOCX path needs the added-bullet variant to exercise the clone path."""
+    return jane_doe_tailored_v2(with_added_bullet=True)
 
 
 def test_docx_in_place_replaces_modified_bullet(tmp_path):

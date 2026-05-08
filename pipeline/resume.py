@@ -775,24 +775,30 @@ def _save_tailored_resume(job: dict, tailored: dict, profile: dict = None,
             format_profile=format_profile,
         )
 
-    # PDF / unknown / default → template library
+    # PDF / unknown / default → template library.
+    # Diff HTML drives the in-page iframe (green highlights); clean HTML is
+    # the source for the downloadable PDF. Both PDF renders run concurrently
+    # — WeasyPrint is the dominant cost (hundreds of ms — seconds on big
+    # resumes); doubling it serially was a real latency hit.
+    from concurrent.futures import ThreadPoolExecutor
+
     template_id, confidence = pick_template(format_profile, resume_text)
-    # 1. Diff/preview HTML — green-highlighted, drives the in-page iframe.
     html_diff = render_html(v2, template_id, format_profile=format_profile)
     html_path = out_dir / (base + "_preview.html")
     html_path.write_text(html_diff, encoding="utf-8")
+    html_clean = render_html(v2, template_id, format_profile=format_profile, clean=True)
+
     pdf_path = out_dir / (base + ".pdf")
-    pdf_ok = render_pdf(html_diff, pdf_path)
+    final_pdf_path = out_dir / (base + "_final.pdf")
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        pdf_fut = pool.submit(render_pdf, html_diff, pdf_path)
+        final_fut = pool.submit(render_pdf, html_clean, final_pdf_path)
+        pdf_ok = pdf_fut.result()
+        final_pdf_ok = final_fut.result()
     if pdf_ok:
         console.print(f"  [green]PDF saved -> {pdf_path.name} (template={template_id})[/green]")
     else:
         console.print(f"  [yellow]No PDF backend available — only HTML preview at {html_path.name}.[/yellow]")
-    # 2. Clean/final PDF — same template, all-black body. This is the file
-    # users actually attach to applications. Best-effort: if WeasyPrint isn't
-    # available we leave it None, the diff PDF still works as a fallback.
-    final_pdf_path = out_dir / (base + "_final.pdf")
-    html_clean = render_html(v2, template_id, format_profile=format_profile, clean=True)
-    final_pdf_ok = render_pdf(html_clean, final_pdf_path)
     if final_pdf_ok:
         console.print(f"  [green]Clean PDF saved -> {final_pdf_path.name}[/green]")
     return {

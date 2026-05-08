@@ -1100,10 +1100,15 @@ em, i, cite, var { font-style: normal }
          padding-right: max(20px, env(safe-area-inset-right)); }
 }
 
+/* (The earlier @media (max-width: 720px) block above already tightens
+   .nav and .hero padding for tablets. We only add NEW selectors here so
+   the cascade doesn't end up with two same-breakpoint blocks fighting
+   over the same properties.) */
 @media (max-width: 720px) {
-  .nav { padding: 0 18px; height: 56px }
-  /* Hero, sections, CTA — generic side padding tighten. */
-  .hero, .recap, .providers, .cta, section {
+  .nav { height: 56px }
+  /* Recap / providers / CTA / generic sections weren't covered by the
+     earlier 720px block — only .hero was. Tighten their side padding too. */
+  .recap, .providers, .cta, section:not(.hero) {
     padding-left: 18px;
     padding-right: 18px;
   }

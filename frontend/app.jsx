@@ -4274,7 +4274,7 @@ function JobDetailView({ job, profile, allJobs, scoreData, allScores,
                       </p>
                     </section>
                   )}
-                  {profileMeaningful && (
+                  {profileMeaningful && (<>
                   <section className="jd-rail-card jd-rail-breakdown">
                     <div className="jd-rail-eyebrow">
                       <span className="jd-rail-bar"/>
@@ -4361,7 +4361,7 @@ function JobDetailView({ job, profile, allJobs, scoreData, allScores,
                       </div>
                     )}
                   </section>
-                  )}
+                  </>)}
 
                   <section className="jd-rail-card jd-rail-facts">
                     <div className="jd-rail-eyebrow">

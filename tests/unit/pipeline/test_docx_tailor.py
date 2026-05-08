@@ -71,3 +71,32 @@ def test_docx_in_place_template_id_is_in_place_docx(tmp_path):
     out = tailor_docx_in_place(_v2(), source_path=FIXTURE, base="resume", out_dir=tmp_path)
     assert out["template_id"] == "in_place_docx"
     assert out["template_confidence"] == 1.0
+
+
+def test_docx_in_place_clean_has_no_green_runs(tmp_path):
+    """The {base}_final.docx (clean variant) must NOT have green-colored
+    runs — that file is what gets converted to the all-black PDF the user
+    attaches to applications. Diff highlights belong only in the in-page
+    preview iframe."""
+    from docx import Document
+    out = tailor_docx_in_place(_v2(), source_path=FIXTURE, base="resume", out_dir=tmp_path)
+    assert out.get("docx_final") == "resume_final.docx"
+    final_path = tmp_path / out["docx_final"]
+    assert final_path.exists()
+
+    doc = Document(str(final_path))
+    # Modified content still present in the clean version
+    texts = [p.text for p in doc.paragraphs]
+    assert any("Verilog testbench" in t for t in texts)
+    assert any("AXI4 transaction generators" in t for t in texts)
+
+    # Crucially: no run is colored green (RGB 0a662c).
+    green_run_count = 0
+    for p in doc.paragraphs:
+        for r in p.runs:
+            color = r.font.color.rgb
+            if color is not None and str(color).lower() == "0a662c":
+                green_run_count += 1
+    assert green_run_count == 0, (
+        f"Clean DOCX should have no green-colored runs, found {green_run_count}"
+    )

@@ -420,6 +420,12 @@ def _default_state() -> dict:
     "hidden_ids": set(),
     "dev_tweaks": {},
     "feedback": [],
+    # Theme + dev "Test as Customer" toggle. Both are user-tunable via
+    # POST /api/config and exposed in GET /api/state — they belong here so
+    # the schema is self-consistent and `/api/reset` preserves them via the
+    # explicit preserve list rather than relying on `.get()` masking.
+    "light_mode": False,
+    "force_customer_mode": False,
 }
 
 
@@ -1820,7 +1826,6 @@ def _run_phase_sse(phase: int, fn, state: dict | None = None, session_id: str | 
 
     result_q: "queue.Queue[tuple]" = queue.Queue()
     log_q: "queue.Queue[str]" = queue.Queue()
-    cancel_event = threading.Event()
     _phase_logs[(session_id, phase)] = log_q
     lock = _session_lock(session_id)
 
@@ -1910,9 +1915,11 @@ def _run_phase_sse(phase: int, fn, state: dict | None = None, session_id: str | 
                 "data": _serialize(phase, val),
             })
     except GeneratorExit:
-        # Client disconnected. Signal the worker so cooperative tasks can stop;
-        # daemon threads will not block process exit either way.
-        cancel_event.set()
+        # Client disconnected mid-stream. The worker is a daemon thread and
+        # finishes on its own; we don't have a cooperative-cancel hook into
+        # the phase functions, so just let it run to completion. The
+        # progress buffer + final state save still happen via _worker's
+        # finally block, so a returning user sees the same outcome.
         raise
     finally:
         _release_phase(session_id, phase)
@@ -3690,10 +3697,21 @@ async def resume_tailor(request: Request):
     except Exception as exc:
         raise HTTPException(500, f"Tailoring failed: {type(exc).__name__}: {exc}") from exc
 
-    # Pick the primary downloadable artifact: prefer .docx (in-place editable)
-    # if produced, else .pdf, else .tex.
+    # Pick the primary downloadable artifact for the user.
+    # IMPORTANT: prefer the *_final* variants (clean / no green highlights)
+    # over the diff variants. The user wants the downloaded file to be the
+    # version they'd actually send to an employer — green highlights belong
+    # only in the in-site iframe preview, not in the attached PDF.
+    # Order:
+    #   1. Clean DOCX (in-place editable, what users prefer for further edits)
+    #   2. Clean PDF  (template-lib & in-place fallbacks)
+    #   3. Clean LaTeX
+    #   4. Any diff variant as a last resort (older callers / rendering failures)
     resume_file = (
-        resume_files.get("docx")
+        resume_files.get("docx_final")
+        or resume_files.get("pdf_final")
+        or resume_files.get("tex_final")
+        or resume_files.get("docx")
         or resume_files.get("pdf")
         or resume_files.get("tex")
         or ""
@@ -4034,7 +4052,10 @@ def _build_atlas_career_prompt(state: dict) -> str:
     report_block = _short(str(report or ""), n=1500) or "(no run report yet — Phase 7 not run)"
 
     threshold = state.get("threshold") or 75
-    mode = state.get("mode") or "anthropic"
+    # Default matches `_default_state()` — every user lands on Ollama; only
+    # devs flip to Anthropic. Falling back to "anthropic" gave the LLM
+    # incorrect provider context in the system prompt.
+    mode = state.get("mode") or "ollama"
 
     return (
         "You are Atlas, the user's personal career strategist and job-search companion. "
@@ -4679,7 +4700,12 @@ def jobs_details(job_id: str, request: Request):
 
 @app.get("/api/jobs/source-status")
 def jobs_source_status(request: Request):
-    """Per-source health snapshot for the dev page."""
+    """Per-source health snapshot for the dev page. Dev-only — exposes
+    ingestion metrics, error strings, and per-source row counts that
+    aren't appropriate for an unauthenticated visitor.
+    """
+    if not _is_dev_request(request):
+        raise HTTPException(403, "Developer access required")
     if _session_store is None:
         return {"sources": [], "total_active": 0}
     from pipeline import job_repo
@@ -5821,15 +5847,24 @@ def phase2_cache_status():
 
 
 @app.delete("/api/phase/2/cache")
-def phase2_cache_clear():
+def phase2_cache_clear(request: Request):
+    # Auth-gate: the cache files (sample_jobs_quick.json / sample_jobs_deep.json)
+    # are SERVER-WIDE under RESOURCES_DIR — wiping them affects every user's
+    # next Phase 2 run. Letting an anonymous visitor delete them was a bug.
+    _require_auth_user(request)
+    sid = _S.session_id()
     for cache in (RESOURCES_DIR / "sample_jobs_quick.json", RESOURCES_DIR / "sample_jobs_deep.json"):
         cache.unlink(missing_ok=True)
-    for k in ("jobs", "scored", "applications", "tracker_path"):
-        _S[k] = None
-    _S["tailored_map"] = {}
-    for phase in (2, 3, 4, 5, 6, 7):
-        _S["done"].discard(phase)
-        _S["error"].pop(phase, None)
+    # Hold the per-session lock for the entire state mutation so a concurrent
+    # extraction / phase worker can't observe a half-wiped state between
+    # individual `_S[k] = None` assignments.
+    with _session_lock(sid):
+        for k in ("jobs", "scored", "applications", "tracker_path"):
+            _S[k] = None
+        _S["tailored_map"] = {}
+        for phase in (2, 3, 4, 5, 6, 7):
+            _S["done"].discard(phase)
+            _S["error"].pop(phase, None)
     return {"ok": True}
 
 

@@ -1831,20 +1831,25 @@ function JobCard({ job, idx, isLiked, onLike, onHide, onAsk, onTailor, onSelect,
   const posted  = job._posted ?? POSTED_LABELS[idx % POSTED_LABELS.length];
   const model   = job._model  ?? WORK_MODELS[idx % WORK_MODELS.length];
   const exp     = job._exp    ?? EXP_LEVELS[idx % EXP_LEVELS.length];
-  // Lazy-loaded match score from /api/jobs/score-batch. The feed's
-  // `job.score` is the rerank score (used for ordering) — NOT a match
-  // score. Display rules:
-  //   • scoreData not yet returned    → "—" placeholder, no color stripe
-  //   • scoreData.score === null       → "—" plus a "preview" badge
-  //                                       (no description loaded; the
-  //                                       title-only chip already explains)
-  //   • scoreData.score is a number    → real match %, colored stripe
-  const hasScore = scoreData && typeof scoreData.score === 'number';
-  const pct      = hasScore ? Math.round(scoreData.score) : null;
-  const stripe   = pct == null ? 'score-pending'
-                  : pct >= 85 ? 'score-high'
-                  : pct >= 65 ? 'score-mid'
-                  : 'score-low';
+  // Card score uses a two-tier display so users never see a blank ring:
+  //   1. Immediate fallback = job.score (the rerank composite from the
+  //      feed: 0.45*bm25 + 0.30*skill_overlap + 0.15*freshness +
+  //      0.10*title_match, scaled 0..100). Same number JobDetailView
+  //      shows in its hero ring, so the card and the detail view agree.
+  //   2. Once /api/jobs/score-batch returns, scoreData.score (the real
+  //      compute_skill_coverage match against the full description)
+  //      replaces it. Network failure / null score → keep the fallback.
+  const lazyScore = scoreData && typeof scoreData.score === 'number'
+                      ? scoreData.score : null;
+  const fallback  = (typeof job.score === 'number' && job.score >= 0)
+                      ? job.score : null;
+  const pct       = lazyScore != null
+                      ? Math.round(lazyScore)
+                      : (fallback != null ? Math.round(fallback) : null);
+  const stripe    = pct == null ? 'score-pending'
+                  : pct >= 85   ? 'score-high'
+                  : pct >= 65   ? 'score-mid'
+                  :               'score-low';
   const tags    = (job.skills || '').split(',').map(s => s.trim()).filter(Boolean).slice(0,3);
 
   // Clicking the card body opens the rich detail sub-page (jobright-style).
@@ -1933,9 +1938,9 @@ function JobCard({ job, idx, isLiked, onLike, onHide, onAsk, onTailor, onSelect,
         </div>
         <ScoreRing score={pct}
           tooltip={
-            !scoreData ? 'Scoring this posting…' :
-            scoreData.score == null ? (scoreData.reason || 'Score requires job content') :
-            'Score reflects how well your skills match this posting'
+            lazyScore != null ? 'Detailed match · how well your skills match this posting' :
+            scoreData       ? `Baseline relevance shown · ${scoreData.reason || 'detailed match unavailable'}` :
+            'Baseline relevance — refining detailed match…'
           }/>
       </div>
     </div>

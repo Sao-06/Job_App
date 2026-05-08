@@ -142,11 +142,13 @@ def _to_prefix_token(tok: str) -> str:
         return f'"{tok}"'
     if n == 4:
         return f"{tok}*"
-    # range(n, 4, -1) yields n, n-1, …, 5 — i.e. every prefix length from
-    # the full token down to 5 chars. The OR'd prefixes span whatever stem
-    # porter happens to produce on indexed text without us having to
-    # replicate its rules.
-    prefixes = [tok[:k] for k in range(n, 4, -1)]
+    # Generate the longest 4 prefix lengths down to a floor of 5 chars.
+    # Porter rarely strips more than 3-4 chars on English suffixes (-ing,
+    # -tion, -ness, -ment, -ic), so 4 OR-terms reliably cover the stem
+    # without exploding the FTS5 query plan on long words like
+    # "infrastructure" (8 prefixes → 4 prefixes).
+    floor = max(5, n - 3)
+    prefixes = [tok[:k] for k in range(n, floor - 1, -1)]
     inner = " OR ".join(f"{p}*" for p in prefixes)
     return f"({inner})"
 

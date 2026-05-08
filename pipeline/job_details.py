@@ -474,16 +474,21 @@ def _fetch_workday(canonical_url: str, slug: str, host: str, site: str) -> Optio
     """
     if not (slug and host and site):
         return None
-    # Path layout: /{site}/job/.../R-12345 — capture everything after /{site}/.
-    m = re.match(rf"^/{re.escape(site)}(/job/.+?)$", canonical_url.split(host + ".myworkdayjobs.com", 1)[-1])
-    if not m:
-        # Defensive — try a looser match if the simple split missed.
-        path_match = re.search(r"(/job/[^?#]+)", canonical_url)
-        if not path_match:
-            return None
-        external_path = path_match.group(1)
+    # Path layout: /{site}/job/.../R-12345 — slice off the /{site} prefix to
+    # get the externalPath (the bit after /{site}). urlparse handles port
+    # numbers, query strings, and fragments cleanly without per-call regex.
+    from urllib.parse import urlparse
+    path = urlparse(canonical_url).path
+    site_prefix = f"/{site}"
+    if path.startswith(site_prefix + "/job/"):
+        external_path = path[len(site_prefix):]
     else:
-        external_path = m.group(1)
+        # Defensive: some Workday tenants use unusual path shapes — fall back
+        # to grabbing whatever follows the first /job/ segment.
+        idx = path.find("/job/")
+        if idx < 0:
+            return None
+        external_path = path[idx:]
 
     api = f"https://{slug}.{host}.myworkdayjobs.com/wday/cxs/{slug}/{site}/job{external_path[len('/job'):]}"
     data = http_get_json(api, timeout=12)
@@ -603,6 +608,14 @@ _NOISE_PATTERNS = (
     "cookie policy", "privacy policy", "terms of service",
     "looking for more", "never miss out", "get notified",
 )
+# Single alternation regex for the noise-density quality filter — replaces
+# 14 separate ``str.count`` passes (each walking the full body) with one
+# combined scan. ``IGNORECASE`` so the caller doesn't have to lowercase
+# upfront.
+_NOISE_ALTERNATION_RE = re.compile(
+    "|".join(re.escape(p) for p in _NOISE_PATTERNS),
+    flags=re.IGNORECASE,
+)
 
 
 def _try_isolate_main(html: str) -> str:
@@ -705,11 +718,10 @@ def _fetch_generic_html(url: str) -> Optional[dict]:
     html = re.sub(r"<noscript\b[^>]*>.*?</noscript>", "", html,
                    flags=re.DOTALL | re.IGNORECASE)
     # Drop containers whose class/id screams chrome (newsletter, signup,
-    # cookie, footer, related-jobs, share buttons, etc.). Run twice in
-    # case nested chrome wrappers reveal each other.
-    for _ in range(2):
-        html = _CHROME_CLASS_RE.sub("", html)
-    # Drop full sectioning chrome tags.
+    # cookie, footer, related-jobs, share buttons, etc.). The regex isn't
+    # recursive so this won't unwrap deeply-nested chrome — but isolating
+    # to <main> below restricts the working set anyway.
+    html = _CHROME_CLASS_RE.sub("", html)
     html = _CHROME_TAG_RE.sub("", html)
 
     # Try to narrow to the page's main content area. Many job pages wrap
@@ -727,16 +739,17 @@ def _fetch_generic_html(url: str) -> Optional[dict]:
         return None
 
     # Quality filter 2: drop pages dominated by chrome/promotional noise.
-    # Each occurrence of a noise phrase is roughly worth its length plus
-    # surrounding chrome that survived stripping. >3% of body == reject.
-    noise_chars = sum(text_lower.count(p) * len(p) for p in _NOISE_PATTERNS)
+    # Single alternation scan replaces N str.count passes — each match
+    # contributes its own length toward the noise budget. >~3% of body
+    # length consumed by noise phrases == reject.
+    noise_chars = sum(len(m.group()) for m in _NOISE_ALTERNATION_RE.finditer(text_lower))
     if noise_chars * 33 > len(text):  # ~3% threshold
         return None
 
     # Trailing-chrome trimmer: many job pages append "Apply now" CTAs,
     # related-jobs lists, etc. AFTER the description. Cut at the first
-    # appearance of a strong terminator phrase if it's past 60% of the
-    # body — preserves the description while dropping the tail.
+    # appearance of a strong terminator phrase that lands past 40 % of
+    # the body — preserves the front 40+ % and drops the trailing chrome.
     cutpoint = len(text)
     for term in ("Looking for more?", "Sign up for", "Subscribe to",
                  "Newsletter", "Related Jobs", "More jobs at",

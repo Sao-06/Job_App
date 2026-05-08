@@ -100,17 +100,10 @@ def is_remote_location(loc: str) -> bool:
 # in the body the regex never runs.
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
-_HTML_ENTITIES = {
-    "&amp;": "&", "&lt;": "<", "&gt;": ">", "&nbsp;": " ",
-    "&#39;": "'", "&apos;": "'", "&quot;": '"',
-    "&rsquo;": "'", "&lsquo;": "'", "&rdquo;": '"', "&ldquo;": '"',
-    "&mdash;": "—", "&ndash;": "–", "&hellip;": "…",
-}
 _BLOCK_CLOSE_RE = re.compile(r"</(?:p|div|h[1-6]|tr|table|ul|ol|section|article)\s*>",
                               re.IGNORECASE)
 _LI_OPEN_RE = re.compile(r"<li[^>]*>", re.IGNORECASE)
 _BR_RE = re.compile(r"<br\s*/?>", re.IGNORECASE)
-_NUMERIC_ENTITY_RE = re.compile(r"&#\d+;")
 _RUN_OF_BLANKS_RE = re.compile(r"\n{3,}")
 
 
@@ -118,20 +111,23 @@ def strip_html(text: str) -> str:
     """Convert HTML to plain text, preserving newline structure.
 
     Block-level closes become newlines; ``<li>`` becomes a leading bullet so
-    section-detection downstream still recognizes list items. Returns the
-    input unchanged when no ``<`` is present (fast path for clean text).
+    section-detection downstream still recognizes list items. Entities are
+    decoded via stdlib ``html.unescape`` — covers every named + numeric
+    entity (the prior hand-built dict missed ``&times;`` / ``&bull;`` / etc.
+    and silently dropped numeric entities). Decode runs BEFORE tag stripping
+    so double-encoded payloads (Greenhouse's ``&lt;div&gt;`` style) unescape
+    to real tags first.
     """
     if not text:
         return ""
     if "<" not in text and "&" not in text:
         return text.strip()
-    out = _BR_RE.sub("\n", text)
+    import html as _html_mod
+    out = _html_mod.unescape(text)
+    out = _BR_RE.sub("\n", out)
     out = _LI_OPEN_RE.sub("\n• ", out)
     out = _BLOCK_CLOSE_RE.sub("\n", out)
     out = _HTML_TAG_RE.sub("", out)
-    for ent, ch in _HTML_ENTITIES.items():
-        out = out.replace(ent, ch)
-    out = _NUMERIC_ENTITY_RE.sub("", out)
     out = _RUN_OF_BLANKS_RE.sub("\n\n", out)
     return out.strip()
 

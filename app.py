@@ -1001,18 +1001,32 @@ def _prime_psutil_sampler() -> None:
 
 # ── Claude CLI health check ───────────────────────────────────────────────────
 
-def _claude_cli_credential_diagnostic() -> str:
-    """Return a one-line operator hint about where Claude CLI looks for OAuth.
+def _claude_cli_credential_diagnostic(error: Exception | None = None) -> str:
+    """Return a one-line operator hint about the most likely cause of failure.
 
-    Used in health-check failure logs so journalctl readers can immediately
-    see where to investigate. Doesn't read or validate the credentials — just
-    points at the canonical locations.
+    Looks at the exception type first (binary-missing trumps credential
+    issues because systemd's minimal PATH is the most common production
+    failure), then falls back to checking credential file existence.
     """
+    # FileNotFoundError almost always means the `claude` binary isn't on
+    # $PATH for the service user — systemd's PATH excludes ~/.local/bin
+    # by default even though it's on $PATH for an interactive shell.
+    if isinstance(error, FileNotFoundError) or (
+        error is not None and "No such file" in str(error) and "claude" in str(error).lower()
+    ):
+        try:
+            from pipeline.providers import CLAUDE_BIN as _bin
+        except Exception:
+            _bin = "claude"
+        return (f"`claude` binary not found at {_bin!r}. systemd's PATH typically "
+                "excludes ~/.local/bin — set CLAUDE_BIN to the full path in your "
+                "systemd unit (e.g. Environment=\"CLAUDE_BIN=/home/pi/.local/bin/claude\"), "
+                "then `systemctl daemon-reload && systemctl restart jobapp`.")
     if sys.platform == "darwin":
         return ("Check macOS Keychain item 'Claude Code-credentials' "
                 "(open Keychain Access → search 'claude'). "
                 "Re-auth: run `claude /login` on the server.")
-    # Linux / others
+    # Linux / others — credential file path
     home = os.path.expanduser("~/.claude/.credentials.json")
     exists = os.path.exists(home)
     if exists:
@@ -1043,7 +1057,7 @@ async def _claude_cli_health_check_startup():
         print("[claude-cli] verified at startup", flush=True)
     except Exception as e:
         _p._CLI_HEALTHY = False
-        hint = _claude_cli_credential_diagnostic()
+        hint = _claude_cli_credential_diagnostic(e)
         print(
             f"[claude-cli] FAILED at startup — Pro users coerced to Ollama: "
             f"{type(e).__name__}: {e}",
@@ -1077,7 +1091,7 @@ async def _start_claude_cli_health_ticker():
                 _p._CLI_HEALTHY = True
             except Exception as e:
                 if _p._CLI_HEALTHY:
-                    hint = _claude_cli_credential_diagnostic()
+                    hint = _claude_cli_credential_diagnostic(e)
                     print(
                         f"[claude-cli] health DEGRADED: {type(e).__name__}: {e}",
                         file=sys.stderr, flush=True,
@@ -2152,16 +2166,17 @@ def _run_phase_sse(phase: int, fn, state: dict | None = None, session_id: str | 
         return
     # Belt-and-suspenders gate: defends against `mode='anthropic'` sneaking past
     # the /api/config check (e.g. saved while on Pro, then downgraded).
-    # Non-permitted users get bounced with `plan_required` so the SPA can show
-    # an upgrade prompt.
+    # Distinguishes plan_required (user is not Pro) from claude_unavailable
+    # (CLI is unhealthy on the server) so a Pro user with a temporarily-down
+    # CLI doesn't see "upgrade to Pro".
     if state and state.get("mode") == "anthropic":
-        user = (state.get("user") or {})
-        if not _can_use_claude(user):
+        gate_err = _claude_gate_error(state.get("user") or {})
+        if gate_err is not None:
             yield _sse({
                 "type": "error",
                 "phase": phase,
-                "message": "Claude is a Pro-tier feature. Upgrade to use Claude.",
-                "code": "plan_required",
+                "message": gate_err["body"]["error"],
+                "code": gate_err["body"]["code"],
             })
             return
     if not _try_claim_phase(session_id, phase):
@@ -2576,26 +2591,48 @@ def _can_use_claude(auth_user: dict | None) -> bool:
     """Single source of truth for `mode='anthropic'` access.
 
     Returns True iff the user is permitted AND the CLI subprocess is reachable.
-    Used by:
-      • _load_session_state (coerce non-permitted off anthropic)
-      • update_config (402 plan_required)
-      • _run_phase_sse (reject early in SSE start frame)
-      • resume_tailor (reject early in POST handler)
+    Used by `_load_session_state` for the mode-coerce. The three endpoints
+    that emit error responses use `_claude_gate_error` instead so they can
+    distinguish "not Pro" (402) from "CLI unhealthy" (503).
 
     Permission = (is_developer OR plan_tier=='pro') AND CLI healthy.
-    Health is toggled by app startup hook + 5-min ticker (Task 12).
     """
+    return _claude_gate_error(auth_user) is None
+
+
+def _claude_gate_error(auth_user: dict | None) -> dict | None:
+    """Return None if Claude access is permitted, else a JSONResponse-ready
+    error dict with the appropriate status code and machine-readable code.
+
+    Distinguishes the two failure modes so a Pro user with a temporarily
+    unhealthy CLI doesn't see "upgrade to Pro":
+
+      • not authenticated                       → 401 sign_in_required
+      • authenticated, not Pro / dev            → 402 plan_required
+      • Pro / dev, but CLI is unhealthy         → 503 claude_unavailable
+      • Pro / dev, CLI healthy                  → None (admitted)
+
+    Default for missing plan_tier is 'pro' — we're in the everyone-is-Pro
+    testing phase; new signups insert plan_tier='pro', so a missing value
+    means legacy/in-flight data, treated as Pro.
+    """
+    if not auth_user:
+        return {"status_code": 401,
+                "body": {"ok": False, "code": "sign_in_required",
+                         "error": "Sign in required."}}
+    is_dev = bool(auth_user.get("is_developer"))
+    is_pro = (auth_user.get("plan_tier") or "pro").lower() == "pro"
+    if not (is_dev or is_pro):
+        return {"status_code": 402,
+                "body": {"ok": False, "code": "plan_required",
+                         "error": "Claude is a Pro-tier feature. Upgrade to use Claude."}}
     from pipeline.providers import _CLI_HEALTHY
     if not _CLI_HEALTHY:
-        return False
-    if not auth_user:
-        return False
-    if auth_user.get("is_developer"):
-        return True
-    # Default to "pro" during the everyone-is-Pro testing phase. New signups
-    # are inserted with plan_tier='pro' (session_store.create_user); a missing
-    # field here means legacy/in-flight data, which should be treated as Pro.
-    return (auth_user.get("plan_tier") or "pro").lower() == "pro"
+        return {"status_code": 503,
+                "body": {"ok": False, "code": "claude_unavailable",
+                         "error": "Claude is temporarily unavailable on the server. "
+                                   "Try Ollama or check the server logs."}}
+    return None
 
 
 def _require_auth_user(request: Request) -> dict:
@@ -2802,15 +2839,14 @@ async def update_config(req: Request):
         raise HTTPException(400, f"Invalid mode: {body.get('mode')!r} (expected 'ollama' or 'anthropic')")
     plan = (auth_user or {}).get("plan_tier") or "pro"  # everyone-is-Pro testing phase
     is_dev = _is_underlying_dev_request(req)
-    # Claude is a Pro-tier feature (or dev). Non-permitted users get a 402
-    # plan_required so the SPA can show an upgrade prompt.
-    if body.get("mode") == "anthropic" and not _can_use_claude(auth_user):
-        return JSONResponse(
-            {"ok": False,
-             "error": "Claude is a Pro-tier feature. Upgrade to use Claude.",
-             "code": "plan_required"},
-            status_code=402,
-        )
+    # Claude is a Pro-tier feature (or dev). Non-Pro users get 402
+    # plan_required; Pro users with an unhealthy CLI get 503 claude_unavailable
+    # so the SPA can show the right message instead of a misleading upgrade
+    # prompt to someone who's already paying.
+    if body.get("mode") == "anthropic":
+        gate_err = _claude_gate_error(auth_user)
+        if gate_err is not None:
+            return JSONResponse(gate_err["body"], status_code=gate_err["status_code"])
     # Cloud Ollama models (Ollama Turbo proxied through the Pi) require Pro.
     # Local Ollama models stay free.
     if (body.get("ollama_model")
@@ -4073,13 +4109,10 @@ async def resume_tailor(request: Request):
     if not profile:
         raise HTTPException(400, "Upload a resume first — no profile to tailor against.")
 
-    if _S.get("mode") == "anthropic" and not _can_use_claude(auth_user):
-        return JSONResponse(
-            {"ok": False,
-             "error": "Claude is a Pro-tier feature. Upgrade to use Claude.",
-             "code": "plan_required"},
-            status_code=402,
-        )
+    if _S.get("mode") == "anthropic":
+        gate_err = _claude_gate_error(auth_user)
+        if gate_err is not None:
+            return JSONResponse(gate_err["body"], status_code=gate_err["status_code"])
 
     body = await request.json()
     job_id = (body.get("job_id") or "").strip()

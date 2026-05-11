@@ -5,7 +5,7 @@ Verifies the matrix:
     - free user           → 402 plan_required
     - Pro user            → 200
     - developer user      → 200
-    - _CLI_HEALTHY=False  → 402 even for Pro
+    - _CLI_HEALTHY=False + Pro → 503 claude_unavailable (NOT plan_required)
 
   • mode='ollama' + local model:
     - free user                              → 200 (no regression)
@@ -76,16 +76,16 @@ def test_dev_user_admitted_on_anthropic_mode(dev_client):
 
 
 def test_pro_blocked_when_cli_unhealthy(fastapi_client, monkeypatch):
-    """Even a Pro user is denied mode='anthropic' when _CLI_HEALTHY=False.
-
-    _can_use_claude imports _CLI_HEALTHY inside its body on each call, so
-    monkeypatching the module attribute is sufficient.
+    """A Pro user with an unhealthy CLI gets 503 claude_unavailable — NOT
+    402 plan_required. The two error codes are deliberately distinct so a
+    Pro user doesn't see a misleading "upgrade to Pro" message when the
+    server-side CLI is the actual problem.
     """
     client, _, _ = fastapi_client
     monkeypatch.setattr("pipeline.providers._CLI_HEALTHY", False)
     r = client.post("/api/config", json={"mode": "anthropic"})
-    assert r.status_code == 402, r.text
-    assert r.json().get("code") == "plan_required", r.json()
+    assert r.status_code == 503, r.text
+    assert r.json().get("code") == "claude_unavailable", r.json()
 
 
 # ── Ollama (local) preservation ───────────────────────────────────────────────

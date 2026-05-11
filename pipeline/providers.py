@@ -96,6 +96,12 @@ def _run_cli(
         "--effort", effort,
         "--output-format", out_format,
         "--disable-slash-commands",
+        # `--tools ""` disables ALL built-in tools (Bash, Edit, Read, Write, …).
+        # This CLI is Claude Code; without this flag a prompt injection in a
+        # user-controlled input (Atlas chat, resume text, job description)
+        # could in principle trigger filesystem or shell actions. We only
+        # want pure text/JSON generation here.
+        "--tools", "",
         "--max-budget-usd", f"{budget_usd:.2f}",
         "--exclude-dynamic-system-prompt-sections",
     ]
@@ -190,6 +196,9 @@ def _run_cli_stream(
         "--include-partial-messages",
         "--verbose",  # required by CLI for stream-json in -p mode
         "--disable-slash-commands",
+        # See _run_cli for rationale — disables all built-in tools so a
+        # prompt injection in an Atlas chat can't trigger destructive actions.
+        "--tools", "",
         "--max-budget-usd", f"{budget_usd:.2f}",
         "--exclude-dynamic-system-prompt-sections",
         "-p", prompt,

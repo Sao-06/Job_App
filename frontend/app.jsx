@@ -10654,10 +10654,8 @@ function DevPage({ state: globalState, refresh: globalRefresh }) {
     try {
       const res = await api.post('/api/dev/reload-env', {});
       setReloadFlash({
-        kind: res.anthropic_key_present ? 'ok' : 'warn',
-        text: res.anthropic_key_present
-          ? `Loaded · ANTHROPIC_API_KEY ${res.anthropic_key_present ? 'present' : 'missing'}`
-          : 'Reloaded but ANTHROPIC_API_KEY still missing',
+        kind: 'ok',
+        text: 'Reloaded .env from disk',
       });
       loadRuntime();
     } catch (e) {
@@ -10817,7 +10815,7 @@ function DevPage({ state: globalState, refresh: globalRefresh }) {
               <div className="dop-panel">
                 <DevSecHead title="Environment" hint="secrets & runtime flags"/>
                 <div className="dop-keyval">
-                  <div><span>Anthropic API key</span><b className={'tag tag-' + (runtime?.env?.anthropic_key_present ? 'ok' : 'bad')}>{runtime?.env?.anthropic_key_present ? 'Present' : 'Missing'}</b></div>
+                  <div><span>Claude CLI</span><b className={'tag tag-' + (runtime?.env?.cli_healthy ? 'ok' : 'bad')}>{runtime?.env?.cli_healthy ? 'Healthy' : 'Unavailable'}</b></div>
                   <div><span>SMTP</span><b className={'tag tag-' + (runtime?.env?.smtp_configured ? 'ok' : 'mid')}>{runtime?.env?.smtp_configured ? 'Configured' : 'Unset'}</b></div>
                   <div><span>Ollama URL</span><b className="tag tag-mid" title={runtime?.env?.ollama_url || ''}>{runtime?.env?.ollama_url || '—'}</b></div>
                   <div><span>Local dev bypass</span><b className={'tag tag-' + (runtime?.env?.local_dev_bypass ? 'warn' : 'mid')}>{runtime?.env?.local_dev_bypass ? 'On (insecure)' : 'Off'}</b></div>
@@ -11121,9 +11119,9 @@ function DevPage({ state: globalState, refresh: globalRefresh }) {
 
                 <div className="sc-env">
                   <div className="sc-env-row">
-                    <span>ANTHROPIC_API_KEY</span>
-                    <b className={runtime?.env?.anthropic_key_present ? 'ok' : 'bad'}>
-                      {runtime?.env?.anthropic_key_present ? 'present' : 'missing'}
+                    <span>Claude CLI</span>
+                    <b className={runtime?.env?.cli_healthy ? 'ok' : 'bad'}>
+                      {runtime?.env?.cli_healthy ? 'healthy' : 'unavailable'}
                     </b>
                   </div>
                   <div className="sc-env-row">

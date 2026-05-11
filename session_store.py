@@ -246,11 +246,15 @@ class SQLiteSessionStore:
     def create_user(self, email: str, password_hash: str = None, google_id: str = None) -> str:
         user_id = uuid.uuid4().hex
         now = utc_now()
+        # Testing phase: every new signup starts on Pro. The plan_tier column
+        # also has a `DEFAULT 'pro'` (see pipeline/migrations.py) for any code
+        # path that bypasses this helper, but we set it explicitly here too so
+        # the value is obvious at the call site.
         with self._connect() as conn:
             conn.execute(
                 """
-                INSERT INTO users (id, email, password_hash, google_id, created_at)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO users (id, email, password_hash, google_id, plan_tier, created_at)
+                VALUES (?, ?, ?, ?, 'pro', ?)
                 """,
                 (user_id, email, password_hash, google_id, now),
             )
@@ -270,7 +274,7 @@ class SQLiteSessionStore:
             "password_hash": row[2],
             "google_id": row[3],
             "is_developer": bool(row[4]) if len(row) > 4 else False,
-            "plan_tier": (row[5] if len(row) > 5 and row[5] else "free"),
+            "plan_tier": (row[5] if len(row) > 5 and row[5] else "pro"),
             "stripe_customer_id": row[6] if len(row) > 6 else None,
             "stripe_subscription_id": row[7] if len(row) > 7 else None,
         }

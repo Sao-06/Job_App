@@ -46,7 +46,8 @@ class TestUsers:
         u = store.get_user_by_email("a@b.com")
         assert u is not None
         assert u["id"] == uid
-        assert u["plan_tier"] == "free"
+        # Testing phase: every new signup starts on Pro.
+        assert u["plan_tier"] == "pro"
         assert u["is_developer"] is False
 
     def test_get_by_id(self, store):

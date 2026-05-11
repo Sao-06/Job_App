@@ -26,6 +26,7 @@ session_store or job_repo again.
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 import sys
 from typing import Any
@@ -150,11 +151,33 @@ def apply_all_migrations(conn: sqlite3.Connection) -> list[str]:
     ensure_column(conn, "users", "is_developer",
                   "INTEGER NOT NULL DEFAULT 0")
     ensure_column(conn, "users", "plan_tier",
-                  "TEXT NOT NULL DEFAULT 'free'")
+                  "TEXT NOT NULL DEFAULT 'pro'")
     ensure_column(conn, "users", "stripe_customer_id", "TEXT")
     ensure_column(conn, "users", "stripe_subscription_id", "TEXT")
     ensure_index(conn, "ix_users_stripe_customer", "users",
                  "stripe_customer_id")
+
+    # Testing-phase: everyone is Pro. Promote any pre-existing 'free' rows
+    # AND refresh the cached plan_tier on every active auth_token so the
+    # next /api/state poll reflects the bump without a re-login (the cached
+    # user_json in auth_tokens otherwise wins over the live users-row read).
+    promoted = conn.execute(
+        "UPDATE users SET plan_tier = 'pro' WHERE plan_tier != 'pro'"
+    ).rowcount
+    if promoted:
+        _log(f"promoted {promoted} user(s) to pro (testing phase)")
+        rows = conn.execute("SELECT token, user_json FROM auth_tokens").fetchall()
+        for token, user_json in rows:
+            try:
+                payload = json.loads(user_json or "{}")
+            except (TypeError, ValueError):
+                payload = {}
+            if payload.get("plan_tier") != "pro":
+                payload["plan_tier"] = "pro"
+                conn.execute(
+                    "UPDATE auth_tokens SET user_json = ? WHERE token = ?",
+                    (json.dumps(payload), token),
+                )
 
     # job_postings — added the cross-industry category label after launch.
     # The matching index lives here too: CREATE INDEX validates the referenced

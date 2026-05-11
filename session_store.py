@@ -587,7 +587,7 @@ class SQLiteSessionStore:
                     "name": profile.get("name") or "Unprofiled user",
                     "email": u_email or profile.get("email") or "",
                     "user_id": user_id,
-                    "plan_tier": plan_tier or ("free" if user_id else None),
+                    "plan_tier": plan_tier or ("pro" if user_id else None),
                     "is_developer": bool(u_is_dev) if u_is_dev is not None else False,
                     "has_resume": bool(state.get("resume_text")),
                     "resume_filename": state.get("resume_filename") or "",

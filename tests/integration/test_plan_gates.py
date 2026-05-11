@@ -97,7 +97,7 @@ def test_free_user_can_set_local_ollama(fastapi_client, tmp_db):
     _downgrade_to_free(tmp_db, user_id, token)
     r = client.post("/api/config", json={
         "mode": "ollama",
-        "ollama_model": "gemma3:latest",
+        "ollama_model": "smollm2:135m",
     })
     assert r.status_code == 200, r.text
 
@@ -161,7 +161,7 @@ def test_pro_user_can_flip_between_modes(fastapi_client):
     state corruption. fastapi_client defaults to plan_tier='pro'."""
     client, _, _ = fastapi_client
     # ollama local
-    r = client.post("/api/config", json={"mode": "ollama", "ollama_model": "gemma3:latest"})
+    r = client.post("/api/config", json={"mode": "ollama", "ollama_model": "smollm2:135m"})
     assert r.status_code == 200, f"ollama local failed: {r.text}"
     # ollama cloud
     r = client.post("/api/config", json={"mode": "ollama", "ollama_model": "gemma4:31b-cloud"})
@@ -170,7 +170,7 @@ def test_pro_user_can_flip_between_modes(fastapi_client):
     r = client.post("/api/config", json={"mode": "anthropic"})
     assert r.status_code == 200, f"anthropic failed: {r.text}"
     # Back to ollama local
-    r = client.post("/api/config", json={"mode": "ollama", "ollama_model": "gemma3:latest"})
+    r = client.post("/api/config", json={"mode": "ollama", "ollama_model": "smollm2:135m"})
     assert r.status_code == 200, f"return-trip failed: {r.text}"
 
 

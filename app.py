@@ -998,6 +998,97 @@ def _prime_psutil_sampler() -> None:
     except Exception:
         pass
 
+
+# ── Claude CLI health check ───────────────────────────────────────────────────
+
+def _claude_cli_credential_diagnostic() -> str:
+    """Return a one-line operator hint about where Claude CLI looks for OAuth.
+
+    Used in health-check failure logs so journalctl readers can immediately
+    see where to investigate. Doesn't read or validate the credentials — just
+    points at the canonical locations.
+    """
+    if sys.platform == "darwin":
+        return ("Check macOS Keychain item 'Claude Code-credentials' "
+                "(open Keychain Access → search 'claude'). "
+                "Re-auth: run `claude /login` on the server.")
+    # Linux / others
+    home = os.path.expanduser("~/.claude/.credentials.json")
+    exists = os.path.exists(home)
+    if exists:
+        return (f"OAuth file exists at {home} — token may be expired or invalid. "
+                "Re-auth: run `claude /login` on the server.")
+    return (f"OAuth file missing at {home}. "
+            "Run `claude /login` on the server to authenticate.")
+
+
+@app.on_event("startup")
+async def _claude_cli_health_check_startup():
+    """One-shot CLI health check at app startup.
+
+    Sets pipeline.providers._CLI_HEALTHY = True/False. Pro users coerce to
+    Ollama (via _can_use_claude) when False. Runs off-thread so the
+    blocking subprocess doesn't stall the FastAPI event loop.
+    """
+    import asyncio
+    import pipeline.providers as _p
+    if os.environ.get("CLAUDE_CLI_DISABLE_HEALTH_CHECK") == "1":
+        # Skip the boot probe — used by integration tests + ops kill switch.
+        # CLAUDE_CLI_DISABLED=1 additionally forces _CLI_HEALTHY=False.
+        _p._CLI_HEALTHY = False if os.environ.get("CLAUDE_CLI_DISABLED") == "1" else True
+        return
+    try:
+        await asyncio.to_thread(_p._run_cli, "ping", timeout_s=20.0, budget_usd=0.01)
+        _p._CLI_HEALTHY = True
+        print("[claude-cli] verified at startup", flush=True)
+    except Exception as e:
+        _p._CLI_HEALTHY = False
+        hint = _claude_cli_credential_diagnostic()
+        print(
+            f"[claude-cli] FAILED at startup — Pro users coerced to Ollama: "
+            f"{type(e).__name__}: {e}",
+            file=sys.stderr, flush=True,
+        )
+        print(f"[claude-cli] {hint}", file=sys.stderr, flush=True)
+
+
+@app.on_event("startup")
+async def _start_claude_cli_health_ticker():
+    """Spawn the 5-min periodic re-check daemon.
+
+    Survives transient keychain expiry / network blips and auto-restores
+    _CLI_HEALTHY when the credential issue is fixed. Only logs on state
+    transitions (healthy→degraded and degraded→healthy) to avoid journalctl
+    noise on every 5-min tick.
+    """
+    import pipeline.providers as _p
+    if os.environ.get("CLAUDE_CLI_DISABLE_HEALTH_CHECK") == "1":
+        _p._CLI_HEALTHY = False if os.environ.get("CLAUDE_CLI_DISABLED") == "1" else True
+        return
+
+    def _loop():
+        import time as _time
+        while True:
+            _time.sleep(300)
+            try:
+                _p._run_cli("ping", timeout_s=20.0, budget_usd=0.01)
+                if not _p._CLI_HEALTHY:
+                    print("[claude-cli] health restored", flush=True)
+                _p._CLI_HEALTHY = True
+            except Exception as e:
+                if _p._CLI_HEALTHY:
+                    hint = _claude_cli_credential_diagnostic()
+                    print(
+                        f"[claude-cli] health DEGRADED: {type(e).__name__}: {e}",
+                        file=sys.stderr, flush=True,
+                    )
+                    print(f"[claude-cli] {hint}", file=sys.stderr, flush=True)
+                _p._CLI_HEALTHY = False
+
+    threading.Thread(target=_loop, daemon=True, name="claude-cli-health").start()
+    print("[claude-cli] 5-min health ticker started", flush=True)
+
+
 # Per-session locks for state mutations done from worker threads. Multiple
 # concurrent SSE phases for the same session would otherwise interleave
 # `_S["done"].add`, `state["error"][phase] = ...`, and JSON saves.

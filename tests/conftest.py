@@ -34,6 +34,10 @@ import os
 #     off the 60-second parallel backfill.
 os.environ.setdefault("JOBS_AI_SKIP_MIGRATION", "1")
 os.environ.setdefault("JOBS_AI_DISABLE_INGESTION", "1")
+# Skip the Claude CLI boot probe — no real `claude` binary in CI/test env.
+# When CLAUDE_CLI_DISABLE_HEALTH_CHECK=1 the startup hooks short-circuit and
+# leave _CLI_HEALTHY=True (tests that need it False monkeypatch directly).
+os.environ.setdefault("CLAUDE_CLI_DISABLE_HEALTH_CHECK", "1")
 # Localhost-safe Ollama URL so OllamaProvider construction never hits a real
 # network when accidentally reached during tests; respx intercepts the call.
 os.environ.setdefault("OLLAMA_URL", "http://ollama-test.local:11434")

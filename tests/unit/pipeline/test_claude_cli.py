@@ -123,6 +123,19 @@ def test_run_cli_oversized_prompt_uses_stdin(claude_cli_bin):
         assert big not in argv
 
 
+def test_run_cli_oversized_prompt_argv_shape(claude_cli_bin):
+    """Stdin path must use --input-format text so the CLI reads from stdin,
+    not treat '-' or the prompt text as a literal argv value."""
+    claude_cli_bin.set_response("ok")
+    big = "x" * (64 * 1024 + 100)
+    with patch("pipeline.providers._subprocess.run", wraps=subprocess.run) as run_spy:
+        _run_cli(big)
+        argv = run_spy.call_args[0][0]
+        assert "--input-format" in argv
+        i = argv.index("--input-format")
+        assert argv[i + 1] == "text"
+
+
 def test_run_cli_concurrent_calls_bounded_by_semaphore(claude_cli_bin):
     """Spawning > N calls in parallel blocks until earlier ones release."""
     claude_cli_bin.set_delay(0.3)

@@ -5582,7 +5582,10 @@ function RsDeepDive({ insights, profile, onRescan, rescanning }) {
         </div>
       </header>
 
-      {/* Two-column magazine spread: narrative + supporting sidecar */}
+      {/* Two-column magazine spread: narrative + anchor sidecar (score + target
+          roles only). The supporting insight cards (strengths / red flags /
+          suggestions) live below in a full-width 3-up grid so the page uses
+          horizontal space instead of stacking everything in a narrow column. */}
       <div className="rs-deep-grid">
         <article className="rs-narrative">
           {paragraphs.length > 0
@@ -5645,53 +5648,57 @@ function RsDeepDive({ insights, profile, onRescan, rescanning }) {
               </div>
             </section>
           )}
+        </aside>
+      </div>
 
-          {/* Strengths — green dot list */}
+      {/* Insight cards — strengths / red flags / suggestions across the full
+          page width so the eye scans them as parallel columns instead of a
+          vertical stack of half-empty 380px cards. Each card auto-fits
+          (minmax 260px) so it gracefully collapses to 2-up then 1-up. */}
+      {(strengths.length > 0 || redFlags.length > 0 || suggestions.length > 0) && (
+        <div className="rs-deep-bottom">
           {strengths.length > 0 && (
             <section className="rs-aside-block">
               <div className="rs-aside-h"><Icon name="check-circle-2" size={11}/>Strengths</div>
               <ul className="rs-aside-list good">
-                {strengths.slice(0, 4).map((s, i) => <li key={i}>{s}</li>)}
+                {strengths.slice(0, 5).map((s, i) => <li key={i}>{s}</li>)}
               </ul>
             </section>
           )}
-
-          {/* Red flags — pink dot list */}
           {redFlags.length > 0 && (
             <section className="rs-aside-block">
               <div className="rs-aside-h"><Icon name="alert-triangle" size={11}/>Red flags</div>
               <ul className="rs-aside-list bad">
-                {redFlags.slice(0, 4).map((s, i) => <li key={i}>{s}</li>)}
+                {redFlags.slice(0, 5).map((s, i) => <li key={i}>{s}</li>)}
               </ul>
             </section>
           )}
-
-          {/* Suggestions — accent dot list */}
           {suggestions.length > 0 && (
             <section className="rs-aside-block">
               <div className="rs-aside-h"><Icon name="zap" size={11}/>Suggestions</div>
               <ul className="rs-aside-list accent">
-                {suggestions.slice(0, 4).map((s, i) => <li key={i}>{s}</li>)}
+                {suggestions.slice(0, 5).map((s, i) => <li key={i}>{s}</li>)}
               </ul>
             </section>
           )}
+        </div>
+      )}
 
-          {/* Action card — Re-scan CTA + verification meta */}
-          <section className="rs-aside-block rs-aside-action">
-            <button className="rs-aside-rescan" onClick={onRescan} disabled={rescanning}>
-              {rescanning
-                ? <span className="spin" style={{ width:12, height:12, borderWidth:1.5 }}/>
-                : <Icon name="refresh-cw" size={12} color="#fff"/>}
-              {rescanning ? 'Re-scanning…' : 'Re-scan & re-verify'}
-            </button>
-            <div className="rs-aside-action-hint">
-              {verified
-                ? 'Re-runs the heuristic scanner and asks the configured AI to double-check every claim.'
-                : 'Switch to Anthropic or Ollama in Settings to upgrade this reading from heuristic to AI-verified.'}
-            </div>
-          </section>
-        </aside>
-      </div>
+      {/* Action strip — full-width CTA + verification meta, separated from the
+          insight grid so the re-scan button is always findable. */}
+      <section className="rs-deep-action rs-aside-action">
+        <button className="rs-aside-rescan" onClick={onRescan} disabled={rescanning}>
+          {rescanning
+            ? <span className="spin" style={{ width:12, height:12, borderWidth:1.5 }}/>
+            : <Icon name="refresh-cw" size={12} color="#fff"/>}
+          {rescanning ? 'Re-scanning…' : 'Re-scan & re-verify'}
+        </button>
+        <div className="rs-aside-action-hint">
+          {verified
+            ? 'Re-runs the heuristic scanner and asks the configured AI to double-check every claim.'
+            : 'Switch to Anthropic or Ollama in Settings to upgrade this reading from heuristic to AI-verified.'}
+        </div>
+      </section>
     </div>
   );
 }

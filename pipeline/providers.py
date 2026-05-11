@@ -157,6 +157,89 @@ def _run_cli(
     return json.dumps(structured)
 
 
+def _run_cli_stream(
+    prompt: str,
+    *,
+    system: str | None = None,
+    effort: str = "high",
+    budget_usd: float = 2.00,
+):
+    """Generator. Yields text deltas as the CLI streams. Closes/kills the
+    subprocess if the consumer abandons the generator early.
+
+    Acquires `_CLI_SEMAPHORE` for the lifetime of the stream — be aware
+    that long Atlas chats can hold a slot for many seconds.
+
+    Uses --output-format stream-json + --include-partial-messages
+    + --verbose (the CLI requires --verbose when stream-json is paired
+    with -p; discovered in Phase 0 smoke test).
+    """
+    import json as _json
+    _ensure_scratch_dir()
+
+    # Re-read env at call time so test fixtures (which only monkeypatch
+    # os.environ) take effect — same pattern as _run_cli.
+    bin_path = _os.environ.get("CLAUDE_BIN") or CLAUDE_BIN
+    model = _os.environ.get("CLAUDE_CLI_MODEL") or CLAUDE_CLI_MODEL
+
+    argv: list[str] = [
+        bin_path,
+        "--model", model,
+        "--effort", effort,
+        "--output-format", "stream-json",
+        "--include-partial-messages",
+        "--verbose",  # required by CLI for stream-json in -p mode
+        "--disable-slash-commands",
+        "--max-budget-usd", f"{budget_usd:.2f}",
+        "--exclude-dynamic-system-prompt-sections",
+        "-p", prompt,
+    ]
+    if system:
+        argv += ["--append-system-prompt", system]
+
+    env = dict(_os.environ)
+    env["CLAUDE_CODE_NONINTERACTIVE"] = "1"
+
+    _CLI_SEMAPHORE.acquire()
+    proc = None
+    try:
+        proc = _subprocess.Popen(
+            argv, stdout=_subprocess.PIPE, stderr=_subprocess.PIPE,
+            text=True, bufsize=1, env=env, cwd=CLAUDE_CLI_SCRATCH,
+        )
+        for line in proc.stdout:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                evt = _json.loads(line)
+            except _json.JSONDecodeError:
+                continue
+            etype = evt.get("type")
+            if etype == "stream_event":
+                inner = evt.get("event") or {}
+                if inner.get("type") == "content_block_delta":
+                    delta = inner.get("delta") or {}
+                    if delta.get("type") == "text_delta":
+                        text = delta.get("text") or ""
+                        if text:
+                            yield text
+            elif etype == "result" and evt.get("subtype") != "success":
+                err = evt.get("error") or "Claude CLI stream failed"
+                raise ClaudeCLIError(str(err))
+    finally:
+        if proc is not None and proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=2)
+            except _subprocess.TimeoutExpired:
+                proc.kill()
+        try:
+            _CLI_SEMAPHORE.release()
+        except ValueError:
+            pass  # already released — defensive
+
+
 # ── Base ───────────────────────────────────────────────────────────────────────
 
 class BaseProvider:

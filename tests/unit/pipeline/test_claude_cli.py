@@ -7,7 +7,7 @@ import time
 from unittest.mock import patch
 
 from pipeline.providers import (
-    _run_cli, ClaudeCLIError, ClaudeCLITimeoutError,
+    _run_cli, _run_cli_stream, ClaudeCLIError, ClaudeCLITimeoutError,
     _CLI_SEMAPHORE, CLAUDE_CLI_MAX_CONCURRENCY,
 )
 
@@ -161,3 +161,44 @@ def test_run_cli_cwd_is_scratch_dir(claude_cli_bin):
         _run_cli("hi")
         kwargs = run_spy.call_args[1]
         assert kwargs.get("cwd") == CLAUDE_CLI_SCRATCH
+
+
+def test_run_cli_stream_yields_deltas(claude_cli_bin):
+    claude_cli_bin.set_stream(["Hello", ", ", "world!"])
+    chunks = list(_run_cli_stream("hi"))
+    assert "".join(chunks) == "Hello, world!"
+
+
+def test_run_cli_stream_handles_empty(claude_cli_bin):
+    claude_cli_bin.set_stream([])
+    chunks = list(_run_cli_stream("hi"))
+    assert chunks == []
+
+
+def test_run_cli_stream_uses_stream_json_output_format(claude_cli_bin):
+    claude_cli_bin.set_stream(["ack"])
+    with patch("pipeline.providers._subprocess.Popen", wraps=subprocess.Popen) as popen_spy:
+        list(_run_cli_stream("hi"))
+        argv = popen_spy.call_args[0][0]
+        assert "--output-format" in argv
+        i = argv.index("--output-format")
+        assert argv[i + 1] == "stream-json"
+        assert "--include-partial-messages" in argv
+        # TASK 0 ADJUSTMENT: --verbose is required for stream-json in -p mode
+        assert "--verbose" in argv
+
+
+def test_run_cli_stream_kills_subprocess_on_generator_close(claude_cli_bin):
+    """If the consumer closes the generator early, the subprocess must die."""
+    claude_cli_bin.set_stream(["a", "b", "c", "d", "e"])
+    claude_cli_bin.set_delay(0.2)
+    gen = _run_cli_stream("hi")
+    next(gen)
+    gen.close()
+    # If we don't kill the subprocess, a second generator would block waiting for
+    # the semaphore. Check that we recover quickly.
+    start = time.time()
+    claude_cli_bin.set_delay(0)
+    claude_cli_bin.set_stream(["x"])
+    list(_run_cli_stream("hi"))
+    assert time.time() - start < 1.5

@@ -96,16 +96,20 @@ class TestConfig:
         s = client.get("/api/state").json()
         assert "hack_me" not in s
 
-    def test_anthropic_mode_blocked_for_non_devs(self, fastapi_client):
-        # Anthropic Claude is under active development — only developers can
-        # select it (regardless of plan tier). Non-dev callers get 503 +
-        # `coming_soon` so the SPA shows the right copy instead of an
-        # "upgrade to Pro" upsell.
-        client, _, _ = fastapi_client
+    def test_anthropic_mode_blocked_for_free_users(self, fastapi_client, tmp_db):
+        # After Tasks 9+10: free users get 402 plan_required (not 503
+        # coming_soon) because Anthropic Claude is now a Pro feature.
+        # fastapi_client defaults to Pro, so explicitly downgrade to free.
+        client, user_id, token = fastapi_client
+        tmp_db.set_user_plan_tier(user_id, "free")
+        tmp_db.create_auth_token(token, user_id, {
+            "id": user_id, "email": "tester@example.com",
+            "is_developer": False, "plan_tier": "free",
+        })
         r = client.post("/api/config", json={"mode": "anthropic"})
-        assert r.status_code == 503
+        assert r.status_code == 402
         body = r.json()
-        assert body.get("code") == "coming_soon"
+        assert body.get("code") == "plan_required"
 
     def test_demo_mode_rejected(self, fastapi_client):
         # `demo` was retired from the user-selectable mode whitelist —
@@ -120,19 +124,13 @@ class TestConfig:
         r = client.post("/api/config", json={"mode": "ollama"})
         assert r.status_code == 200
 
-    def test_anthropic_mode_blocked_even_for_pro(self, fastapi_client, tmp_db):
-        # Anthropic Claude is reserved for developers until launch — paying
-        # Pro is no longer enough to access it. (When Claude ships, Pro users
-        # get it included; until then this test asserts the gate.)
+    def test_anthropic_mode_admitted_for_pro(self, fastapi_client, tmp_db):
+        # After Tasks 9+10: Pro users can select mode='anthropic' — it is now
+        # a Pro-tier feature (no longer dev-only). fastapi_client already
+        # defaults to plan_tier='pro', so no downgrade needed.
         client, user_id, token = fastapi_client
-        tmp_db.set_user_plan_tier(user_id, "pro")
-        tmp_db.create_auth_token(token, user_id, {
-            "id": user_id, "email": "tester@example.com",
-            "is_developer": False, "plan_tier": "pro",
-        })
         r = client.post("/api/config", json={"mode": "anthropic"})
-        assert r.status_code == 503
-        assert r.json().get("code") == "coming_soon"
+        assert r.status_code == 200
 
     def test_anthropic_mode_allowed_for_devs(self, dev_client):
         # Developers can still exercise the in-progress Claude integration so

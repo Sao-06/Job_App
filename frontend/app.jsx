@@ -9478,6 +9478,17 @@ function AgentPage({ state, refresh }) {
 function SettingsPage({ state, refresh, setPage }) {
   const [cfg, setCfg] = useState(state || {});
   const [saving, setSaving] = useState(false);
+  // Keep local `cfg` in sync with the latest `state` prop. Without this,
+  // useState(state) only captures state at mount — if the user picks a
+  // model, navigates away, and the parent's polling refresh lands after
+  // unmount, then on next mount cfg shadows state with a value from the
+  // PREVIOUS mount cycle. Symptom: the dropdown "forgets" the saved model.
+  // Every input here writes via `update()` which immediately POSTs to the
+  // backend, so there are no in-flight unsaved local edits to clobber.
+  useEffect(() => {
+    if (!state) return;
+    setCfg(prev => ({ ...prev, ...state }));
+  }, [state]);
   const [ollamaModels, setOllamaModels] = useState([]);
   const [ollamaOk, setOllamaOk] = useState(null);
   const [planError, setPlanError] = useState(null);
@@ -9571,21 +9582,27 @@ function SettingsPage({ state, refresh, setPage }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cfg.mode, ollamaStatus?.running, ollamaStatus?.pulled, ollamaStatus?.pull?.status]);
 
-  // If the configured model isn't in the available list, snap to the first one.
-  // Free users get snapped to the first local model rather than potentially a cloud model.
+  // Only snap the saved model when it's truly invalid for this user — i.e.
+  // a non-Pro user has a cloud model selected. Do NOT snap just because the
+  // model isn't currently in the pulled list: the `ensure` effect above
+  // starts a background pull for it, and snapping here would silently
+  // overwrite the user's choice before the pull lands (this was the root
+  // cause of "selection is gone after navigating back to Settings").
   useEffect(() => {
     if (cfg.mode !== 'ollama') return;
     const models = ollamaStatus?.models || [];
     if (!models.length) return;
-    const inList = cfg.ollama_model && models.find(m => m.name === cfg.ollama_model);
-    // Free users must not stay on a cloud model — snap away even if it's in the list.
-    if (inList && (isPro || !isCloudModel(cfg.ollama_model))) return;
-    const firstModel = isPro
-      ? models[0]
-      : (models.find(m => !isCloudModel(m.name)) || models[0]);
-    update({ ollama_model: firstModel.name });
+    if (!cfg.ollama_model) {
+      const fallback = (models.find(m => !isCloudModel(m.name)) || models[0])?.name;
+      if (fallback) update({ ollama_model: fallback });
+      return;
+    }
+    if (!isPro && isCloudModel(cfg.ollama_model)) {
+      const local = models.find(m => !isCloudModel(m.name)) || models[0];
+      if (local) update({ ollama_model: local.name });
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ollamaStatus?.models, cfg.mode, isPro]);
+  }, [ollamaStatus?.models, cfg.mode, cfg.ollama_model, isPro]);
 
   const Toggle = ({ field, label, sub }) => (
     <div className="set-row">

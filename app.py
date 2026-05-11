@@ -361,7 +361,7 @@ def serve_output_file(path: str, request: Request):
 # DEFAULT_OLLAMA_MODEL: which model new sessions get + which model the
 #   boot-time auto-pull ensures is on disk. Falls back to the local tier.
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434").rstrip("/")
-LOCAL_OLLAMA_MODEL = "smollm2:135m"
+LOCAL_OLLAMA_MODEL = "gemma3:latest"
 CLOUD_OLLAMA_MODEL = "gemma4:31b-cloud"
 DEFAULT_OLLAMA_MODEL = os.environ.get("DEFAULT_OLLAMA_MODEL", LOCAL_OLLAMA_MODEL)
 

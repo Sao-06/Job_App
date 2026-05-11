@@ -88,9 +88,13 @@ def tmp_db(tmp_path):
 
 
 def _build_authed_client(tmp_db, monkeypatch, *, is_developer: bool = False,
-                         plan_tier: str = "free"):
+                         plan_tier: str = "pro"):
     """Shared builder for fastapi_client / dev_client / pro_client. Returns
     ``(client, user_id, token)`` with both auth and session cookies attached.
+
+    Default plan_tier is "pro" — the app is currently in testing-phase mode
+    where every user is upgraded to Pro automatically (see the migration in
+    pipeline/migrations.py + create_user default).
     """
     import app as app_module
     from fastapi.testclient import TestClient
@@ -109,8 +113,11 @@ def _build_authed_client(tmp_db, monkeypatch, *, is_developer: bool = False,
     )
     if is_developer:
         tmp_db.set_user_developer(user_id, True)
-    if plan_tier != "free":
-        tmp_db.set_user_plan_tier(user_id, plan_tier)
+    # Always sync the DB plan_tier to the requested tier so the users row and
+    # the cached auth_user payload agree. Without this, tests that opt back
+    # into the "free" tier would still see plan_tier='pro' from the column
+    # default set by the migration.
+    tmp_db.set_user_plan_tier(user_id, plan_tier)
 
     auth_user = {
         "id": user_id,

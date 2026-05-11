@@ -26,7 +26,8 @@ class TestState:
         user = r.json()["user"]
         assert user is not None
         assert user["email"] == "tester@example.com"
-        assert user["plan_tier"] == "free"
+        # Testing phase: default fixture plan is Pro.
+        assert user["plan_tier"] == "pro"
 
     def test_user_none_for_anonymous(self, fastapi_client):
         client, _, _ = fastapi_client
@@ -43,8 +44,9 @@ class TestState:
         client, _, _ = fastapi_client
         r = client.get("/api/state")
         d = r.json()
-        assert d["plan_tier"] == "free"
-        assert d["is_pro"] is False
+        # Testing phase: every user defaults to Pro.
+        assert d["plan_tier"] == "pro"
+        assert d["is_pro"] is True
 
 
 # ── /api/config ─────────────────────────────────────────────────────────────

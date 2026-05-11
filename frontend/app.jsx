@@ -3568,9 +3568,34 @@ function JobDetailView({ job, profile, allJobs, scoreData, allScores,
   const userSkillsSet = new Set(userSkills);
   const jobReqs = String(job.skills || '')
     .split(',').map(s => s.trim()).filter(Boolean);
-  const targetTitlesAll = (profile?.target_titles || [])
+  // Target titles: prefer the explicit `target_titles` extraction, but fall
+  // back to verbatim work-experience titles so a profile that didn't fire
+  // the title-rules still has a real title-alignment signal (otherwise
+  // every job reads 0% title alignment even for clear matches).
+  let targetTitlesAll = (profile?.target_titles || [])
     .map(t => String(t).trim()).filter(Boolean);
-  const profileMeaningful = userSkills.length >= 2 || targetTitlesAll.length >= 1;
+  if (!targetTitlesAll.length) {
+    const seen = new Set();
+    for (const bucket of ['work_experience', 'experience', 'research_experience']) {
+      for (const row of (profile?.[bucket] || [])) {
+        const t = row && typeof row === 'object' ? String(row.title || '').trim() : '';
+        if (t && !seen.has(t.toLowerCase())) {
+          seen.add(t.toLowerCase());
+          targetTitlesAll.push(t);
+        }
+        if (targetTitlesAll.length >= 6) break;
+      }
+      if (targetTitlesAll.length >= 6) break;
+    }
+  }
+  // Has any meaningful work history? Even before target_titles get
+  // extracted, a resume with actual roles has enough signal to score.
+  const hasWorkSignal = [
+    'work_experience', 'experience', 'research_experience'
+  ].some(b => (profile?.[b] || []).some(r => r && (r.title || r.company)));
+  const profileMeaningful = userSkills.length >= 2
+                          || targetTitlesAll.length >= 1
+                          || hasWorkSignal;
 
   const haveLazy = scoreData && typeof scoreData.score === 'number';
   let matched, gaps, skillPct;
@@ -3606,20 +3631,24 @@ function JobDetailView({ job, profile, allJobs, scoreData, allScores,
   }
 
   // ── Title alignment vs. profile target_titles ────────────────────────
-  // Returns 0 when the profile has no target titles. The previous
-  // `titlePct = 60` default was the source of the user's "100% title
-  // alignment on a blank resume" report — it inflated the rubric's
-  // 30-point industry slot by ~18pts for every job regardless of fit.
+  // Prefer the server's `title_match` value (same logic the score-batch
+  // endpoint applied) so the panel agrees with the headline score; fall
+  // back to a local token-overlap compute against the (now broadened)
+  // target_titles when scoreData hasn't arrived yet.
   const targetTitles = profileMeaningful
     ? targetTitlesAll.map(t => t.toLowerCase())
     : [];
   const titleLower   = String(job.role || '').toLowerCase();
   let titlePct = 0;
-  for (const t of targetTitles) {
-    const toks = t.split(/\s+/).filter(w => w.length > 2);
-    if (!toks.length) continue;
-    const hits = toks.filter(w => titleLower.includes(w)).length;
-    titlePct = Math.max(titlePct, Math.round((hits / toks.length) * 100));
+  if (haveLazy && typeof scoreData.title_match === 'number') {
+    titlePct = Math.round(Math.max(0, Math.min(1, scoreData.title_match)) * 100);
+  } else {
+    for (const t of targetTitles) {
+      const toks = t.split(/\s+/).filter(w => w.length > 2);
+      if (!toks.length) continue;
+      const hits = toks.filter(w => titleLower.includes(w)).length;
+      titlePct = Math.max(titlePct, Math.round((hits / toks.length) * 100));
+    }
   }
 
   // ── Location & seniority fit ─────────────────────────────────────────
@@ -3636,7 +3665,9 @@ function JobDetailView({ job, profile, allJobs, scoreData, allScores,
   const locFitGeneric = /united states|usa|us|north america|remote|anywhere/i.test(job.loc || '');
   const profileLocHit = profileLoc && jobLoc.includes(profileLoc);
   let locPct;
-  if (!profileMeaningful) {
+  if (haveLazy && typeof scoreData.loc_seniority === 'number') {
+    locPct = Math.round(Math.max(0, Math.min(1, scoreData.loc_seniority)) * 100);
+  } else if (!profileMeaningful) {
     locPct = 0;
   } else if (profileLocHit) {
     locPct = 95;

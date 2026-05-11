@@ -282,3 +282,99 @@ def seed_resume(fastapi_client, patched_provider, wait_extraction):
         client.post("/api/resume/demo")
         return wait_extraction(client)
     return _seed
+
+
+import json as _json_for_fixtures
+import os as _os_for_fixtures
+import textwrap as _textwrap_for_fixtures
+
+
+@pytest.fixture
+def claude_cli_bin(tmp_path, monkeypatch):
+    """Write a fake `claude` shell script to tmp_path and prepend it to PATH.
+
+    The fake responds to a small set of canned argvs so providers tests can
+    exercise _run_cli without spawning the real CLI.
+
+    Usage:
+        def test_x(claude_cli_bin):
+            claude_cli_bin.set_response("Hello world")   # text mode
+            claude_cli_bin.set_json({"ok": True})        # json mode
+            claude_cli_bin.set_error("auth failed", exit=1)
+            claude_cli_bin.set_stream(["chunk one", "chunk two"])
+    """
+    state_file = tmp_path / "claude_state.json"
+    state_file.write_text(_json_for_fixtures.dumps({
+        "mode": "text", "text": "OK", "exit": 0, "stderr": "",
+        "stream_chunks": [], "delay_s": 0,
+    }))
+
+    # Build the embedded script body using a plain string + substitution
+    # to avoid f-string brace-doubling confusion.
+    _SCRIPT_TEMPLATE = _textwrap_for_fixtures.dedent("""\
+        #!/usr/bin/env python3
+        import json, sys, time
+        state = json.loads(open(STATE_FILE_PATH).read())
+        time.sleep(state.get("delay_s", 0))
+        if state.get("exit", 0) != 0:
+            sys.stderr.write(state.get("stderr", ""))
+            sys.exit(state["exit"])
+        # Find --output-format
+        argv = sys.argv[1:]
+        out_fmt = "text"
+        if "--output-format" in argv:
+            i = argv.index("--output-format")
+            if i + 1 < len(argv):
+                out_fmt = argv[i + 1]
+        if out_fmt == "stream-json":
+            for chunk in state.get("stream_chunks", []):
+                sys.stdout.write(json.dumps({
+                    "type": "stream_event",
+                    "event": {
+                        "type": "content_block_delta",
+                        "delta": {"type": "text_delta", "text": chunk},
+                    },
+                }) + "\\n")
+                sys.stdout.flush()
+            sys.stdout.write(json.dumps({
+                "type": "result", "subtype": "success", "total_cost_usd": 0.001,
+            }) + "\\n")
+            sys.exit(0)
+        # text or json output: print whatever 'text' field holds
+        sys.stdout.write(state["text"])
+        sys.exit(0)
+    """)
+    script_body = _SCRIPT_TEMPLATE.replace("STATE_FILE_PATH", repr(str(state_file)))
+
+    script = tmp_path / "claude"
+    script.write_text(script_body)
+    script.chmod(0o755)
+
+    class _Helper:
+        def set_response(self, text):
+            d = _json_for_fixtures.loads(state_file.read_text())
+            d.update({"mode": "text", "text": text, "exit": 0})
+            state_file.write_text(_json_for_fixtures.dumps(d))
+
+        def set_json(self, obj):
+            self.set_response(_json_for_fixtures.dumps(obj))
+
+        def set_error(self, stderr, exit=1):
+            d = _json_for_fixtures.loads(state_file.read_text())
+            d.update({"exit": exit, "stderr": stderr})
+            state_file.write_text(_json_for_fixtures.dumps(d))
+
+        def set_stream(self, chunks):
+            d = _json_for_fixtures.loads(state_file.read_text())
+            d.update({"mode": "stream", "stream_chunks": list(chunks), "exit": 0})
+            state_file.write_text(_json_for_fixtures.dumps(d))
+
+        def set_delay(self, seconds):
+            d = _json_for_fixtures.loads(state_file.read_text())
+            d.update({"delay_s": seconds})
+            state_file.write_text(_json_for_fixtures.dumps(d))
+
+    monkeypatch.setenv("PATH", str(tmp_path) + _os_for_fixtures.pathsep + _os_for_fixtures.environ["PATH"])
+    monkeypatch.setenv("CLAUDE_BIN", str(script))
+    monkeypatch.setenv("CLAUDE_CLI_MODEL", "sonnet")  # deterministic for tests
+    return _Helper()

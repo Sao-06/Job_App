@@ -2,6 +2,18 @@
 
 This file holds the long-form reference content extracted from `CLAUDE.md` to keep that file under the 40k auto-load threshold. Load this on demand when working on Stripe / billing, when triaging a bug that smells like a reintroduced regression, or when preparing a non-trivial commit.
 
+## 7. Anthropic launch state (2026-05)
+
+**Claude runs via the local `claude` CLI as a Pro-tier entitlement.** Sonnet 4.6 pinned (`--model sonnet`, override with `CLAUDE_CLI_MODEL`). Auth = OAuth keychain on the server — run `claude /login` once during deploy. No `ANTHROPIC_API_KEY`.
+
+Plan-gate single source of truth is `_can_use_claude(auth_user)` in `app.py` — returns `True` iff `pipeline.providers._CLI_HEALTHY` AND (`is_developer` OR `plan_tier == 'pro'`). Boot probe + 5-min ticker toggle `_CLI_HEALTHY`. On failure, Pro users transparently coerce to Ollama with a journalctl warning that includes the credential-location hint (`~/.claude/.credentials.json` on Linux, Keychain item on macOS).
+
+Operator kill switch: `CLAUDE_CLI_DISABLED=1` forces unhealthy at boot; `CLAUDE_CLI_DISABLE_HEALTH_CHECK=1` skips the boot probe entirely (tests).
+
+Per-call defaults: `--max-budget-usd 2.00`, `--effort high` (xhigh for `tailor_resume`), `BoundedSemaphore(5)` caps total concurrent subprocesses app-wide. Phase 3 LLM-rerank uses `ThreadPoolExecutor(max_workers=5)` inside the semaphore — provider-agnostic so Ollama users get the parallelism boost too.
+
+What we lost vs. SDK: per-call `max_tokens` (CLI uses `budget_usd` instead), explicit `cache_control: ephemeral` on tailoring system blocks (server-side cache still hits for identical prefixes within short windows but we lose direct control). Acceptable on a flat subscription tier.
+
 ---
 
 ## 8. Stripe billing — current state
@@ -104,6 +116,9 @@ The `_StreamTee` wrapped `sys.stdout` at import time and broke pytest's session-
 
 ### Cursor-based pagination "stuck" on deduped results
 After dedupe + diversification, the cursor's `last_id` could no longer be located in the ranked pool, and `start` reset to 0 — the user got the same first page on every "load more". **Invariant**: cursor lookup falls back to `min(page_offset * limit, len(ranked))` when the id isn't found, so pagination keeps moving. `next_cursor` is emitted whenever ranking *might* have more rows (page-fill OR pool-was-capped) — over-emit and let the next call return `[]`, never under-emit.
+
+### CLAUDE.md in cwd leaking into every Claude CLI prompt (CLI migration, circa 2026-05-11)
+The `claude` CLI auto-discovers a `CLAUDE.md` in the working directory and prepends it to the system prompt. Without `cwd=/tmp/jobapp-claude/` (a dir intentionally without CLAUDE.md) AND `--exclude-dynamic-system-prompt-sections`, every `_run_cli` call would silently prepend ~1500 tokens of project context to every Claude request — polluting outputs ("you are a developer working on this codebase…") and burning input tokens on every call. The fix is in `pipeline.providers._run_cli` and `_run_cli_stream`. **Invariant**: both `cwd=/tmp/jobapp-claude/` (no CLAUDE.md present) AND `--exclude-dynamic-system-prompt-sections` are required — drop either and the leak returns. Codified as §7 Operational Mandate 16.
 
 > **Future agents**: when you fix a bug worth remembering, add a new entry to this section with the **commit hash**, the **symptom**, the **root cause**, and the **invariant** future code must preserve. The point of this section is to keep the same bug from being reintroduced six months from now by someone who didn't see the original PR. If you can't think of an invariant, the entry probably doesn't belong here — it's just a normal fix.
 

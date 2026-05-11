@@ -102,8 +102,28 @@ class TestTitleMatch:
         assert _title_match(["FPGA Engineering Intern"], "FPGA Engineering Intern") == 1.0
 
     def test_partial_word_match(self):
-        # words len > 2: "fpga", "engineering", "intern" — at least one in title.
-        assert _title_match(["FPGA Engineering Intern"], "Embedded FPGA Designer") == 1.0
+        # words len > 2: "fpga", "engineering", "intern" — only "fpga" appears
+        # in "Embedded FPGA Designer", so this is a 1-of-3 match (≈0.333).
+        # The previous all-or-nothing semantics returned 1.0 for any single
+        # word overlap, which made unrelated roles read as "100% title
+        # alignment" — see the scoring-system fix for context.
+        result = _title_match(["FPGA Engineering Intern"], "Embedded FPGA Designer")
+        assert 0.30 < result < 0.40
+
+    def test_partial_full_word_match_returns_one(self):
+        # All three target words appear in the longer job title — that's a
+        # 100% title alignment.
+        assert _title_match(
+            ["FPGA Engineering Intern"], "Senior FPGA Engineering Intern (US)",
+        ) == 1.0
+
+    def test_best_across_targets(self):
+        # Two targets: only one matches the job. The match score is the
+        # best across targets, not the average — otherwise broad candidates
+        # are penalised for naming alternate career tracks.
+        assert _title_match(
+            ["Software Engineer", "Product Manager"], "Software Engineer",
+        ) == 1.0
 
     def test_no_match(self):
         assert _title_match(["Photonics Intern"], "Sales Account Executive") == 0.0

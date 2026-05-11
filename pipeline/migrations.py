@@ -161,23 +161,31 @@ def apply_all_migrations(conn: sqlite3.Connection) -> list[str]:
     # AND refresh the cached plan_tier on every active auth_token so the
     # next /api/state poll reflects the bump without a re-login (the cached
     # user_json in auth_tokens otherwise wins over the live users-row read).
-    promoted = conn.execute(
-        "UPDATE users SET plan_tier = 'pro' WHERE plan_tier != 'pro'"
-    ).rowcount
-    if promoted:
-        _log(f"promoted {promoted} user(s) to pro (testing phase)")
-        rows = conn.execute("SELECT token, user_json FROM auth_tokens").fetchall()
-        for token, user_json in rows:
-            try:
-                payload = json.loads(user_json or "{}")
-            except (TypeError, ValueError):
-                payload = {}
-            if payload.get("plan_tier") != "pro":
-                payload["plan_tier"] = "pro"
-                conn.execute(
-                    "UPDATE auth_tokens SET user_json = ? WHERE token = ?",
-                    (json.dumps(payload), token),
-                )
+    #
+    # Guarded by `table_exists` because `pipeline.job_repo.init_schema()`
+    # also calls `apply_all_migrations` after creating only the
+    # job_postings / source_runs tables — without the guard, this UPDATE
+    # would raise "no such table: users" on every job-search test and on
+    # any standalone jobs-only recovery DB.
+    if table_exists(conn, "users"):
+        promoted = conn.execute(
+            "UPDATE users SET plan_tier = 'pro' WHERE plan_tier != 'pro'"
+        ).rowcount
+        if promoted:
+            _log(f"promoted {promoted} user(s) to pro (testing phase)")
+            if table_exists(conn, "auth_tokens"):
+                rows = conn.execute("SELECT token, user_json FROM auth_tokens").fetchall()
+                for token, user_json in rows:
+                    try:
+                        payload = json.loads(user_json or "{}")
+                    except (TypeError, ValueError):
+                        payload = {}
+                    if payload.get("plan_tier") != "pro":
+                        payload["plan_tier"] = "pro"
+                        conn.execute(
+                            "UPDATE auth_tokens SET user_json = ? WHERE token = ?",
+                            (json.dumps(payload), token),
+                        )
 
     # job_postings — added the cross-industry category label after launch.
     # The matching index lives here too: CREATE INDEX validates the referenced

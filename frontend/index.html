@@ -1272,9 +1272,46 @@ button.auto-save { cursor: pointer; font: inherit; }
 .rs-aside-list.bad    li::before { background: var(--bad);      box-shadow: 0 0 8px var(--bad-d);     }
 .rs-aside-list.accent li::before { background: var(--accent-h); box-shadow: 0 0 8px var(--accent-d);  }
 
-/* Action card — accent-bordered, but no radial backdrop (the score card
-   already owns that treatment; two radial cards in the same column made the
-   sidecar feel busy). The gradient CTA button carries the visual weight. */
+/* ── Insight cards row — full-width grid of strengths / red flags /
+   suggestions, rendered BELOW the narrative+sidecar block. This is the
+   primary fix for "sidebar is a super-long narrow column": the lists
+   were forcing the 380px sidecar to ~1.5x viewport tall while the rest
+   of the screen sat unused. As a 3-up grid they consume horizontal
+   space and let the eye scan in parallel. Auto-fits down to 2-up then
+   1-up via minmax — no separate breakpoints needed. */
+.rs-deep-bottom {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 18px;
+  margin-top: 28px;
+}
+.rs-deep-bottom .rs-aside-block {
+  height: 100%;
+}
+
+/* Action strip — full-width CTA pinned at the end of the deep-dive flow.
+   Lives outside the sidecar now so it gets the page's full horizontal
+   width instead of being squeezed into 380px. Two-column inside on
+   wider screens: button on the left, hint copy on the right. */
+.rs-deep-action {
+  margin-top: 18px;
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) 1fr;
+  align-items: center;
+  gap: 22px;
+  padding: 18px 22px;
+  background: var(--surface);
+  border: 1px solid var(--accent-b);
+  border-radius: 14px;
+}
+@media (max-width: 720px) {
+  .rs-deep-action { grid-template-columns: 1fr; gap: 12px; }
+}
+.rs-deep-action .rs-aside-action-hint { margin-top: 0; }
+
+/* Legacy action-card style — still applied when the sidecar variant gets
+   used (older callers / responsive collapse paths). Kept slim so the new
+   strip layout above wins on the deep-dive page. */
 .rs-aside-action {
   background: var(--surface);
   border-color: var(--accent-b);
@@ -1329,9 +1366,10 @@ button.auto-save { cursor: pointer; font: inherit; }
 }
 
 /* Below 980px: collapse to single column, sidecar below narrative.
-   The sidecar transforms into a 2-col responsive grid so it's not a tall
-   stack of half-empty narrow cards. The score and action cards span the
-   full width because they're the dominant CTAs. */
+   The sidecar (now just score + target roles) transforms into a 2-col
+   grid; the score tile spans full width since it's the dominant anchor.
+   The bottom insight grid + action strip already collapse via their own
+   auto-fit / media query, so no extra rules needed there. */
 @media (max-width: 980px) {
   .rs-deep-grid { grid-template-columns: 1fr; gap: 20px; }
   .rs-deep-aside {
@@ -1340,8 +1378,7 @@ button.auto-save { cursor: pointer; font: inherit; }
     grid-template-columns: 1fr 1fr;
     gap: 12px;
   }
-  .rs-aside-score,
-  .rs-aside-action { grid-column: 1 / -1; }
+  .rs-aside-score { grid-column: 1 / -1; }
   /* In the wider responsive sidecar, score body can spread out more */
   .rs-aside-score-body { gap: 16px; }
   /* Target-role pills go horizontal again now that we have width */

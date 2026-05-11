@@ -91,9 +91,17 @@ class TestSkillOverlap:
         ov = _skill_overlap(["python"], ["python", "kubernetes"])
         assert ov == 0.5
 
-    def test_neutral_default_when_either_empty(self):
-        # Empty requirements or profile both return the 0.3 neutral floor.
-        assert _skill_overlap([], ["python"]) == 0.3
+    def test_empty_profile_returns_zero(self):
+        # Empty profile → 0.0 (NOT a neutral floor). The old 0.3 default was
+        # the source of the "blank resume reads 68% match" bug — it added a
+        # constant ~13.5pts to every job's rerank score. See the docstring
+        # on `_skill_overlap`.
+        assert _skill_overlap([], ["python"]) == 0.0
+
+    def test_empty_requirements_returns_neutral(self):
+        # Empty requirements stays at 0.3 — many ingested rows have no tags
+        # and we still want title + description signals to rank them via
+        # BM25 instead of pinning them to zero on this dimension.
         assert _skill_overlap(["python"], []) == 0.3
 
 

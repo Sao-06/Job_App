@@ -18,14 +18,18 @@ What this module does
   non-deleted job in the index against ``profile`` using the same
   ``compute_skill_coverage`` deterministic scorer the lazy
   ``/api/jobs/score-batch`` endpoint uses, write rows to
-  ``user_job_scores``. Idempotent: rows whose profile hash matches the
-  caller's ``profile_hash`` (and which were computed after the row's
-  ``last_seen_at``) are skipped. Safe to interrupt — partial state is fine.
+  ``user_job_scores``. Every visited row is (re)written via INSERT … ON
+  CONFLICT DO UPDATE — there is no per-row skip when the profile_hash
+  matches; the stored ``profile_hash`` is purely a diagnostic so callers
+  can tell which profile generation a row was computed against. Safe to
+  interrupt — partial state is fine. Coalesce repeat calls upstream
+  (`_USER_SCORING_LOCKS` in app.py) if you want to avoid wasted work.
 * ``score_new_jobs_for_user(conn, user_id, profile, …)`` — incremental
   variant: only scores rows we don't have a stored score for. Used by the
   periodic refresh task once the user is fully primed.
-* ``profile_signature(profile)`` — stable short hash so we can short-circuit
-  rescoring when the profile didn't actually change between calls.
+* ``profile_signature(profile)`` — stable short hash. Stored alongside
+  each row so callers can later diff "which scores are stale for this
+  user" if a smarter short-circuit lands.
 * ``known_user_ids_with_scores(conn)`` — used by the scheduler hook so it
   can refresh "incremental" scores for users who have at least one row.
 
@@ -42,9 +46,9 @@ import sqlite3
 import threading
 import time
 from datetime import datetime, timezone
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
-from .providers import RUBRIC_WEIGHTS, compute_skill_coverage
+from .providers import RUBRIC_WEIGHTS, compute_skill_coverage, profile_strength
 
 
 def _utc_now() -> str:
@@ -195,7 +199,7 @@ def score_jobs_for_user(conn: sqlite3.Connection, user_id: str,
                          *, write_lock: threading.Lock | None = None,
                          only_new: bool = False,
                          max_jobs: int = _MAX_JOBS_PER_CALL,
-                         progress: callable | None = None) -> dict:
+                         progress: Callable[[int], None] | None = None) -> dict:
     """Compute & persist scores for every (or every new) live job vs *profile*.
 
     Returns a small summary dict — useful for the dev console / logs.
@@ -223,6 +227,13 @@ def score_jobs_for_user(conn: sqlite3.Connection, user_id: str,
     prof_loc = str(profile.get("location") or "")
     exp_prefs = profile.get("experience_levels") or []
     now = _utc_now()
+    # Profile-strength multiplier: caps job scores when the underlying
+    # resume is thin / template-y. Without this a placeholder resume
+    # (3 fake skills + 1 placeholder title + 1 stub work entry) reads
+    # as ~40% match on every job whose title contains the placeholder.
+    # `max(0.2, ...)` keeps a small ordering signal alive even for very
+    # weak profiles — collapsing to 0 would destroy the cursor sort.
+    strength = max(0.2, profile_strength(profile))
 
     started = time.time()
     scored = 0
@@ -269,7 +280,7 @@ def score_jobs_for_user(conn: sqlite3.Connection, user_id: str,
                 RUBRIC_WEIGHTS["required_skills"] * cov
                 + RUBRIC_WEIGHTS["industry"] * tm
                 + RUBRIC_WEIGHTS["location_seniority"] * loc_sen
-            )
+            ) * strength
             score_int = max(0, min(100, int(round(pts))))
             pending.append((
                 user_id, job["id"], score_int,

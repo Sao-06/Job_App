@@ -359,11 +359,19 @@ def serve_output_file(path: str, request: Request):
 #   Ollama Turbo). Both must be `ollama pull`-ed on the daemon — the boot
 #   auto-pull handles the local one for free.
 # DEFAULT_OLLAMA_MODEL: which model new sessions get + which model the
-#   boot-time auto-pull ensures is on disk. Falls back to the local tier.
+#   boot-time auto-pull ensures is on disk. Defaults to the cloud tier
+#   because we're in testing-phase mode where every user is upgraded to
+#   Pro (see pipeline/migrations.py). Override via env var to pin to
+#   the local model on dev laptops without Ollama Turbo credentials.
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434").rstrip("/")
-LOCAL_OLLAMA_MODEL = "gemma3:latest"
+# Testing phase: every user is Pro (see pipeline/migrations.py), so the
+# "local" model alias resolves to the cloud one too. The downgrade-snap
+# migration in _load_session_state therefore has no observable effect
+# (LOCAL == CLOUD). When the testing phase ends, point LOCAL back at a
+# small open-weight Ollama model so the Free tier has a real fallback.
+LOCAL_OLLAMA_MODEL = "gemma4:31b-cloud"
 CLOUD_OLLAMA_MODEL = "gemma4:31b-cloud"
-DEFAULT_OLLAMA_MODEL = os.environ.get("DEFAULT_OLLAMA_MODEL", LOCAL_OLLAMA_MODEL)
+DEFAULT_OLLAMA_MODEL = os.environ.get("DEFAULT_OLLAMA_MODEL", CLOUD_OLLAMA_MODEL)
 
 
 # ── Session state ─────────────────────────────────────────────────────────────
@@ -1151,6 +1159,16 @@ def _load_session_state(session_id: str) -> dict:
             and plan != "pro"
             and not user.get("is_developer")):
         state["ollama_model"] = LOCAL_OLLAMA_MODEL
+    # Testing-phase: every Ollama session is forced to the single
+    # canonical model `CLOUD_OLLAMA_MODEL` (gemma4:31b-cloud). No
+    # per-user variation, no cloud-variant tolerance, no developer
+    # exemption — the product surface only supports one model right
+    # now. Setting a different value via the Settings dropdown will be
+    # reverted on the next /api/state poll. Remove this block when the
+    # testing phase ends and the auto-promote-to-Pro migration in
+    # pipeline/migrations.py is lifted.
+    if state.get("mode") == "ollama":
+        state["ollama_model"] = CLOUD_OLLAMA_MODEL
     return state
 
 
@@ -1666,10 +1684,25 @@ def _kick_user_scoring_for_bound_user(profile: dict | None) -> None:
     Safe to call from any request handler — it's a no-op when there's no
     authenticated user (anonymous sessions don't have persistent scores;
     the live `/api/jobs/feed` rerank still ranks the page in real time).
+
+    Also evicts the lazy in-memory score cache (`_SCORE_CACHE`) for this
+    user so the next `/api/jobs/score-batch` poll recomputes against the
+    new profile instead of returning a 1-hour-stale row computed against
+    the previous primary resume. Mirrors the same invalidation pattern
+    in `_run_extraction_bg`'s success path — without it, switching the
+    primary resume rewrites `user_job_scores` but the per-card lazy
+    scores keep showing the previous resume's numbers for up to an hour.
     """
     user = _S.get("user") or {}
     uid = user.get("id") if isinstance(user, dict) else None
     if uid:
+        evicted = _score_cache_invalidate_user(uid)
+        if evicted:
+            print(
+                f"[score-cache] evicted {evicted} entries for user={uid[:8]} "
+                f"after primary-resume change",
+                flush=True,
+            )
         _kick_user_scoring(uid, profile, only_new=False)
 
 
@@ -1918,6 +1951,20 @@ def _run_extraction_bg(record: dict, state: dict, session_id: str | None,
                 # so a flurry of re-extractions doesn't pile up workers.
                 uid = (latest.get("user") or {}).get("id")
                 if uid and extraction_result:
+                    # Wipe the lazy in-memory score cache for this user so
+                    # the next /api/jobs/score-batch poll recomputes against
+                    # the new profile instead of serving the 1-hour-stale
+                    # row from the previous extraction. Without this, the
+                    # SPA showed "Re-scan complete!" but the JD scores were
+                    # frozen for an hour because the cache wins over the
+                    # fresh user_job_scores write below.
+                    evicted = _score_cache_invalidate_user(uid)
+                    if evicted:
+                        print(
+                            f"[score-cache] evicted {evicted} entries for user={uid[:8]} "
+                            f"after fresh extraction",
+                            flush=True,
+                        )
                     _kick_user_scoring(uid, extraction_result, only_new=False)
         elif extraction_error is not None:
             target["extract_error"] = extraction_error
@@ -2989,6 +3036,9 @@ def reset_state(request: Request):
         except Exception as exc:
             print(f"[reset] delete_user_scores failed for {uid[:8]}: "
                   f"{type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
+        # Also wipe the lazy in-memory score cache so a stale 1-hour-old
+        # row doesn't outlive the persisted-scores deletion above.
+        _score_cache_invalidate_user(uid)
     return {"ok": True}
 
 
@@ -3297,7 +3347,10 @@ async def auth_login(req: Request):
             "id": user["id"],
             "email": user["email"],
             "is_developer": bool(user.get("is_developer")),
-            "plan_tier": user.get("plan_tier") or "free",
+            # Testing phase: empty/null plan_tier falls back to "pro" so a
+            # row that somehow lost its value (e.g. legacy NULL after the
+            # column was added) doesn't downgrade the user on login.
+            "plan_tier": user.get("plan_tier") or "pro",
         }
         app_session_id = _switch_to_user_session(user, auth_user)
         token = secrets.token_urlsafe(32)
@@ -3331,8 +3384,18 @@ async def auth_signup(req: Request):
             return JSONResponse({"ok": False, "error": "An account with this email already exists"})
         pw_hash = hash_password(password)
         user_id = _user_store.create_user(email, pw_hash)
-
-        auth_user = {"id": user_id, "email": email, "is_developer": False, "plan_tier": "free"}
+        # Re-fetch from the DB so plan_tier reflects whatever the column
+        # default is (currently 'pro' during the everyone-is-Pro testing
+        # phase — see pipeline/migrations.py + session_store.create_user).
+        # Hardcoding "free" here was a stale leftover that immediately
+        # overrode the DB default and got cached into auth_tokens.
+        new_user = _user_store.get_user_by_id(user_id) or {}
+        auth_user = {
+            "id": user_id,
+            "email": email,
+            "is_developer": bool(new_user.get("is_developer")),
+            "plan_tier": new_user.get("plan_tier") or "pro",
+        }
         app_session_id = _start_session({"user": auth_user}, user_id=user_id)
         token = secrets.token_urlsafe(32)
         _auth_token_save(token, auth_user)
@@ -3462,17 +3525,22 @@ def auth_google_callback(request: Request, code: str = "", state: str = ""):
                     password_hash=None,
                     google_id=google_id,
                 )
-                user = {"id": user_id, "email": email, "google_id": google_id}
+                # Re-fetch so `user.plan_tier` reflects the column default
+                # ('pro' during the testing phase) instead of falling
+                # through to the "free" hardcoded fallback below.
+                user = _user_store.get_user_by_id(user_id) or {
+                    "id": user_id, "email": email, "google_id": google_id,
+                }
             auth_user = {
                 "id": user["id"],
                 "email": user["email"],
                 "name": name,
                 "is_developer": bool(user.get("is_developer")),
-                "plan_tier": user.get("plan_tier") or "free",
+                "plan_tier": user.get("plan_tier") or "pro",
             }
             app_session_id = _switch_to_user_session(user, auth_user)
         else:
-            auth_user = {"email": email, "name": name, "is_developer": False, "plan_tier": "free"}
+            auth_user = {"email": email, "name": name, "is_developer": False, "plan_tier": "pro"}
             app_session_id = _start_session({"user": auth_user})
 
         token = secrets.token_urlsafe(32)
@@ -4684,6 +4752,21 @@ def _score_cache_set(key: tuple[str, str], value: dict) -> None:
         _SCORE_CACHE[key] = (now, value)
 
 
+def _score_cache_invalidate_user(user_id: str | None) -> int:
+    """Wipe every cached score row for ``user_id``. Called on profile
+    re-extraction (Re-scan & re-verify on the resume deep-dive page) and
+    on /api/reset so the SPA doesn't keep serving 1-hour-stale scores
+    that were computed against the previous profile. Returns the count
+    of evicted rows (logged for observability)."""
+    if not user_id:
+        return 0
+    with _SCORE_CACHE_LOCK:
+        keys_to_drop = [k for k in _SCORE_CACHE.keys() if k[0] == user_id]
+        for k in keys_to_drop:
+            _SCORE_CACHE.pop(k, None)
+    return len(keys_to_drop)
+
+
 @app.post("/api/jobs/score-batch")
 async def jobs_score_batch(request: Request):
     """Score a batch of jobs against the caller's profile. Used by the
@@ -4730,6 +4813,13 @@ async def jobs_score_batch(request: Request):
         ], "profile_complete": False}
 
     from pipeline import job_repo, job_details, providers
+
+    # Profile-strength multiplier: caps job scores when the underlying
+    # resume is thin / template-y (placeholder skills + stub work entry).
+    # Without this, a template-shaped profile would still read "40% match"
+    # on every job whose title contains the placeholder. `max(0.2, ...)`
+    # keeps a small ordering signal alive even for very weak profiles.
+    strength = max(0.2, providers.profile_strength(profile))
 
     # Pull the rows we need in one query.
     if _session_store is None:
@@ -4864,11 +4954,11 @@ async def jobs_score_batch(request: Request):
             sen_score = 0.2
         loc_seniority = round((loc_score + sen_score) / 2, 3)
 
-        score_pct = int(round(
+        score_pct = int(round((
             providers.RUBRIC_WEIGHTS["required_skills"] * coverage
             + providers.RUBRIC_WEIGHTS["industry"] * title_hit
             + providers.RUBRIC_WEIGHTS["location_seniority"] * loc_seniority
-        ))
+        ) * strength))
         payload = {
             "id":            jid,
             "score":         max(0, min(100, score_pct)),
@@ -4878,6 +4968,7 @@ async def jobs_score_batch(request: Request):
             "coverage":      round(float(coverage), 3),
             "title_match":   round(float(title_hit), 3),
             "loc_seniority": round(float(loc_seniority), 3),
+            "profile_strength": round(float(strength), 3),
         }
         _score_cache_set((user_id, jid), payload)
         out.append(payload)
@@ -6488,5 +6579,12 @@ def ollama_pull():
 
 if __name__ == "__main__":
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    print("Jobs AI — starting on http://localhost:8000")
-    uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=False)
+    # Port resolution: read JOBS_AI_PORT from env (loaded from .env at the
+    # top of this file), default 8000 for production deploys (Pi systemd
+    # unit). Local devs whose port 8000 is already taken (e.g. whisper)
+    # can drop `JOBS_AI_PORT=8001` into their .env to override without
+    # touching code.
+    port = int(os.environ.get("JOBS_AI_PORT", "8000"))
+    host = os.environ.get("JOBS_AI_HOST", "0.0.0.0")
+    print(f"Jobs AI — starting on http://localhost:{port}")
+    uvicorn.run("app:app", host=host, port=port, reload=False)

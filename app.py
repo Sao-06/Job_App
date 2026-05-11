@@ -1052,7 +1052,7 @@ async def _claude_cli_health_check_startup():
         _p._CLI_HEALTHY = False if os.environ.get("CLAUDE_CLI_DISABLED") == "1" else True
         return
     try:
-        await asyncio.to_thread(_p._run_cli, "ping", timeout_s=20.0, budget_usd=0.01)
+        await asyncio.to_thread(_p._run_cli, "ping", timeout_s=20.0)
         _p._CLI_HEALTHY = True
         print("[claude-cli] verified at startup", flush=True)
     except Exception as e:
@@ -1085,7 +1085,7 @@ async def _start_claude_cli_health_ticker():
         while True:
             _time.sleep(300)
             try:
-                _p._run_cli("ping", timeout_s=20.0, budget_usd=0.01)
+                _p._run_cli("ping", timeout_s=20.0)
                 if not _p._CLI_HEALTHY:
                     print("[claude-cli] health restored", flush=True)
                 _p._CLI_HEALTHY = True

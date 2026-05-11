@@ -63,7 +63,7 @@ def _run_cli(
     json_schema: dict | None = None,
     effort: str = "high",
     timeout_s: float = 120.0,
-    budget_usd: float = 2.00,
+    budget_usd: float = 100.0,
 ) -> str:
     """Spawn `claude -p` once, return its stdout. Blocking.
 
@@ -162,7 +162,7 @@ def _run_cli_stream(
     *,
     system: str | None = None,
     effort: str = "high",
-    budget_usd: float = 2.00,
+    budget_usd: float = 100.0,
 ):
     """Generator. Yields text deltas as the CLI streams. Closes/kills the
     subprocess if the consumer abandons the generator early.

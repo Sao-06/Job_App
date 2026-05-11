@@ -9272,13 +9272,45 @@ function AgentPage({ state, refresh }) {
 
   const appliedCount = (state?.applications || []).filter(a => a.app_status === 'Applied' || a.status === 'Applied').length;
 
-  // Inline persistence for the Phase 2 cap slider — POSTs /api/config on
-  // commit so the value is available to the next phase run. Optimistic
-  // refresh so the displayed number tracks the slider in real time.
-  const tuneMaxJobs = async (n) => {
+  // Phase-2 cap slider. A controlled <input type="range"> bound directly to
+  // state.max_scrape_jobs makes the thumb appear stuck: /api/state only
+  // refreshes every 2–8 s, so onChange's POST + refresh race lags behind the
+  // drag and the displayed value snaps back to the stale server value. We
+  // mirror the slider locally for instant feedback, sync from the server
+  // when the user isn't actively dragging, and debounce the POST so a drag
+  // only sends one /api/config write at the end.
+  const [tuneJobs, setTuneJobs] = useState(state?.max_scrape_jobs ?? 50);
+  const tuneDraggingRef = useRef(false);
+  const tuneTimerRef = useRef(null);
+  useEffect(() => {
+    if (tuneDraggingRef.current) return;
+    const next = state?.max_scrape_jobs;
+    if (Number.isFinite(next) && next !== tuneJobs) setTuneJobs(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state?.max_scrape_jobs]);
+  useEffect(() => () => {
+    if (tuneTimerRef.current) clearTimeout(tuneTimerRef.current);
+  }, []);
+  const tunePersist = async (n) => {
     try { await api.post('/api/config', { max_scrape_jobs: n }); }
-    catch (_) { /* swallow — slider stays local until next refresh */ }
+    catch (_) { /* swallow — local value still reflects intent */ }
+    tuneDraggingRef.current = false;
     refresh();
+  };
+  const tuneMaxJobs = (n) => {
+    setTuneJobs(n);
+    tuneDraggingRef.current = true;
+    if (tuneTimerRef.current) clearTimeout(tuneTimerRef.current);
+    tuneTimerRef.current = setTimeout(() => {
+      tuneTimerRef.current = null;
+      tunePersist(n);
+    }, 250);
+  };
+  const tuneCommit = () => {
+    if (tuneTimerRef.current == null) return;
+    clearTimeout(tuneTimerRef.current);
+    tuneTimerRef.current = null;
+    tunePersist(tuneJobs);
   };
 
   return (
@@ -9383,15 +9415,18 @@ function AgentPage({ state, refresh }) {
                 <Icon name="briefcase" size={12}/>
                 <span>Phase 2 cap — top ranked jobs from the live index</span>
               </div>
-              <div className="agent-tune-val"><b>{state?.max_scrape_jobs ?? 50}</b><i>jobs</i></div>
+              <div className="agent-tune-val"><b>{tuneJobs}</b><i>jobs</i></div>
             </div>
             <input
               type="range"
               className="set-range agent-tune-range"
               min="10" max="200" step="10"
-              value={state?.max_scrape_jobs ?? 50}
+              value={tuneJobs}
               disabled={!!running}
-              onChange={e => tuneMaxJobs(parseInt(e.target.value))}
+              onChange={e => tuneMaxJobs(parseInt(e.target.value, 10))}
+              onMouseUp={tuneCommit}
+              onTouchEnd={tuneCommit}
+              onKeyUp={tuneCommit}
             />
             <div className="agent-tune-helper">
               Phase 2 reads from the local jobs DB (~{state?.job_count || 0} indexed) and ranks by BM25 +

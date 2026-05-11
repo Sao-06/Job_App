@@ -81,10 +81,12 @@ def _run_cli(
     """
     _ensure_scratch_dir()
 
-    # Re-read CLAUDE_BIN from env at call time so tests can monkeypatch it
-    # after module import (the module-level constant is resolved at import).
+    # Re-read CLAUDE_BIN / CLAUDE_CLI_MODEL from env at call time so the
+    # claude_cli_bin fixture (which only monkeypatches os.environ, not the
+    # module-level constants) works without further patching.  Code that
+    # directly monkeypatches `pipeline.providers.CLAUDE_BIN` should be
+    # aware that this runtime re-read takes precedence.
     _bin = _os.environ.get("CLAUDE_BIN") or CLAUDE_BIN
-    # Re-read model at call time for the same reason.
     _model = _os.environ.get("CLAUDE_CLI_MODEL") or CLAUDE_CLI_MODEL
 
     out_format = "json" if json_schema is not None else "text"
@@ -107,8 +109,8 @@ def _run_cli(
         argv += ["-p", prompt]
     else:
         # Large prompts go via stdin to avoid argv length limits.
-        # Pass a sentinel so the CLI knows to read from stdin.
-        argv += ["-p", "-"]
+        # --input-format text tells the CLI to read the prompt from stdin.
+        argv += ["-p", "--input-format", "text"]
 
     env = dict(_os.environ)
     env["CLAUDE_CODE_NONINTERACTIVE"] = "1"

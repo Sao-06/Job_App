@@ -145,12 +145,18 @@ def _run_cli(
     system: str | None = None,
     json_schema: dict | None = None,
     effort: str = "high",       # low | medium | high | xhigh | max
-    max_tokens: int | None = None,
     timeout_s: float = 120.0,
+    budget_usd: float = 2.00,
 ) -> str:
     """Blocking. Returns assistant text. Raises ClaudeCLIError on failure.
     Acquires _CLI_SEMAPHORE for the duration of the subprocess."""
 ```
+
+Note: the CLI does not expose a per-call `max_tokens` flag (only
+`--max-budget-usd` as a cost ceiling). The vestigial `max_tokens` kwarg
+from the SDK signature is dropped from `_run_cli`. Each call-site that
+still wants to advertise a token budget for upstream display purposes
+can carry its own constant separately from the CLI invocation.
 
 ### argv assembly
 
@@ -389,13 +395,17 @@ On `@app.on_event("startup")`:
 async def _claude_cli_health_check():
     global _CLI_HEALTHY
     try:
-        _run_cli("ping", timeout_s=20, max_tokens=10)
+        # _run_cli is blocking — run it off-thread so we don't stall the
+        # event loop during startup.
+        await asyncio.to_thread(_run_cli, "ping", timeout_s=20, budget_usd=0.01)
         _CLI_HEALTHY = True
         logger.info("[claude-cli] verified")
     except Exception as e:
         _CLI_HEALTHY = False
         logger.warning(f"[claude-cli] FAILED — Pro users fallback to Ollama: {e}")
 ```
+
+The 5-minute APScheduler tick wraps its `_run_cli` call the same way.
 
 A 5-min APScheduler tick re-runs the check so a keychain expiry surfaces within minutes.
 
@@ -441,6 +451,34 @@ Every CLI subprocess emits structured log lines visible via `/api/dev/logs/strea
 ```
 
 `cost_usd` comes from the CLI's `result` event. Useful for tracking subscription burn rate even though billing is flat — early warning if a hot path balloons.
+
+## 13a. Assumptions to Verify in Implementation
+
+These claims are taken from CLI `--help` output and Anthropic's public CLI
+docs but should be empirically confirmed in the very first step of the
+implementation plan (a 5-minute smoke test against the locally-installed
+binary):
+
+1. **`--json-schema` exit code on validation failure** — the spec assumes
+   the CLI exits non-zero with a parseable stderr message when the model
+   produces JSON that doesn't match the schema, so `_run_cli` can raise
+   `ClaudeCLIError` cleanly. If the CLI instead returns exit 0 with
+   malformed output, we need to add a post-call validator (use the same
+   schema via `jsonschema` lib) inside `_run_cli`.
+2. **stream-json event shape** — §7 parses
+   `{"type":"stream_event","event":{"type":"content_block_delta","delta":{"text":"..."}}}`.
+   Confirm against a live `--output-format stream-json --include-partial-messages`
+   run before wiring the Atlas branch. The CLI's event envelope may use
+   different key names than the SDK's native event types.
+3. **`--effort` accepts arbitrary string values** — assumed to pass
+   through to the model. Confirm `xhigh` and `max` are accepted on
+   Sonnet 4.6 (these are documented as Opus-tier in some places; if
+   Sonnet rejects them, fall back to `high`).
+4. **OAuth keychain on Linux without an active desktop session** — the
+   server is headless. Confirm `claude /login` persists into a backend
+   that can be read by a non-interactive subprocess. If the keychain
+   needs an active D-Bus session, the deploy step must include
+   `gnome-keyring-daemon --unlock` or similar.
 
 ## 14. Non-Obvious Gotchas
 

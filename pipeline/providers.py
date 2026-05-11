@@ -51,6 +51,110 @@ class ClaudeCLITimeoutError(ClaudeCLIError):
     pass
 
 
+def _json_min(obj: dict) -> str:
+    """Compact JSON encode for argv injection."""
+    return json.dumps(obj, separators=(",", ":"), ensure_ascii=False)
+
+
+def _run_cli(
+    prompt: str,
+    *,
+    system: str | None = None,
+    json_schema: dict | None = None,
+    effort: str = "high",
+    timeout_s: float = 120.0,
+    budget_usd: float = 2.00,
+) -> str:
+    """Spawn `claude -p` once, return its stdout. Blocking.
+
+    Acquires `_CLI_SEMAPHORE` so total concurrent subprocesses are bounded
+    by CLAUDE_CLI_MAX_CONCURRENCY (default 5).
+
+    When `json_schema` is provided, uses `--output-format json` so the
+    schema is actually enforced (the CLI silently ignores --json-schema
+    when --output-format=text). The response envelope is parsed and the
+    `structured_output` field is returned as a JSON string for symmetry
+    with the text-mode return type.
+
+    Raises `ClaudeCLITimeoutError` on timeout, `ClaudeCLIError` on any
+    other nonzero exit or malformed JSON envelope.
+    """
+    _ensure_scratch_dir()
+
+    # Re-read CLAUDE_BIN from env at call time so tests can monkeypatch it
+    # after module import (the module-level constant is resolved at import).
+    _bin = _os.environ.get("CLAUDE_BIN") or CLAUDE_BIN
+    # Re-read model at call time for the same reason.
+    _model = _os.environ.get("CLAUDE_CLI_MODEL") or CLAUDE_CLI_MODEL
+
+    out_format = "json" if json_schema is not None else "text"
+    argv: list[str] = [
+        _bin,
+        "--model", _model,
+        "--effort", effort,
+        "--output-format", out_format,
+        "--disable-slash-commands",
+        "--max-budget-usd", f"{budget_usd:.2f}",
+        "--exclude-dynamic-system-prompt-sections",
+    ]
+    if system:
+        argv += ["--append-system-prompt", system]
+    if json_schema is not None:
+        argv += ["--json-schema", _json_min(json_schema)]
+
+    use_stdin = len(prompt) > CLAUDE_CLI_PROMPT_STDIN_THRESHOLD
+    if not use_stdin:
+        argv += ["-p", prompt]
+    else:
+        # Large prompts go via stdin to avoid argv length limits.
+        # Pass a sentinel so the CLI knows to read from stdin.
+        argv += ["-p", "-"]
+
+    env = dict(_os.environ)
+    env["CLAUDE_CODE_NONINTERACTIVE"] = "1"
+
+    run_kwargs = dict(
+        capture_output=True, text=True, env=env,
+        cwd=CLAUDE_CLI_SCRATCH, timeout=timeout_s,
+    )
+    if use_stdin:
+        run_kwargs["input"] = prompt
+
+    with _CLI_SEMAPHORE:
+        try:
+            result = _subprocess.run(argv, **run_kwargs)
+        except _subprocess.TimeoutExpired as e:
+            raise ClaudeCLITimeoutError(
+                f"claude -p timed out after {timeout_s}s",
+                stderr=(e.stderr or b"").decode("utf-8", "replace") if isinstance(e.stderr, bytes) else (e.stderr or ""),
+                exit_code=124,
+            ) from e
+
+    if result.returncode != 0:
+        raise ClaudeCLIError(
+            f"claude -p exit {result.returncode}: {result.stderr.strip()[:240]}",
+            stderr=result.stderr or "",
+            exit_code=result.returncode,
+        )
+
+    if json_schema is None:
+        return result.stdout
+
+    # Schema mode: stdout is a JSON envelope; extract structured_output.
+    try:
+        envelope = json.loads(result.stdout)
+    except json.JSONDecodeError as e:
+        raise ClaudeCLIError(
+            f"claude -p returned non-JSON in json output mode: {result.stdout[:240]}"
+        ) from e
+    structured = envelope.get("structured_output")
+    if structured is None:
+        raise ClaudeCLIError(
+            f"claude -p json envelope missing structured_output: {result.stdout[:240]}"
+        )
+    return json.dumps(structured)
+
+
 # ── Base ───────────────────────────────────────────────────────────────────────
 
 class BaseProvider:

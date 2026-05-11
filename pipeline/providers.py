@@ -577,6 +577,267 @@ def _build_rubric_result(job: dict, req_raw: float, industry_raw: float,
     }
 
 
+# ── JSON schemas for --json-schema CLI mode ────────────────────────────────────
+# These dicts are the structural contract for the three structured Anthropic
+# methods. Originally embedded inside `tool["input_schema"]` for the SDK's
+# forced tool-calling path; lifted to module scope so the upcoming CLI rewrite
+# can pass them directly to `claude -p --json-schema`. The methods still use
+# them via the tool definition until the CLI swap in later tasks.
+
+EXTRACT_PROFILE_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        "name":     {"type": "string"},
+        "email":    {"type": "string"},
+        "linkedin": {"type": "string"},
+        "github":   {"type": "string"},
+        "phone":    {"type": "string"},
+        "location": {"type": "string"},
+        "target_titles": {
+            "type": "array",
+            "description": (
+                "5–8 job titles that fit the candidate's actual "
+                "experience based on what's IN the resume. The "
+                "candidate may be in software, hardware, data, "
+                "design, marketing, sales, healthcare, finance, "
+                "education, operations, etc. Pick titles drawn "
+                "from THEIR background — never default to a "
+                "domain you assume. Every title MUST include an "
+                "`evidence` line quoted from the resume that "
+                "justifies it."
+            ),
+            "items": {
+                "type": "object",
+                "properties": {
+                    "title":    {"type": "string"},
+                    "family":   {"type": "string",
+                                 "description": "Coarse family label (e.g. 'Software Engineering', 'Marketing', 'Clinical')."},
+                    "evidence": {"type": "string",
+                                 "description": "Exact line from the resume that justifies this title."},
+                },
+                "required": ["title", "family", "evidence"],
+            },
+        },
+        "top_hard_skills": {
+            "type": "array",
+            "description": (
+                "Concrete, verifiable competencies the candidate "
+                "actually exercises — programming languages, "
+                "software / SaaS tools, frameworks, lab / fab / "
+                "clinical equipment, measurement techniques, "
+                "domain-specific methodologies. NEVER include "
+                "interpersonal traits. Scan EVERY section — "
+                "coursework, projects, work bullets, skills list — "
+                "and extract every concrete competency you see. "
+                "Completeness over brevity. Categories cover "
+                "every professional domain, not just hardware: "
+                "use whichever category best fits each skill."
+            ),
+            "items": {
+                "type": "object",
+                "properties": {
+                    "skill":    {"type": "string"},
+                    "category": {
+                        "type": "string",
+                        "enum": [
+                            "programming_language",
+                            "software_tool",
+                            "framework_library",
+                            "data_platform",
+                            "simulation_environment",
+                            "fab_process",
+                            "lab_instrument",
+                            "measurement_technique",
+                            "hardware_platform",
+                            "design_tool",
+                            "marketing_platform",
+                            "sales_crm",
+                            "finance_accounting",
+                            "healthcare_clinical",
+                            "methodology",
+                            "other",
+                        ],
+                    },
+                    "evidence": {
+                        "type": "string",
+                        "description": "Exact substring from the resume where this skill appears.",
+                    },
+                },
+                "required": ["skill", "category", "evidence"],
+            },
+        },
+        "top_soft_skills": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": (
+                "Behavioral/interpersonal traits ONLY (e.g. Teamwork, "
+                "Technical Writing, Project Management). NEVER include "
+                "lab techniques, instruments, software, or languages."
+            ),
+        },
+        "education": {
+            "type": "array",
+            "items": {"type": "object", "properties": {
+                "degree": {"type": "string"}, "institution": {"type": "string"},
+                "year":   {"type": "string"}, "gpa":         {"type": "string"},
+            }},
+        },
+        "research_experience": {
+            "type": "array",
+            "description": "Academic / lab / research roles — anything with a PI, lab, or research group. Keep SEPARATE from work_experience.",
+            "items": {"type": "object", "properties": {
+                "title":   {"type": "string"}, "company": {"type": "string"},
+                "dates":   {"type": "string"},
+                "bullets": {"type": "array", "items": {"type": "string"}},
+            }},
+        },
+        "work_experience": {
+            "type": "array",
+            "description": "Industry / internship / part-time jobs (non-research).",
+            "items": {"type": "object", "properties": {
+                "title":   {"type": "string"}, "company": {"type": "string"},
+                "dates":   {"type": "string"},
+                "bullets": {"type": "array", "items": {"type": "string"}},
+            }},
+        },
+        "experience": {
+            "type": "array",
+            "description": "Back-compat: union of research_experience + work_experience.",
+            "items": {"type": "object", "properties": {
+                "title":   {"type": "string"}, "company": {"type": "string"},
+                "dates":   {"type": "string"},
+                "bullets": {"type": "array", "items": {"type": "string"}},
+            }},
+        },
+        "projects": {
+            "type": "array",
+            "items": {"type": "object", "properties": {
+                "name":        {"type": "string"},
+                "description": {"type": "string"},
+                "skills_used": {"type": "array", "items": {"type": "string"}},
+            }},
+        },
+        "resume_gaps": {"type": "array", "items": {"type": "string"}},
+        "critical_analysis": {
+            "type": "string",
+            "description": "A 3-4 paragraph brutally honest and detailed critique of the resume. Analyze: 1. Impact & Quantified Achievements (or lack thereof), 2. Skill Density vs. Industry Standards, 3. Structural Clarity for ATS and Human Reviewers, 4. Specific high-value action items to land top-tier roles."
+        },
+    },
+    "required": ["name", "top_hard_skills", "top_soft_skills", "target_titles", "critical_analysis"],
+}
+
+SCORE_JOB_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        "industry":           {"type": "number", "minimum": 0, "maximum": 1,
+                               "description": "How well the job's domain/industry aligns with the candidate's target field and background. 1.0 = exact target field, 0.5 = adjacent/transferable, 0.0 = unrelated."},
+        "location_seniority": {"type": "number", "minimum": 0, "maximum": 1,
+                               "description": "Combined fit of location AND seniority. 1.0 = remote OR matches candidate location AND seniority matches candidate's level. 0.5 = one mismatch. 0.0 = both mismatch."},
+        "reasoning":          {"type": "string",
+                               "description": "ONE sentence grounded in actual JD/profile content — cite a specific requirement, skill, or detail. Do not generalize."},
+    },
+    "required": ["industry", "location_seniority", "reasoning"],
+}
+
+# Module-level sub-dicts reused inside TAILOR_RESUME_SCHEMA.
+_TAILOR_TEXT_NODE: dict = {
+    "type": "object",
+    "properties": {
+        "text":     {"type": "string"},
+        "diff":     {"type": "string", "enum": ["unchanged", "modified", "added"]},
+        "original": {"type": "string"},
+    },
+    "required": ["text"],
+}
+_TAILOR_ROLE_OBJ: dict = {
+    "type": "object",
+    "properties": {
+        "title":    {"type": "string"},
+        "company":  {"type": "string"},
+        "dates":    {"type": "string"},
+        "location": {"type": "string"},
+        "bullets":  {"type": "array", "items": _TAILOR_TEXT_NODE},
+    },
+}
+_TAILOR_GENERIC: dict = {
+    "type": "object",
+    "properties": {
+        "title":   _TAILOR_TEXT_NODE,
+        "detail":  _TAILOR_TEXT_NODE,
+        "bullets": {"type": "array", "items": _TAILOR_TEXT_NODE},
+    },
+}
+_TAILOR_PROJECT: dict = {
+    "type": "object",
+    "properties": {
+        "name":        {"type": "string"},
+        "description": _TAILOR_TEXT_NODE,
+        "skills_used": {"type": "array", "items": _TAILOR_TEXT_NODE},
+        "bullets":     {"type": "array", "items": _TAILOR_TEXT_NODE},
+        "dates":       {"type": "string"},
+        "url":         {"type": "string"},
+    },
+}
+_TAILOR_EDUCATION: dict = {
+    "type": "object",
+    "properties": {
+        "institution": {"type": "string"},
+        "degree":      {"type": "string"},
+        "dates":       {"type": "string"},
+        "gpa":         {"type": "string"},
+        "notes":       {"type": "array", "items": _TAILOR_TEXT_NODE},
+    },
+}
+_TAILOR_SKILL_CAT: dict = {
+    "type": "object",
+    "properties": {
+        "name":  {"type": "string"},
+        "items": {"type": "array", "items": _TAILOR_TEXT_NODE},
+    },
+}
+_TAILOR_CUSTOM: dict = {
+    "type": "object",
+    "properties": {
+        "name":  {"type": "string"},
+        "items": {"type": "array", "items": _TAILOR_GENERIC},
+    },
+}
+
+TAILOR_RESUME_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        "schema_version":       {"type": "integer"},
+        "name":                 {"type": "string"},
+        "email":                {"type": "string"},
+        "phone":                {"type": "string"},
+        "linkedin":             {"type": "string"},
+        "github":               {"type": "string"},
+        "location":             {"type": "string"},
+        "website":              {"type": "string"},
+        "summary":              _TAILOR_TEXT_NODE,
+        "skills":               {"type": "array", "items": _TAILOR_SKILL_CAT},
+        "experience":           {"type": "array", "items": _TAILOR_ROLE_OBJ},
+        "projects":             {"type": "array", "items": _TAILOR_PROJECT},
+        "education":            {"type": "array", "items": _TAILOR_EDUCATION},
+        "awards":               {"type": "array", "items": _TAILOR_GENERIC},
+        "certifications":       {"type": "array", "items": _TAILOR_GENERIC},
+        "publications":         {"type": "array", "items": _TAILOR_GENERIC},
+        "activities":           {"type": "array", "items": _TAILOR_GENERIC},
+        "leadership":           {"type": "array", "items": _TAILOR_GENERIC},
+        "volunteer":            {"type": "array", "items": _TAILOR_GENERIC},
+        "coursework":           {"type": "array", "items": _TAILOR_GENERIC},
+        "languages":            {"type": "array", "items": _TAILOR_GENERIC},
+        "custom_sections":      {"type": "array", "items": _TAILOR_CUSTOM},
+        "section_order":        {"type": "array", "items": {"type": "string"}},
+        "ats_keywords_added":   {"type": "array", "items": {"type": "string"}},
+        "ats_keywords_missing": {"type": "array", "items": {"type": "string"}},
+        "ats_score_before":     {"type": "integer"},
+        "ats_score_after":      {"type": "integer"},
+    },
+    "required": ["name", "skills", "experience", "education", "section_order"],
+}
+
+
 # ── 1. Anthropic (Claude) ──────────────────────────────────────────────────────
 
 class AnthropicProvider(BaseProvider):
@@ -669,147 +930,7 @@ class AnthropicProvider(BaseProvider):
         tool = {
             "name": "save_profile",
             "description": "Save the extracted resume profile as structured data.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "name":     {"type": "string"},
-                    "email":    {"type": "string"},
-                    "linkedin": {"type": "string"},
-                    "github":   {"type": "string"},
-                    "phone":    {"type": "string"},
-                    "location": {"type": "string"},
-                    "target_titles": {
-                        "type": "array",
-                        "description": (
-                            "5–8 job titles that fit the candidate's actual "
-                            "experience based on what's IN the resume. The "
-                            "candidate may be in software, hardware, data, "
-                            "design, marketing, sales, healthcare, finance, "
-                            "education, operations, etc. Pick titles drawn "
-                            "from THEIR background — never default to a "
-                            "domain you assume. Every title MUST include an "
-                            "`evidence` line quoted from the resume that "
-                            "justifies it."
-                        ),
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "title":    {"type": "string"},
-                                "family":   {"type": "string",
-                                             "description": "Coarse family label (e.g. 'Software Engineering', 'Marketing', 'Clinical')."},
-                                "evidence": {"type": "string",
-                                             "description": "Exact line from the resume that justifies this title."},
-                            },
-                            "required": ["title", "family", "evidence"],
-                        },
-                    },
-                    "top_hard_skills": {
-                        "type": "array",
-                        "description": (
-                            "Concrete, verifiable competencies the candidate "
-                            "actually exercises — programming languages, "
-                            "software / SaaS tools, frameworks, lab / fab / "
-                            "clinical equipment, measurement techniques, "
-                            "domain-specific methodologies. NEVER include "
-                            "interpersonal traits. Scan EVERY section — "
-                            "coursework, projects, work bullets, skills list — "
-                            "and extract every concrete competency you see. "
-                            "Completeness over brevity. Categories cover "
-                            "every professional domain, not just hardware: "
-                            "use whichever category best fits each skill."
-                        ),
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "skill":    {"type": "string"},
-                                "category": {
-                                    "type": "string",
-                                    "enum": [
-                                        "programming_language",
-                                        "software_tool",
-                                        "framework_library",
-                                        "data_platform",
-                                        "simulation_environment",
-                                        "fab_process",
-                                        "lab_instrument",
-                                        "measurement_technique",
-                                        "hardware_platform",
-                                        "design_tool",
-                                        "marketing_platform",
-                                        "sales_crm",
-                                        "finance_accounting",
-                                        "healthcare_clinical",
-                                        "methodology",
-                                        "other",
-                                    ],
-                                },
-                                "evidence": {
-                                    "type": "string",
-                                    "description": "Exact substring from the resume where this skill appears.",
-                                },
-                            },
-                            "required": ["skill", "category", "evidence"],
-                        },
-                    },
-                    "top_soft_skills": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": (
-                            "Behavioral/interpersonal traits ONLY (e.g. Teamwork, "
-                            "Technical Writing, Project Management). NEVER include "
-                            "lab techniques, instruments, software, or languages."
-                        ),
-                    },
-                    "education": {
-                        "type": "array",
-                        "items": {"type": "object", "properties": {
-                            "degree": {"type": "string"}, "institution": {"type": "string"},
-                            "year":   {"type": "string"}, "gpa":         {"type": "string"},
-                        }},
-                    },
-                    "research_experience": {
-                        "type": "array",
-                        "description": "Academic / lab / research roles — anything with a PI, lab, or research group. Keep SEPARATE from work_experience.",
-                        "items": {"type": "object", "properties": {
-                            "title":   {"type": "string"}, "company": {"type": "string"},
-                            "dates":   {"type": "string"},
-                            "bullets": {"type": "array", "items": {"type": "string"}},
-                        }},
-                    },
-                    "work_experience": {
-                        "type": "array",
-                        "description": "Industry / internship / part-time jobs (non-research).",
-                        "items": {"type": "object", "properties": {
-                            "title":   {"type": "string"}, "company": {"type": "string"},
-                            "dates":   {"type": "string"},
-                            "bullets": {"type": "array", "items": {"type": "string"}},
-                        }},
-                    },
-                    "experience": {
-                        "type": "array",
-                        "description": "Back-compat: union of research_experience + work_experience.",
-                        "items": {"type": "object", "properties": {
-                            "title":   {"type": "string"}, "company": {"type": "string"},
-                            "dates":   {"type": "string"},
-                            "bullets": {"type": "array", "items": {"type": "string"}},
-                        }},
-                    },
-                    "projects": {
-                        "type": "array",
-                        "items": {"type": "object", "properties": {
-                            "name":        {"type": "string"},
-                            "description": {"type": "string"},
-                            "skills_used": {"type": "array", "items": {"type": "string"}},
-                        }},
-                    },
-                    "resume_gaps": {"type": "array", "items": {"type": "string"}},
-                    "critical_analysis": {
-                        "type": "string",
-                        "description": "A 3-4 paragraph brutally honest and detailed critique of the resume. Analyze: 1. Impact & Quantified Achievements (or lack thereof), 2. Skill Density vs. Industry Standards, 3. Structural Clarity for ATS and Human Reviewers, 4. Specific high-value action items to land top-tier roles."
-                    },
-                },
-                "required": ["name", "top_hard_skills", "top_soft_skills", "target_titles", "critical_analysis"],
-            },
+            "input_schema": EXTRACT_PROFILE_SCHEMA,
         }
 
         pref_hint = ""
@@ -867,18 +988,7 @@ class AnthropicProvider(BaseProvider):
         tool = {
             "name": "score_job",
             "description": "Judge industry alignment and location/seniority fit. Skill coverage is computed deterministically and provided as input — DO NOT recompute it.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "industry":           {"type": "number", "minimum": 0, "maximum": 1,
-                                           "description": "How well the job's domain/industry aligns with the candidate's target field and background. 1.0 = exact target field, 0.5 = adjacent/transferable, 0.0 = unrelated."},
-                    "location_seniority": {"type": "number", "minimum": 0, "maximum": 1,
-                                           "description": "Combined fit of location AND seniority. 1.0 = remote OR matches candidate location AND seniority matches candidate's level. 0.5 = one mismatch. 0.0 = both mismatch."},
-                    "reasoning":          {"type": "string",
-                                           "description": "ONE sentence grounded in actual JD/profile content — cite a specific requirement, skill, or detail. Do not generalize."},
-                },
-                "required": ["industry", "location_seniority", "reasoning"],
-            },
+            "input_schema": SCORE_JOB_SCHEMA,
         }
         edu = (profile.get("education") or [{}])[0] if profile.get("education") else {}
         candidate_block = (
@@ -928,69 +1038,6 @@ class AnthropicProvider(BaseProvider):
                       source_format: str | None = None) -> dict:
         from .tailored_schema import default_v2
 
-        text_node = {
-            "type": "object",
-            "properties": {
-                "text":     {"type": "string"},
-                "diff":     {"type": "string", "enum": ["unchanged", "modified", "added"]},
-                "original": {"type": "string"},
-            },
-            "required": ["text"],
-        }
-        role_obj = {
-            "type": "object",
-            "properties": {
-                "title":    {"type": "string"},
-                "company":  {"type": "string"},
-                "dates":    {"type": "string"},
-                "location": {"type": "string"},
-                "bullets":  {"type": "array", "items": text_node},
-            },
-        }
-        generic = {
-            "type": "object",
-            "properties": {
-                "title":   text_node,
-                "detail":  text_node,
-                "bullets": {"type": "array", "items": text_node},
-            },
-        }
-        project = {
-            "type": "object",
-            "properties": {
-                "name":        {"type": "string"},
-                "description": text_node,
-                "skills_used": {"type": "array", "items": text_node},
-                "bullets":     {"type": "array", "items": text_node},
-                "dates":       {"type": "string"},
-                "url":         {"type": "string"},
-            },
-        }
-        education = {
-            "type": "object",
-            "properties": {
-                "institution": {"type": "string"},
-                "degree":      {"type": "string"},
-                "dates":       {"type": "string"},
-                "gpa":         {"type": "string"},
-                "notes":       {"type": "array", "items": text_node},
-            },
-        }
-        skill_cat = {
-            "type": "object",
-            "properties": {
-                "name":  {"type": "string"},
-                "items": {"type": "array", "items": text_node},
-            },
-        }
-        custom = {
-            "type": "object",
-            "properties": {
-                "name":  {"type": "string"},
-                "items": {"type": "array", "items": generic},
-            },
-        }
-
         tool = {
             "name": "tailored_resume_v2",
             "description": (
@@ -998,39 +1045,7 @@ class AnthropicProvider(BaseProvider):
                 "Each TextNode carries a diff marker — unchanged | modified | added — so the renderer "
                 "can paint changes in green. Never fabricate dates / titles / companies / institutions / GPAs."
             ),
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "schema_version":       {"type": "integer"},
-                    "name":                 {"type": "string"},
-                    "email":                {"type": "string"},
-                    "phone":                {"type": "string"},
-                    "linkedin":             {"type": "string"},
-                    "github":               {"type": "string"},
-                    "location":             {"type": "string"},
-                    "website":              {"type": "string"},
-                    "summary":              text_node,
-                    "skills":               {"type": "array", "items": skill_cat},
-                    "experience":           {"type": "array", "items": role_obj},
-                    "projects":             {"type": "array", "items": project},
-                    "education":            {"type": "array", "items": education},
-                    "awards":               {"type": "array", "items": generic},
-                    "certifications":       {"type": "array", "items": generic},
-                    "publications":         {"type": "array", "items": generic},
-                    "activities":           {"type": "array", "items": generic},
-                    "leadership":           {"type": "array", "items": generic},
-                    "volunteer":            {"type": "array", "items": generic},
-                    "coursework":           {"type": "array", "items": generic},
-                    "languages":            {"type": "array", "items": generic},
-                    "custom_sections":      {"type": "array", "items": custom},
-                    "section_order":        {"type": "array", "items": {"type": "string"}},
-                    "ats_keywords_added":   {"type": "array", "items": {"type": "string"}},
-                    "ats_keywords_missing": {"type": "array", "items": {"type": "string"}},
-                    "ats_score_before":     {"type": "integer"},
-                    "ats_score_after":      {"type": "integer"},
-                },
-                "required": ["name", "skills", "experience", "education", "section_order"],
-            },
+            "input_schema": TAILOR_RESUME_SCHEMA,
         }
 
         skeleton = default_v2(profile)

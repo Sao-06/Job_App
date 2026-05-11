@@ -194,5 +194,41 @@ def apply_all_migrations(conn: sqlite3.Connection) -> list[str]:
     # naturally by how much of the index ever gets scored or viewed.
     ensure_column(conn, "job_postings", "description", "TEXT")
 
+    # ── user_job_scores ────────────────────────────────────────────────────
+    # Persistent per-(user, job) score cache. Populated by
+    # `pipeline.user_scoring.score_jobs_for_user` whenever a user's primary
+    # resume changes, and periodically refreshed as new jobs land in
+    # `job_postings`. Read by `pipeline.job_search.search` so the feed can
+    # ORDER BY user-specific score DESC without recomputing for every
+    # request. Stored as 0-100 INTEGER to match the SPA's wire shape.
+    if not table_exists(conn, "user_job_scores"):
+        try:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS user_job_scores (
+                    user_id      TEXT NOT NULL,
+                    job_id       TEXT NOT NULL,
+                    score        INTEGER NOT NULL,
+                    coverage     REAL,
+                    title_match  REAL,
+                    loc_sen      REAL,
+                    matched_json TEXT,
+                    missing_json TEXT,
+                    profile_hash TEXT,
+                    computed_at  TEXT NOT NULL,
+                    PRIMARY KEY (user_id, job_id)
+                )
+                """
+            )
+            _log("created table user_job_scores")
+        except sqlite3.OperationalError as exc:
+            _log(f"FAILED creating user_job_scores: {type(exc).__name__}: {exc}")
+            raise
+    ensure_index(conn, "ix_ujs_user_score", "user_job_scores",
+                 "user_id, score DESC")
+    ensure_index(conn, "ix_ujs_user_computed", "user_job_scores",
+                 "user_id, computed_at DESC")
+    ensure_index(conn, "ix_ujs_job", "user_job_scores", "job_id")
+
     conn.commit()
     return get_log()

@@ -589,19 +589,92 @@ def phase3_score_jobs(jobs: list, profile: dict, provider: BaseProvider,
 
     _t0 = time.time()
     scored: list = []
-    for i, job in enumerate(to_llm_score, 1):
-        _ensure_description(job)
-        result = provider.score_job(job, profile)
-        merged = {**job, **result}
-        s = merged.get("score", 0)
-        merged["filter_status"] = "passed" if s >= min_score else "below_threshold"
-        merged["filter_reason"] = "" if s >= min_score else f"score {s} < {min_score}"
-        scored.append(merged)
-        if i % 5 == 0 or i == len(to_llm_score):
-            console.print(
-                f"  [dim]🧠 LLM-scored {i}/{len(to_llm_score)} jobs  "
-                f"({time.time() - _t0:.0f}s elapsed)[/dim]"
-            )
+
+    if to_llm_score:
+        # Pre-fetch descriptions for all top-N jobs before launching threads
+        # so that _ensure_description's optional DB write is not racy.
+        for job in to_llm_score:
+            _ensure_description(job)
+
+        def _score_one(job: dict):
+            """Run provider.score_job; return (job, result, err)."""
+            try:
+                result = provider.score_job(job, profile)
+                return job, result, None
+            except Exception as exc:  # noqa: BLE001
+                return job, None, exc
+
+        max_workers = min(5, len(to_llm_score))
+        # Use a dict to preserve job ordering: job id → future
+        future_to_job: dict = {}
+        scored_map: dict = {}  # job id → merged dict (filled as futures complete)
+
+        with ThreadPoolExecutor(
+            max_workers=max_workers, thread_name_prefix="phase3-score"
+        ) as pool:
+            for job in to_llm_score:
+                fut = pool.submit(_score_one, job)
+                future_to_job[fut] = job
+
+            completed = 0
+            for fut in as_completed(future_to_job, timeout=600):
+                try:
+                    job, result, err = fut.result(timeout=180)
+                except FuturesTimeout:
+                    job = future_to_job[fut]
+                    err = TimeoutError("score_job timed out after 180s")
+                    result = None
+                except Exception as exc:  # noqa: BLE001
+                    job = future_to_job[fut]
+                    err = exc
+                    result = None
+
+                if err is not None:
+                    # Per-job failure → deterministic fallback (never crashes phase)
+                    console.print(
+                        f"  [yellow]⚠ score_job failed for {job.get('id')} "
+                        f"({type(err).__name__}: {err}); using deterministic fallback[/yellow]"
+                    )
+                    coverage, matched, missing = compute_skill_coverage(job, profile)
+                    pts = int(round(coverage * 100))
+                    fallback_result = {
+                        "score": pts,
+                        "score_breakdown": {
+                            "required_skills": {
+                                "raw": coverage, "weight": RUBRIC_WEIGHTS["required_skills"],
+                                "points": int(round(coverage * RUBRIC_WEIGHTS["required_skills"])),
+                            },
+                            "industry": {"raw": 0.5, "weight": RUBRIC_WEIGHTS["industry"],
+                                         "points": int(round(0.5 * RUBRIC_WEIGHTS["industry"]))},
+                            "location_seniority": {
+                                "raw": 0.5, "weight": RUBRIC_WEIGHTS["location_seniority"],
+                                "points": int(round(0.5 * RUBRIC_WEIGHTS["location_seniority"])),
+                            },
+                        },
+                        "matching_skills": matched,
+                        "missing_skills": missing,
+                        "reasoning": "Fallback to deterministic skill coverage (LLM call failed).",
+                    }
+                    merged = {**job, **fallback_result}
+                else:
+                    merged = {**job, **result}
+
+                s = merged.get("score", 0)
+                merged["filter_status"] = "passed" if s >= min_score else "below_threshold"
+                merged["filter_reason"] = "" if s >= min_score else f"score {s} < {min_score}"
+                scored_map[job["id"]] = merged
+
+                completed += 1
+                if completed % 5 == 0 or completed == len(to_llm_score):
+                    console.print(
+                        f"  [dim]🧠 LLM-scored {completed}/{len(to_llm_score)} jobs  "
+                        f"({time.time() - _t0:.0f}s elapsed)[/dim]"
+                    )
+
+        # Restore original order (to_llm_score order = fast-score rank)
+        for job in to_llm_score:
+            if job["id"] in scored_map:
+                scored.append(scored_map[job["id"]])
 
     for job in to_skip:
         merged = {**job}

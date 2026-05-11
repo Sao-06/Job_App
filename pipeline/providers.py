@@ -227,6 +227,14 @@ def _run_cli_stream(
             elif etype == "result" and evt.get("subtype") != "success":
                 err = evt.get("error") or "Claude CLI stream failed"
                 raise ClaudeCLIError(str(err))
+        # After stdout EOF, check exit code — a non-zero exit (e.g. auth failure,
+        # rate-limit) that produces no stream-json output would otherwise be silent.
+        proc.wait()
+        if proc.returncode != 0:
+            stderr_text = (proc.stderr.read() if proc.stderr else "") or ""
+            raise ClaudeCLIError(
+                f"Claude CLI exited {proc.returncode}: {stderr_text.strip() or 'no stderr'}"
+            )
     finally:
         if proc is not None and proc.poll() is None:
             proc.terminate()

@@ -580,6 +580,108 @@ def _start_ingestion() -> None:
         print(f"[ingest] failed to start scheduler: {exc!r}")
 
 
+@app.on_event("startup")
+def _start_user_scoring_loop() -> None:
+    """Persistent per-user scoring refresh — independent of the ingestion
+    scheduler. Every 10 minutes (after a 30 s warm-up) we walk the set of
+    users that already have at least one row in ``user_job_scores`` and
+    incrementally score any jobs that have landed since their last
+    refresh. Full rescores fire on primary-resume change via
+    ``_kick_user_scoring``; this tick keeps stable users in sync with
+    the ingestion firehose without re-touching jobs that already have
+    rows. Gated by ``JOBS_AI_DISABLE_USER_SCORING`` for tests.
+    """
+    if os.environ.get("JOBS_AI_DISABLE_USER_SCORING"):
+        return
+    if _session_store is None:
+        return
+    try:
+        threading.Thread(
+            target=_user_scoring_loop, daemon=True,
+            name="user-scoring-loop",
+        ).start()
+    except Exception as exc:
+        print(f"[user-scoring] loop failed to start: {exc!r}")
+
+
+_USER_SCORING_TICK_SECONDS = 600  # 10 min
+_USER_SCORING_PROFILE_CACHE: dict[str, tuple[float, dict]] = {}
+
+
+def _user_scoring_loop() -> None:
+    """Daemon-thread loop: every ~10 minutes, refresh incremental scores
+    for users with at least one stored row. Pulls the user's profile from
+    `auth_tokens.user_json` → `session_state.state_json` so we don't need
+    a request to be in flight. Best-effort; swallows per-user failures."""
+    time.sleep(30)  # let the boot backfill calm down before the first tick
+    while True:
+        try:
+            _user_scoring_tick()
+        except Exception as exc:
+            print(f"[user-scoring] tick failed: {type(exc).__name__}: {exc}",
+                  file=sys.stderr, flush=True)
+        time.sleep(_USER_SCORING_TICK_SECONDS)
+
+
+def _profile_for_user_id(user_id: str) -> dict | None:
+    """Find the most recent profile JSON for *user_id* by scanning their
+    persisted session_state rows. Falls back to None when the user
+    hasn't uploaded a resume yet."""
+    if _session_store is None or not user_id:
+        return None
+    try:
+        with _session_store.connect() as conn:
+            row = conn.execute(
+                "SELECT ss.state_json FROM session_state ss "
+                "JOIN sessions s ON s.id = ss.session_id "
+                "WHERE s.user_id = ? ORDER BY ss.updated_at DESC LIMIT 1",
+                (user_id,),
+            ).fetchone()
+        if not row or not row[0]:
+            return None
+        st = json.loads(row[0])
+    except Exception:
+        return None
+    profile = st.get("profile") if isinstance(st, dict) else None
+    if not profile:
+        return None
+    if not profile.get("experience_levels"):
+        # Mirror the runtime fallback in `_profile_for_search`: stash the
+        # configured experience_levels so location_seniority math has the
+        # same inputs the live endpoint sees.
+        profile["experience_levels"] = st.get("experience_levels") or []
+    return profile
+
+
+def _user_scoring_tick() -> None:
+    from pipeline import user_scoring as _us
+    try:
+        from pipeline import ingest as _ingest
+        write_lock = getattr(_ingest, "_WRITE_LOCK", None)
+    except Exception:
+        write_lock = None
+    if _session_store is None:
+        return
+    with _session_store.connect() as conn:
+        users = _us.known_user_ids_with_scores(conn, limit=500)
+    if not users:
+        return
+    print(f"[user-scoring] tick — refreshing {len(users)} active user(s)", flush=True)
+    for uid in users:
+        try:
+            profile = _profile_for_user_id(uid)
+            if not profile:
+                continue
+            with _session_store.connect() as conn:
+                _us.score_new_jobs_for_user(
+                    conn, uid, profile, write_lock=write_lock, max_jobs=5000,
+                )
+        except Exception as exc:
+            print(f"[user-scoring] {uid[:8]} failed: {type(exc).__name__}: {exc}",
+                  file=sys.stderr, flush=True)
+            continue
+
+
 @app.on_event("shutdown")
 def _stop_ingestion() -> None:
     try:
@@ -1543,6 +1645,11 @@ def _sync_primary_scalars(record=None, *, force_prefs_refresh: bool = False):
                 _S.current(), pr["profile"],
                 force_refresh=force_prefs_refresh,
             )
+            # Refresh persisted scores for the authenticated user — the
+            # /api/jobs/feed query LEFT JOINs `user_job_scores` and sorts
+            # by that column when present, so a primary change with no
+            # rescore would leave the feed ordered by the previous resume.
+            _kick_user_scoring_for_bound_user(pr["profile"])
         else:
             _S["done"].discard(1)
     else:
@@ -1551,6 +1658,19 @@ def _sync_primary_scalars(record=None, *, force_prefs_refresh: bool = False):
         _S["resume_filename"] = None
         _S["profile"] = None
         _S["done"].discard(1)
+
+
+def _kick_user_scoring_for_bound_user(profile: dict | None) -> None:
+    """Spawn a full rescore for the currently-bound authenticated user.
+
+    Safe to call from any request handler — it's a no-op when there's no
+    authenticated user (anonymous sessions don't have persistent scores;
+    the live `/api/jobs/feed` rerank still ranks the page in real time).
+    """
+    user = _S.get("user") or {}
+    uid = user.get("id") if isinstance(user, dict) else None
+    if uid:
+        _kick_user_scoring(uid, profile, only_new=False)
 
 
 def _serialize_resume(r: dict) -> dict:
@@ -1615,6 +1735,75 @@ def _kick_extraction(record: dict, *, force: bool = False) -> None:
         kwargs={"force": force},
         daemon=True,
     ).start()
+
+
+# ── Persistent user_job_scores plumbing ────────────────────────────────────
+# Tracks which users currently have a full background scoring run in flight
+# so we coalesce duplicate kicks (rapid /api/resume/upload, multiple primary
+# switches, scheduler tick racing the user click) into a single worker.
+_USER_SCORING_LOCKS: dict[str, threading.Lock] = {}
+_USER_SCORING_LOCKS_LOCK = threading.Lock()
+
+
+def _user_scoring_lock(user_id: str) -> threading.Lock:
+    with _USER_SCORING_LOCKS_LOCK:
+        lock = _USER_SCORING_LOCKS.get(user_id)
+        if lock is None:
+            lock = threading.Lock()
+            _USER_SCORING_LOCKS[user_id] = lock
+        return lock
+
+
+def _kick_user_scoring(user_id: str | None, profile: dict | None,
+                        *, only_new: bool = False, max_jobs: int = 30000) -> None:
+    """Spawn a daemon thread that scores every (or every new) live job
+    against *profile* and writes results into ``user_job_scores``.
+
+    Coalesces concurrent kicks per user via ``_USER_SCORING_LOCKS`` — if a
+    full rescore is already running for this user, the second caller is a
+    no-op. Newly-arrived jobs since the in-flight rescore started will be
+    picked up by the periodic ``_user_scoring_tick`` below.
+    """
+    if not user_id or not profile:
+        return
+    if _session_store is None:
+        return
+    lock = _user_scoring_lock(user_id)
+
+    def _run() -> None:
+        if not lock.acquire(blocking=False):
+            # Another rescore is in flight; skip silently.
+            return
+        try:
+            from pipeline import user_scoring as _us
+            try:
+                from pipeline import ingest as _ingest
+                wl = getattr(_ingest, "_WRITE_LOCK", None)
+            except Exception:
+                wl = None
+            try:
+                with _session_store.connect() as conn:
+                    summary = _us.score_jobs_for_user(
+                        conn, user_id, profile,
+                        write_lock=wl, only_new=only_new, max_jobs=max_jobs,
+                    )
+                print(
+                    f"[user-scoring] user={user_id[:8]} only_new={only_new} "
+                    f"scored={summary.get('scored')} skipped={summary.get('skipped')} "
+                    f"hash={summary.get('profile_hash')} "
+                    f"elapsed={summary.get('elapsed_s')}s",
+                    flush=True,
+                )
+            except Exception as exc:
+                print(
+                    f"[user-scoring] WARNING: scoring failed for {user_id[:8]}: "
+                    f"{type(exc).__name__}: {exc}",
+                    file=sys.stderr, flush=True,
+                )
+        finally:
+            lock.release()
+
+    threading.Thread(target=_run, daemon=True, name=f"user-scoring-{user_id[:8]}").start()
 
 
 def _run_extraction_bg(record: dict, state: dict, session_id: str | None,
@@ -1723,6 +1912,13 @@ def _run_extraction_bg(record: dict, state: dict, session_id: str | None,
                 _apply_profile_search_prefs(
                     latest, extraction_result, force_refresh=True
                 )
+                # Persist per-(user, job) scores against the freshly extracted
+                # profile so /api/jobs/feed can ORDER BY score DESC. Runs in
+                # a daemon thread; coalesced per-user via `_user_scoring_lock`
+                # so a flurry of re-extractions doesn't pile up workers.
+                uid = (latest.get("user") or {}).get("id")
+                if uid and extraction_result:
+                    _kick_user_scoring(uid, extraction_result, only_new=False)
         elif extraction_error is not None:
             target["extract_error"] = extraction_error
 
@@ -2778,6 +2974,21 @@ def reset_state(request: Request):
     out_dir = _session_output_dir()
     shutil.rmtree(out_dir, ignore_errors=True)
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Drop any persisted user_job_scores so the next resume upload computes
+    # against a clean slate. The /api/jobs/feed endpoint LEFT JOINs this
+    # table and would otherwise keep sorting by the now-stale previous-
+    # profile match. Best-effort; the table may not exist on older deploys.
+    auth_user = preserved.get("user") or {}
+    uid = auth_user.get("id") if isinstance(auth_user, dict) else None
+    if uid and _session_store is not None:
+        try:
+            from pipeline import user_scoring as _us
+            with _session_store.connect() as conn:
+                _us.delete_user_scores(conn, uid)
+        except Exception as exc:
+            print(f"[reset] delete_user_scores failed for {uid[:8]}: "
+                  f"{type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
     return {"ok": True}
 
 
@@ -4250,9 +4461,33 @@ def _truthy(value: str | None) -> bool:
 def _profile_for_search() -> dict | None:
     pr = _S.get("profile") or None
     if pr:
+        titles = [t for t in (pr.get("target_titles") or []) if t and str(t).strip()]
+        # Fallback when the extractor produced no target_titles (heuristic-
+        # only profile, low-end Ollama, etc.). Pull verbatim titles from
+        # work_experience so the title alignment signal isn't 0% for every
+        # job just because the title-rules didn't fire on a niche resume.
+        if not titles:
+            for bucket in ("work_experience", "experience", "research_experience"):
+                for row in (pr.get(bucket) or []):
+                    t = (row.get("title") if isinstance(row, dict) else "") or ""
+                    t = str(t).strip()
+                    if t:
+                        titles.append(t)
+                    if len(titles) >= 6:
+                        break
+                if len(titles) >= 6:
+                    break
+        # User-stated job_titles also count as targets — they're the
+        # explicit search preferences from the Settings page.
+        stated = [t.strip() for t in (_S.get("job_titles") or "").split(",") if t.strip()]
+        for s in stated:
+            if s not in titles:
+                titles.append(s)
         return {
-            "target_titles": pr.get("target_titles") or [],
+            "target_titles": titles,
             "top_hard_skills": pr.get("top_hard_skills") or [],
+            "location": pr.get("location") or "",
+            "experience_levels": _S.get("experience_levels") or [],
         }
     # Fall back to bare config so we still rank by user-stated job_titles
     # before any LLM extraction has finished.
@@ -4330,9 +4565,12 @@ def jobs_feed(request: Request):
     )
     profile_for_search = _profile_for_search()
     profile_complete = _profile_is_meaningful(profile_for_search)
+    auth_user = _S.get("user") or {}
+    feed_uid = auth_user.get("id") if isinstance(auth_user, dict) else None
     with _session_store.connect() as conn:
         page = search(conn=conn, filters=filters, profile=profile_for_search,
-                      cursor=qs.get("cursor") or None, limit=limit)
+                      cursor=qs.get("cursor") or None, limit=limit,
+                      user_id=feed_uid)
     # Drop hidden ids client-side intent applied here too.
     hidden = _S.get("hidden_ids") or set()
     visible = [j for j in page.jobs if j.id not in hidden]
@@ -4351,17 +4589,26 @@ def jobs_feed(request: Request):
 def _profile_is_meaningful(profile: dict | None) -> bool:
     """Does the profile have enough signal to score jobs against?
 
-    A "meaningful" profile has at least 2 hard skills OR at least 1 target
-    title. Below that, every score is mostly the rerank composite's
-    text-search base — which produces the "blank resume reads 68% on a
-    senior hardware role" failure mode. We'd rather render "—" with a
-    complete-your-profile prompt than fabricate a match.
+    A "meaningful" profile has at least 2 hard skills, OR at least 1 target
+    title, OR at least 1 work/research experience entry with a real title
+    or company. The work-experience branch was added so an LLM that
+    failed to populate `target_titles` (low-end Ollama, heuristic-only
+    extract) doesn't completely zero out scoring even though the resume
+    clearly has career signal. Below that, every score collapses to
+    text-search relevance — which produced the "blank resume reads 68%
+    on a senior hardware role" failure mode.
     """
     if not profile:
         return False
     skills = profile.get("top_hard_skills") or []
     titles = profile.get("target_titles") or []
-    return len([s for s in skills if s and str(s).strip()]) >= 2 \
+    has_work = any(
+        r and isinstance(r, dict) and (r.get("title") or r.get("company"))
+        for bucket in ("work_experience", "experience", "research_experience")
+        for r in (profile.get(bucket) or [])
+    )
+    return has_work \
+        or len([s for s in skills if s and str(s).strip()]) >= 2 \
         or len([t for t in titles if t and str(t).strip()]) >= 1
 
 
@@ -4550,27 +4797,73 @@ async def jobs_score_batch(request: Request):
             out.append(payload)
             continue
 
-        # Quick title-vs-target-titles bonus mirrors phase3's _fast_score
-        # so cards in view get the same shape of score Phase 3 would emit.
+        # Title alignment vs. the candidate's target titles. The same titles
+        # fallback `_profile_for_search` builds (resume work history + Settings
+        # job_titles) so a profile without LLM-extracted `target_titles` still
+        # gets a real signal here. Token-overlap gives partial credit (e.g.
+        # "FPGA Engineer" target × "Hardware Engineer" job = 0.5) instead of
+        # the previous all-or-nothing match.
         title_lower = (rec.get("title") or "").lower()
-        targets = [str(t).lower() for t in (profile.get("target_titles") or []) if t]
+        title_targets = [str(t).strip().lower()
+                          for t in (profile.get("target_titles") or []) if t]
+        if not title_targets:
+            for bucket in ("work_experience", "experience", "research_experience"):
+                for row in (profile.get(bucket) or []):
+                    t = (row.get("title") if isinstance(row, dict) else "") or ""
+                    t = str(t).strip().lower()
+                    if t:
+                        title_targets.append(t)
+                    if len(title_targets) >= 5:
+                        break
+                if len(title_targets) >= 5:
+                    break
+            for t in (_S.get("job_titles") or "").split(","):
+                t = t.strip().lower()
+                if t and t not in title_targets:
+                    title_targets.append(t)
         title_hit = 0.0
-        for t in targets:
+        for t in title_targets:
             t_tokens = [tk for tk in t.split() if len(tk) > 2]
-            if t_tokens and all(tk in title_lower for tk in t_tokens):
+            if not t_tokens:
+                continue
+            hits = sum(1 for tk in t_tokens if tk in title_lower)
+            if hits == len(t_tokens):
                 title_hit = 1.0
                 break
-            elif t in title_lower:
-                title_hit = 1.0
-                break
-            elif any(tk in title_lower for tk in t_tokens):
-                title_hit = max(title_hit, 0.5)
-        # Weighted blend matching providers.RUBRIC_WEIGHTS (50/30/20).
-        # Location/seniority defaults to 0.5 here — the lazy path doesn't
-        # have profile location yet; a fuller composition would call
-        # provider.score_job, but that's an LLM call we want to avoid on
-        # every scroll tick.
-        loc_seniority = 0.5
+            if hits:
+                title_hit = max(title_hit, hits / len(t_tokens))
+        # Location & seniority: real comparison against the user's profile
+        # location and configured experience_levels rather than a flat 0.5.
+        prof_loc = str(profile.get("location") or "").strip().lower()
+        job_loc = str(rec.get("location") or "").lower()
+        loc_first = prof_loc.split(",")[0].strip() if prof_loc else ""
+        if rec.get("remote") and prof_loc:
+            loc_score = 0.9
+        elif loc_first and loc_first in job_loc:
+            loc_score = 1.0
+        elif prof_loc and any(p.strip() in job_loc for p in prof_loc.split(",") if p.strip()):
+            loc_score = 0.7
+        elif rec.get("remote"):
+            loc_score = 0.6
+        elif not prof_loc:
+            loc_score = 0.5
+        else:
+            loc_score = 0.25
+
+        exp_prefs = _S.get("experience_levels") or profile.get("experience_levels") or []
+        if isinstance(exp_prefs, str):
+            exp_prefs = [exp_prefs]
+        job_exp = (rec.get("experience_level") or "").lower().strip()
+        if not exp_prefs:
+            sen_score = 0.5
+        elif not job_exp or job_exp == "unknown":
+            sen_score = 0.6  # unknown-tagged rows shouldn't penalise — most ingested rows are untagged
+        elif job_exp in [str(e).lower() for e in exp_prefs]:
+            sen_score = 1.0
+        else:
+            sen_score = 0.2
+        loc_seniority = round((loc_score + sen_score) / 2, 3)
+
         score_pct = int(round(
             providers.RUBRIC_WEIGHTS["required_skills"] * coverage
             + providers.RUBRIC_WEIGHTS["industry"] * title_hit
@@ -4583,6 +4876,8 @@ async def jobs_score_batch(request: Request):
             "matched":       matched[:6],
             "missing":       missing[:6],
             "coverage":      round(float(coverage), 3),
+            "title_match":   round(float(title_hit), 3),
+            "loc_seniority": round(float(loc_seniority), 3),
         }
         _score_cache_set((user_id, jid), payload)
         out.append(payload)

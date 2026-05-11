@@ -537,6 +537,42 @@ def _render_resume_latex(profile: dict, tailored: dict, job: dict,
     return "\n".join(out)
 
 
+# ── In-app PDF editing (investigated, intentionally not wired in) ─────────
+#
+# The third-party `nano-pdf` package (https://pypi.org/project/nano-pdf/)
+# offers natural-language PDF page editing: it rasterises the page via
+# Poppler, sends the image + prompt to Google's Gemini 3 Pro Image model,
+# regenerates the visual content, and re-hydrates a searchable text layer
+# via OCR. We evaluated it for "in-app PDF editing of resumes" and
+# decided NOT to depend on it for the following concrete reasons:
+#
+#   1. Architecture mismatch — the structured tailoring pipeline in
+#      heuristic_tailor.py + template_render.py rebuilds the resume from
+#      a structured `TailoredResume v2` JSON skeleton. Edits flow through
+#      that schema, then re-render to PDF via WeasyPrint / reportlab /
+#      pdflatex. Replacing a chunk of that PDF with a model-regenerated
+#      raster page would (a) lose the diff markers the UI relies on to
+#      show what changed and (b) destroy the structured profile data
+#      the rest of the pipeline reads.
+#
+#   2. Native dependency — nano-pdf requires Poppler on the host (the
+#      production Pi already has WeasyPrint's Cairo / Pango stack;
+#      Poppler is a fresh native dep) plus a paid Gemini API key. The
+#      app currently only wires Anthropic + Ollama providers; routing
+#      a separate Gemini billing surface is out of scope.
+#
+#   3. Determinism — the existing tailoring path is reproducible and
+#      respects the no-fabrication mandate (skills_reordered only
+#      reorders existing skills; bullets only reorder existing bullets).
+#      An image-regeneration path can't make that guarantee.
+#
+# If a future "edit my PDF in place" feature lands, the right plumbing
+# is to expose the TailoredResume v2 JSON to the SPA, let the user edit
+# fields there, then re-render via the existing template_render path —
+# NOT to add a parallel image-regeneration path. Leaving this comment
+# here so the next agent doesn't redo the investigation.
+
+
 def _render_resume_pdf_reportlab(pdf_path: Path, profile: dict,
                                  tailored: dict, job: dict,
                                  resume_text: str = "",

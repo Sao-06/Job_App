@@ -272,19 +272,30 @@ def _skill_overlap(profile_skills: Iterable[str], requirements: Iterable[str]) -
 
 
 def _title_match(profile_titles: Iterable[str], title: str) -> float:
+    """Best partial match across all target titles, in [0, 1].
+
+    Per-target: fraction of its (length>2) words that appear in the job
+    title. Take the max across targets so the score reflects the closest
+    fit rather than averaging in unrelated targets (e.g. a candidate
+    with both "Software Engineer" and "Product Manager" targets viewing
+    an SWE role should read 1.0, not 0.5). Returning the per-target
+    average penalised broad targets and was contributing to the "title
+    alignment looks random" reports.
+    """
     if not title:
         return 0.0
     t = title.lower()
-    hits = 0
-    total = 0
+    best = 0.0
     for pt in profile_titles:
         if not pt:
             continue
-        total += 1
-        words = [w for w in re.split(r"\s+", pt.lower()) if len(w) > 2]
-        if any(w in t for w in words):
-            hits += 1
-    return (hits / total) if total else 0.0
+        words = [w for w in re.split(r"\s+", str(pt).lower()) if len(w) > 2]
+        if not words:
+            continue
+        hits = sum(1 for w in words if w in t)
+        if hits:
+            best = max(best, hits / len(words))
+    return best
 
 
 def _normalize_bm25(raw_scores: list[float]) -> list[float]:
@@ -458,13 +469,17 @@ _DEFAULT_PER_ROUND = 1
 
 
 def _row_to_dto(row: tuple, score: float) -> JobDTO:
-    # Row layout: 14 base columns, optionally followed by ``description``,
-    # always followed by ``bm25_score``. So a 15-tuple has no description
-    # and ``row[14]`` is bm25; a 16-tuple has description at ``row[14]`` and
-    # bm25 at ``row[15]``. Both shapes coexist while callers migrate.
+    # Row layout: 14 base columns + description, then optionally `user_score`
+    # (when callers passed user_id), then always `bm25_score` as the last
+    # column. The dispatch below handles all three historical shapes so
+    # this function works with the legacy callers in tests and with the
+    # current /api/jobs/feed shape.
     (jid, url, source, company, title, location, remote, reqs_json,
      salary, exp, edu, cit, category, posted_at) = row[:14]
-    description = (row[14] if len(row) >= 16 else "") or ""
+    if len(row) == 15:
+        description = ""
+    else:
+        description = (row[14] or "") if isinstance(row[14], str) else ""
     reqs = json.loads(reqs_json) if reqs_json else []
     return JobDTO(
         id=jid, url=url, source=source, company=company, title=title,
@@ -487,8 +502,19 @@ def search(*, conn: sqlite3.Connection,
            limit: int = 30,
            rank_pool: int = _DEFAULT_RANK_POOL,
            dedupe: bool = True,
-           per_round: int = _DEFAULT_PER_ROUND) -> SearchPage:
-    """One-shot read against the active jobs index. p95 target < 250 ms."""
+           per_round: int = _DEFAULT_PER_ROUND,
+           user_id: str | None = None) -> SearchPage:
+    """One-shot read against the active jobs index. p95 target < 250 ms.
+
+    When *user_id* is provided AND the ``user_job_scores`` table contains
+    rows for that user, the SQL pool join surfaces the stored 0–100 match
+    score as ``user_score`` and the rerank step uses it as the dominant
+    signal. This keeps the feed sorted by genuine per-user fit (vs. the
+    legacy BM25-only rerank) the moment a primary resume change has been
+    background-scored. Falls through to the rerank composite below for
+    users with no scores yet, and for any individual rows the user hasn't
+    been scored against (newly ingested jobs since their last refresh).
+    """
     cur_state = _decode_cursor(cursor)
     page_offset = cur_state[2] if cur_state else 0
 
@@ -583,20 +609,42 @@ def search(*, conn: sqlite3.Connection,
     # 3000-row rank in well under a second, and we cap to keep memory bounded.
     effective_pool = min(rank_pool * max(1, page_offset + 1), 8000)
 
+    # Cheap LEFT JOIN against the persistent per-user score table. Always
+    # safe — emits NULLs when the user has no row yet (incomplete background
+    # scoring run, or no user_id at all). When at least one row matches,
+    # the rerank below uses the stored 0-100 score as the dominant signal
+    # and the SQL ORDER BY surfaces highest scores first inside each
+    # bm25/posted_at bucket so dedup + diversification operate on the best
+    # rows first.
+    join_scores = ""
+    score_select = ", NULL AS user_score"
+    user_id_params: list[Any] = []
+    score_order_extra = ""
+    if user_id:
+        join_scores = (
+            "LEFT JOIN user_job_scores ujs "
+            "  ON ujs.user_id = ? AND ujs.job_id = jp.id "
+        )
+        user_id_params = [user_id]
+        score_select = ", ujs.score AS user_score"
+        score_order_extra = "ujs.score IS NULL ASC, ujs.score DESC,"
+
     sql = f"""
         SELECT jp.id, jp.canonical_url, jp.source, jp.company, jp.title,
                jp.location, jp.remote, jp.requirements_json, jp.salary_range,
                jp.experience_level, jp.education_required,
                jp.citizenship_required, jp.job_category, jp.posted_at,
-               jp.description,
+               jp.description
+               {score_select},
                {bm25_select}
           FROM job_postings jp
           {join_fts}
+          {join_scores}
          WHERE {' AND '.join(where)}
-         ORDER BY {order_extra} jp.posted_at DESC, jp.id ASC
+         ORDER BY {score_order_extra} {order_extra} jp.posted_at DESC, jp.id ASC
          LIMIT ?
     """
-    main_params = [*fts_params, *where_params, effective_pool]
+    main_params = [*fts_params, *user_id_params, *where_params, effective_pool]
     pool = conn.execute(sql, main_params).fetchall()
     if not pool:
         # Total estimate uses ONLY WHERE bindings — the COUNT(*) query has no
@@ -611,6 +659,8 @@ def search(*, conn: sqlite3.Connection,
     profile_titles = (profile or {}).get("target_titles") or []
     profile_skills = (profile or {}).get("top_hard_skills") or []
     whitelist_lower = {w.strip().lower() for w in (filters.whitelist or ()) if w and w.strip()}
+    # user_score column index — see the SQL: 14 base cols + description + user_score + bm25
+    user_score_idx = 15 if user_id else None
 
     ranked: list[tuple[float, tuple]] = []
     for row, bm in zip(pool, bm25_scores):
@@ -618,7 +668,18 @@ def search(*, conn: sqlite3.Connection,
         sk_ov = _skill_overlap(profile_skills, reqs)
         fr    = _freshness(row[13])              # posted_at column
         tm    = _title_match(profile_titles, row[4])
-        if not fts_q and not profile_skills and not profile_titles:
+        # Persistent per-user score (0-100 INTEGER) — when present this is
+        # the dominant signal: it already encodes coverage, title match,
+        # and location/seniority via the same RUBRIC_WEIGHTS the lazy
+        # path uses. Treat the raw 0-100 as 0-1, blend a small slice of
+        # the live rerank (freshness + bm25) so newly-posted matches
+        # surface within a band of equivalents instead of pinning to
+        # one frozen ordering.
+        user_score_raw = row[user_score_idx] if user_score_idx is not None else None
+        if user_score_raw is not None:
+            us = max(0.0, min(1.0, float(user_score_raw) / 100.0))
+            final = 0.80 * us + 0.10 * fr + 0.10 * bm
+        elif not fts_q and not profile_skills and not profile_titles:
             # No personalization signals at all — sort by recency only.
             final = fr
         else:

@@ -11162,7 +11162,7 @@ function DevPage({ state: globalState, refresh: globalRefresh }) {
                     className="set-input"
                     value={globalState?.ollama_model || ''}
                     onChange={e => saveSessionConfig({ ollama_model: e.target.value })}
-                    placeholder="llama3.2"/>
+                    placeholder="smollm2:135m"/>
                 </div>
               </div>
 

@@ -1241,7 +1241,10 @@ def _load_session_state(session_id: str) -> dict:
     # while they were Pro (or before the gate landed) would otherwise silently
     # keep using a paid model after downgrade. Snap them to the canonical
     # free-tier local model; the SettingsPage UI does the same on next render.
-    plan = (user.get("plan_tier") or "free").lower()
+    # Default fallback is "pro" — we're in the everyone-is-Pro testing phase
+    # (per CLAUDE.md §2). When a user dict is missing plan_tier (legacy data
+    # or in-flight propagation), treat as Pro rather than Free.
+    plan = (user.get("plan_tier") or "pro").lower()
     model = str(state.get("ollama_model") or "")
     if (state.get("mode") == "ollama"
             and model.lower().endswith("cloud")
@@ -2589,7 +2592,10 @@ def _can_use_claude(auth_user: dict | None) -> bool:
         return False
     if auth_user.get("is_developer"):
         return True
-    return (auth_user.get("plan_tier") or "free").lower() == "pro"
+    # Default to "pro" during the everyone-is-Pro testing phase. New signups
+    # are inserted with plan_tier='pro' (session_store.create_user); a missing
+    # field here means legacy/in-flight data, which should be treated as Pro.
+    return (auth_user.get("plan_tier") or "pro").lower() == "pro"
 
 
 def _require_auth_user(request: Request) -> dict:
@@ -2794,7 +2800,7 @@ async def update_config(req: Request):
     # gated below ("coming soon" until Claude launches publicly).
     if body.get("mode") not in (None, "ollama", "anthropic"):
         raise HTTPException(400, f"Invalid mode: {body.get('mode')!r} (expected 'ollama' or 'anthropic')")
-    plan = (auth_user or {}).get("plan_tier") or "free"
+    plan = (auth_user or {}).get("plan_tier") or "pro"  # everyone-is-Pro testing phase
     is_dev = _is_underlying_dev_request(req)
     # Claude is a Pro-tier feature (or dev). Non-permitted users get a 402
     # plan_required so the SPA can show an upgrade prompt.
@@ -5856,8 +5862,10 @@ async def billing_checkout(request: Request):
         raise HTTPException(404, "User not found")
 
     # Already Pro? Send them to the portal instead so they can manage the
-    # existing subscription rather than creating a duplicate.
-    if (user.get("plan_tier") or "free") == "pro":
+    # existing subscription rather than creating a duplicate. Default fallback
+    # is "pro" (everyone-is-Pro testing phase) so a missing plan_tier blocks
+    # accidental double-subscription rather than allowing it.
+    if (user.get("plan_tier") or "pro") == "pro":
         return JSONResponse(
             {"ok": False, "error": "Already on Pro — use the portal to manage the subscription.",
              "code": "already_pro"},

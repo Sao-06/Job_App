@@ -4398,22 +4398,18 @@ def _stream_provider_chat(provider, system: str, messages: list, max_tokens: int
     from pipeline.providers import AnthropicProvider, OllamaProvider, DemoProvider
 
     if isinstance(provider, AnthropicProvider):
-        clean = [
-            {"role": m["role"], "content": str(m.get("content", ""))}
-            for m in (messages or [])
-            if m.get("role") in ("user", "assistant") and (m.get("content") or "").strip()
-        ]
-        if not clean:
+        from pipeline.providers import _run_cli_stream, _collapse_messages
+        prompt = _collapse_messages(messages)
+        if not prompt:
             return
-        with provider.client.messages.stream(
-            model=provider.model,
-            max_tokens=max_tokens,
-            system=system or "",
-            messages=clean,
-        ) as stream:
-            for text in stream.text_stream:
+        try:
+            for text in _run_cli_stream(prompt, system=system or None):
                 if text:
                     yield text
+        except Exception as e:
+            # Surface the failure as a single final yield so the SSE consumer
+            # sees an error message rather than a silent truncation.
+            yield f"\n\n[Atlas error: {type(e).__name__}: {e}]"
         return
 
     if isinstance(provider, OllamaProvider):

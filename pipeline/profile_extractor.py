@@ -613,6 +613,33 @@ def _title_from_recent_role(profile_or_chunks) -> str | None:
     return None
 
 
+def _keyword_in_corpus(keyword: str, text_l: str, skills_l: set[str]) -> bool:
+    """Match a title-rule keyword against the resume corpus with WORD
+    BOUNDARIES — never a raw substring.
+
+    The raw-substring match was the source of long-running false positives:
+      - "ros" inside "process orders" / "across" / "macros" → tagged the
+        candidate as a Robotics Engineer.
+      - "sre" inside "stores" / "stress" → DevOps / SRE Engineer.
+      - "rn " inside "burn " / "learn " → Clinical / Nursing.
+      - "hr " inside "their " — same idea.
+
+    Skills are already discrete tokens (lowercased), so exact / token-prefix
+    membership is enough. Free-text matching uses ``\\b`` regex anchors so
+    only real word occurrences count.
+    """
+    k = keyword.strip().lower()
+    if not k:
+        return False
+    # Pre-normalized skill set: exact match is the strongest signal.
+    if k in skills_l:
+        return True
+    # Multi-word keywords ("machine learning", "site reliability") match a
+    # whitespace-tolerant version of themselves against the raw text.
+    pattern = r"\b" + r"\s+".join(re.escape(part) for part in k.split()) + r"\b"
+    return re.search(pattern, text_l) is not None
+
+
 def _scan_target_titles(text: str, hard_skills: list[str],
                           parsed_profile: dict | None = None) -> list[str]:
     """Infer 5–8 cross-domain target titles from the resume.
@@ -622,7 +649,10 @@ def _scan_target_titles(text: str, hard_skills: list[str],
          like a role label (3–6 words). That's the strongest signal of
          what the candidate is currently doing.
       2. Apply the cross-domain skill-keyword rules — each rule fires when
-         any of its tokens appears in the resume's skills or raw text.
+         any of its tokens appears in the resume's skills or raw text with
+         word boundaries (NOT raw substring — that was the source of
+         "Robotics Engineer" on sales resumes, because "ros" matched
+         "process" / "across").
       3. Cap at 8 distinct entries; preserve insertion order.
 
     No EE/semiconductor bias — a marketing candidate gets marketing
@@ -643,7 +673,7 @@ def _scan_target_titles(text: str, hard_skills: list[str],
             seen.add(recent.lower())
 
     for keywords, title in _TITLE_RULES:
-        if any(k in skills_l or k in text_l for k in keywords):
+        if any(_keyword_in_corpus(k, text_l, skills_l) for k in keywords):
             key = title.lower()
             if key not in seen:
                 inferred.append(title)

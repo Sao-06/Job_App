@@ -128,6 +128,77 @@ def _build_heuristic_block(heuristic: dict | None) -> str:
 RUBRIC_WEIGHTS = {"required_skills": 50, "industry": 30, "location_seniority": 20}
 
 
+def profile_strength(profile: dict | None) -> float:
+    """Return a [0, 1] multiplier reflecting how complete / genuine a profile is.
+
+    Applied as a final-score multiplier in `user_scoring` and the lazy
+    `/api/jobs/score-batch` path so a template resume — which yields a few
+    placeholder skills + a placeholder title + a stub work entry — can't
+    show up as a "confidently 40% match" on every job. The rubric still
+    runs; this just refuses to inflate hollow matches.
+
+    Components (each clamped to [0, 1]):
+      - skills:       count of `top_hard_skills` vs 10-target
+      - titles:       count of `target_titles` vs 3-target
+      - work:         number of work_experience entries with title/company
+      - bullets:      total bullet count across roles vs 10-target
+      - quantified:   fraction of bullets containing digits (proxy for impact)
+
+    Weighted sum reflects what actually moves the needle on real hiring:
+    skills + work history + quantified bullets carry the most weight.
+    Returns near-zero for an empty profile; ~0.20 for a typical
+    placeholder template; ~0.85+ for a fully-populated real resume.
+
+    Caller multiplies the rubric score by max(0.2, strength) so an
+    extreme-low strength still leaves a *small* signal for downstream
+    sort/dedup, rather than slamming everything to zero. The clamp also
+    matches the existing UI behavior of "—" / low-confidence states.
+    """
+    if not profile or not isinstance(profile, dict):
+        return 0.0
+
+    def _count(seq) -> int:
+        if not seq:
+            return 0
+        return sum(1 for x in seq if x and str(x).strip())
+
+    n_skills = _count(profile.get("top_hard_skills") or [])
+    n_titles = _count(profile.get("target_titles") or [])
+
+    # Work-experience entries that have at least a title or company.
+    # Pull from the standard buckets in priority order; we only need a count.
+    n_work = 0
+    total_bullets = 0
+    quantified_bullets = 0
+    for bucket in ("work_experience", "experience", "research_experience"):
+        for row in (profile.get(bucket) or []):
+            if not isinstance(row, dict):
+                continue
+            if row.get("title") or row.get("company"):
+                n_work += 1
+            for b in (row.get("bullets") or []):
+                if not b:
+                    continue
+                total_bullets += 1
+                if any(c.isdigit() for c in str(b)):
+                    quantified_bullets += 1
+
+    skill_score   = min(1.0, n_skills / 10.0)            # 10 skills ≈ full
+    title_score   = min(1.0, n_titles / 3.0)             # 3 targets ≈ full
+    work_score    = min(1.0, n_work / 3.0)               # 3 roles ≈ full
+    bullet_score  = min(1.0, total_bullets / 10.0)       # 10 bullets ≈ full
+    quant_score   = (min(1.0, quantified_bullets / 5.0)  # 5 quantified ≈ full
+                     if total_bullets else 0.0)
+
+    return (
+        0.30 * skill_score
+        + 0.10 * title_score
+        + 0.25 * work_score
+        + 0.15 * bullet_score
+        + 0.20 * quant_score
+    )
+
+
 _TOKEN_SPLIT_RE = re.compile(r"[^a-z0-9+#.\-]+")
 
 

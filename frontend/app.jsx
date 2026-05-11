@@ -3568,9 +3568,34 @@ function JobDetailView({ job, profile, allJobs, scoreData, allScores,
   const userSkillsSet = new Set(userSkills);
   const jobReqs = String(job.skills || '')
     .split(',').map(s => s.trim()).filter(Boolean);
-  const targetTitlesAll = (profile?.target_titles || [])
+  // Target titles: prefer the explicit `target_titles` extraction, but fall
+  // back to verbatim work-experience titles so a profile that didn't fire
+  // the title-rules still has a real title-alignment signal (otherwise
+  // every job reads 0% title alignment even for clear matches).
+  let targetTitlesAll = (profile?.target_titles || [])
     .map(t => String(t).trim()).filter(Boolean);
-  const profileMeaningful = userSkills.length >= 2 || targetTitlesAll.length >= 1;
+  if (!targetTitlesAll.length) {
+    const seen = new Set();
+    for (const bucket of ['work_experience', 'experience', 'research_experience']) {
+      for (const row of (profile?.[bucket] || [])) {
+        const t = row && typeof row === 'object' ? String(row.title || '').trim() : '';
+        if (t && !seen.has(t.toLowerCase())) {
+          seen.add(t.toLowerCase());
+          targetTitlesAll.push(t);
+        }
+        if (targetTitlesAll.length >= 6) break;
+      }
+      if (targetTitlesAll.length >= 6) break;
+    }
+  }
+  // Has any meaningful work history? Even before target_titles get
+  // extracted, a resume with actual roles has enough signal to score.
+  const hasWorkSignal = [
+    'work_experience', 'experience', 'research_experience'
+  ].some(b => (profile?.[b] || []).some(r => r && (r.title || r.company)));
+  const profileMeaningful = userSkills.length >= 2
+                          || targetTitlesAll.length >= 1
+                          || hasWorkSignal;
 
   const haveLazy = scoreData && typeof scoreData.score === 'number';
   let matched, gaps, skillPct;
@@ -3606,20 +3631,24 @@ function JobDetailView({ job, profile, allJobs, scoreData, allScores,
   }
 
   // ── Title alignment vs. profile target_titles ────────────────────────
-  // Returns 0 when the profile has no target titles. The previous
-  // `titlePct = 60` default was the source of the user's "100% title
-  // alignment on a blank resume" report — it inflated the rubric's
-  // 30-point industry slot by ~18pts for every job regardless of fit.
+  // Prefer the server's `title_match` value (same logic the score-batch
+  // endpoint applied) so the panel agrees with the headline score; fall
+  // back to a local token-overlap compute against the (now broadened)
+  // target_titles when scoreData hasn't arrived yet.
   const targetTitles = profileMeaningful
     ? targetTitlesAll.map(t => t.toLowerCase())
     : [];
   const titleLower   = String(job.role || '').toLowerCase();
   let titlePct = 0;
-  for (const t of targetTitles) {
-    const toks = t.split(/\s+/).filter(w => w.length > 2);
-    if (!toks.length) continue;
-    const hits = toks.filter(w => titleLower.includes(w)).length;
-    titlePct = Math.max(titlePct, Math.round((hits / toks.length) * 100));
+  if (haveLazy && typeof scoreData.title_match === 'number') {
+    titlePct = Math.round(Math.max(0, Math.min(1, scoreData.title_match)) * 100);
+  } else {
+    for (const t of targetTitles) {
+      const toks = t.split(/\s+/).filter(w => w.length > 2);
+      if (!toks.length) continue;
+      const hits = toks.filter(w => titleLower.includes(w)).length;
+      titlePct = Math.max(titlePct, Math.round((hits / toks.length) * 100));
+    }
   }
 
   // ── Location & seniority fit ─────────────────────────────────────────
@@ -3636,7 +3665,9 @@ function JobDetailView({ job, profile, allJobs, scoreData, allScores,
   const locFitGeneric = /united states|usa|us|north america|remote|anywhere/i.test(job.loc || '');
   const profileLocHit = profileLoc && jobLoc.includes(profileLoc);
   let locPct;
-  if (!profileMeaningful) {
+  if (haveLazy && typeof scoreData.loc_seniority === 'number') {
+    locPct = Math.round(Math.max(0, Math.min(1, scoreData.loc_seniority)) * 100);
+  } else if (!profileMeaningful) {
     locPct = 0;
   } else if (profileLocHit) {
     locPct = 95;
@@ -5551,7 +5582,10 @@ function RsDeepDive({ insights, profile, onRescan, rescanning }) {
         </div>
       </header>
 
-      {/* Two-column magazine spread: narrative + supporting sidecar */}
+      {/* Two-column magazine spread: narrative + anchor sidecar (score + target
+          roles only). The supporting insight cards (strengths / red flags /
+          suggestions) live below in a full-width 3-up grid so the page uses
+          horizontal space instead of stacking everything in a narrow column. */}
       <div className="rs-deep-grid">
         <article className="rs-narrative">
           {paragraphs.length > 0
@@ -5614,53 +5648,57 @@ function RsDeepDive({ insights, profile, onRescan, rescanning }) {
               </div>
             </section>
           )}
+        </aside>
+      </div>
 
-          {/* Strengths — green dot list */}
+      {/* Insight cards — strengths / red flags / suggestions across the full
+          page width so the eye scans them as parallel columns instead of a
+          vertical stack of half-empty 380px cards. Each card auto-fits
+          (minmax 260px) so it gracefully collapses to 2-up then 1-up. */}
+      {(strengths.length > 0 || redFlags.length > 0 || suggestions.length > 0) && (
+        <div className="rs-deep-bottom">
           {strengths.length > 0 && (
             <section className="rs-aside-block">
               <div className="rs-aside-h"><Icon name="check-circle-2" size={11}/>Strengths</div>
               <ul className="rs-aside-list good">
-                {strengths.slice(0, 4).map((s, i) => <li key={i}>{s}</li>)}
+                {strengths.slice(0, 5).map((s, i) => <li key={i}>{s}</li>)}
               </ul>
             </section>
           )}
-
-          {/* Red flags — pink dot list */}
           {redFlags.length > 0 && (
             <section className="rs-aside-block">
               <div className="rs-aside-h"><Icon name="alert-triangle" size={11}/>Red flags</div>
               <ul className="rs-aside-list bad">
-                {redFlags.slice(0, 4).map((s, i) => <li key={i}>{s}</li>)}
+                {redFlags.slice(0, 5).map((s, i) => <li key={i}>{s}</li>)}
               </ul>
             </section>
           )}
-
-          {/* Suggestions — accent dot list */}
           {suggestions.length > 0 && (
             <section className="rs-aside-block">
               <div className="rs-aside-h"><Icon name="zap" size={11}/>Suggestions</div>
               <ul className="rs-aside-list accent">
-                {suggestions.slice(0, 4).map((s, i) => <li key={i}>{s}</li>)}
+                {suggestions.slice(0, 5).map((s, i) => <li key={i}>{s}</li>)}
               </ul>
             </section>
           )}
+        </div>
+      )}
 
-          {/* Action card — Re-scan CTA + verification meta */}
-          <section className="rs-aside-block rs-aside-action">
-            <button className="rs-aside-rescan" onClick={onRescan} disabled={rescanning}>
-              {rescanning
-                ? <span className="spin" style={{ width:12, height:12, borderWidth:1.5 }}/>
-                : <Icon name="refresh-cw" size={12} color="#fff"/>}
-              {rescanning ? 'Re-scanning…' : 'Re-scan & re-verify'}
-            </button>
-            <div className="rs-aside-action-hint">
-              {verified
-                ? 'Re-runs the heuristic scanner and asks the configured AI to double-check every claim.'
-                : 'Switch to Anthropic or Ollama in Settings to upgrade this reading from heuristic to AI-verified.'}
-            </div>
-          </section>
-        </aside>
-      </div>
+      {/* Action strip — full-width CTA + verification meta, separated from the
+          insight grid so the re-scan button is always findable. */}
+      <section className="rs-deep-action rs-aside-action">
+        <button className="rs-aside-rescan" onClick={onRescan} disabled={rescanning}>
+          {rescanning
+            ? <span className="spin" style={{ width:12, height:12, borderWidth:1.5 }}/>
+            : <Icon name="refresh-cw" size={12} color="#fff"/>}
+          {rescanning ? 'Re-scanning…' : 'Re-scan & re-verify'}
+        </button>
+        <div className="rs-aside-action-hint">
+          {verified
+            ? 'Re-runs the heuristic scanner and asks the configured AI to double-check every claim.'
+            : 'Switch to Anthropic or Ollama in Settings to upgrade this reading from heuristic to AI-verified.'}
+        </div>
+      </section>
     </div>
   );
 }
@@ -9272,13 +9310,45 @@ function AgentPage({ state, refresh }) {
 
   const appliedCount = (state?.applications || []).filter(a => a.app_status === 'Applied' || a.status === 'Applied').length;
 
-  // Inline persistence for the Phase 2 cap slider — POSTs /api/config on
-  // commit so the value is available to the next phase run. Optimistic
-  // refresh so the displayed number tracks the slider in real time.
-  const tuneMaxJobs = async (n) => {
+  // Phase-2 cap slider. A controlled <input type="range"> bound directly to
+  // state.max_scrape_jobs makes the thumb appear stuck: /api/state only
+  // refreshes every 2–8 s, so onChange's POST + refresh race lags behind the
+  // drag and the displayed value snaps back to the stale server value. We
+  // mirror the slider locally for instant feedback, sync from the server
+  // when the user isn't actively dragging, and debounce the POST so a drag
+  // only sends one /api/config write at the end.
+  const [tuneJobs, setTuneJobs] = useState(state?.max_scrape_jobs ?? 50);
+  const tuneDraggingRef = useRef(false);
+  const tuneTimerRef = useRef(null);
+  useEffect(() => {
+    if (tuneDraggingRef.current) return;
+    const next = state?.max_scrape_jobs;
+    if (Number.isFinite(next) && next !== tuneJobs) setTuneJobs(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state?.max_scrape_jobs]);
+  useEffect(() => () => {
+    if (tuneTimerRef.current) clearTimeout(tuneTimerRef.current);
+  }, []);
+  const tunePersist = async (n) => {
     try { await api.post('/api/config', { max_scrape_jobs: n }); }
-    catch (_) { /* swallow — slider stays local until next refresh */ }
+    catch (_) { /* swallow — local value still reflects intent */ }
+    tuneDraggingRef.current = false;
     refresh();
+  };
+  const tuneMaxJobs = (n) => {
+    setTuneJobs(n);
+    tuneDraggingRef.current = true;
+    if (tuneTimerRef.current) clearTimeout(tuneTimerRef.current);
+    tuneTimerRef.current = setTimeout(() => {
+      tuneTimerRef.current = null;
+      tunePersist(n);
+    }, 250);
+  };
+  const tuneCommit = () => {
+    if (tuneTimerRef.current == null) return;
+    clearTimeout(tuneTimerRef.current);
+    tuneTimerRef.current = null;
+    tunePersist(tuneJobs);
   };
 
   return (
@@ -9383,15 +9453,18 @@ function AgentPage({ state, refresh }) {
                 <Icon name="briefcase" size={12}/>
                 <span>Phase 2 cap — top ranked jobs from the live index</span>
               </div>
-              <div className="agent-tune-val"><b>{state?.max_scrape_jobs ?? 50}</b><i>jobs</i></div>
+              <div className="agent-tune-val"><b>{tuneJobs}</b><i>jobs</i></div>
             </div>
             <input
               type="range"
               className="set-range agent-tune-range"
               min="10" max="200" step="10"
-              value={state?.max_scrape_jobs ?? 50}
+              value={tuneJobs}
               disabled={!!running}
-              onChange={e => tuneMaxJobs(parseInt(e.target.value))}
+              onChange={e => tuneMaxJobs(parseInt(e.target.value, 10))}
+              onMouseUp={tuneCommit}
+              onTouchEnd={tuneCommit}
+              onKeyUp={tuneCommit}
             />
             <div className="agent-tune-helper">
               Phase 2 reads from the local jobs DB (~{state?.job_count || 0} indexed) and ranks by BM25 +
@@ -9478,6 +9551,17 @@ function AgentPage({ state, refresh }) {
 function SettingsPage({ state, refresh, setPage }) {
   const [cfg, setCfg] = useState(state || {});
   const [saving, setSaving] = useState(false);
+  // Keep local `cfg` in sync with the latest `state` prop. Without this,
+  // useState(state) only captures state at mount — if the user picks a
+  // model, navigates away, and the parent's polling refresh lands after
+  // unmount, then on next mount cfg shadows state with a value from the
+  // PREVIOUS mount cycle. Symptom: the dropdown "forgets" the saved model.
+  // Every input here writes via `update()` which immediately POSTs to the
+  // backend, so there are no in-flight unsaved local edits to clobber.
+  useEffect(() => {
+    if (!state) return;
+    setCfg(prev => ({ ...prev, ...state }));
+  }, [state]);
   const [ollamaModels, setOllamaModels] = useState([]);
   const [ollamaOk, setOllamaOk] = useState(null);
   const [planError, setPlanError] = useState(null);
@@ -9571,21 +9655,27 @@ function SettingsPage({ state, refresh, setPage }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cfg.mode, ollamaStatus?.running, ollamaStatus?.pulled, ollamaStatus?.pull?.status]);
 
-  // If the configured model isn't in the available list, snap to the first one.
-  // Free users get snapped to the first local model rather than potentially a cloud model.
+  // Only snap the saved model when it's truly invalid for this user — i.e.
+  // a non-Pro user has a cloud model selected. Do NOT snap just because the
+  // model isn't currently in the pulled list: the `ensure` effect above
+  // starts a background pull for it, and snapping here would silently
+  // overwrite the user's choice before the pull lands (this was the root
+  // cause of "selection is gone after navigating back to Settings").
   useEffect(() => {
     if (cfg.mode !== 'ollama') return;
     const models = ollamaStatus?.models || [];
     if (!models.length) return;
-    const inList = cfg.ollama_model && models.find(m => m.name === cfg.ollama_model);
-    // Free users must not stay on a cloud model — snap away even if it's in the list.
-    if (inList && (isPro || !isCloudModel(cfg.ollama_model))) return;
-    const firstModel = isPro
-      ? models[0]
-      : (models.find(m => !isCloudModel(m.name)) || models[0]);
-    update({ ollama_model: firstModel.name });
+    if (!cfg.ollama_model) {
+      const fallback = (models.find(m => !isCloudModel(m.name)) || models[0])?.name;
+      if (fallback) update({ ollama_model: fallback });
+      return;
+    }
+    if (!isPro && isCloudModel(cfg.ollama_model)) {
+      const local = models.find(m => !isCloudModel(m.name)) || models[0];
+      if (local) update({ ollama_model: local.name });
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ollamaStatus?.models, cfg.mode, isPro]);
+  }, [ollamaStatus?.models, cfg.mode, cfg.ollama_model, isPro]);
 
   const Toggle = ({ field, label, sub }) => (
     <div className="set-row">

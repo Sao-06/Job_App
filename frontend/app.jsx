@@ -4850,7 +4850,6 @@ function AskAtlas({ job, mode, isPro, isDev, scoreData, onClose }) {
             <div className="ask-head-meta">
               <div className="ask-head-eyebrow">
                 <Icon name="sparkles" size={10}/> Atlas · {providerLabel}
-                {mode === 'anthropic' && !isDev && <span className="ask-pro-pill">Soon</span>}
               </div>
               <div className="ask-head-role">{role}</div>
               <div className="ask-head-co">
@@ -5033,7 +5032,6 @@ function TailorDrawer({ job, mode, isPro, isDev, hasResume, scoreData, onClose, 
             <div className="ask-head-meta">
               <div className="ask-head-eyebrow">
                 <Icon name="wand-2" size={10}/> Tailor · {provLbl}
-                {mode === 'anthropic' && !isDev && <span className="ask-pro-pill">Soon</span>}
               </div>
               <div className="ask-head-role">{role}</div>
               <div className="ask-head-co">
@@ -9707,14 +9705,11 @@ function SettingsPage({ state, refresh, setPage }) {
             <div className="set-field">
               <div className="set-label">
                 Model mode
-                <span className="set-label-hint">Claude — coming soon</span>
               </div>
               <select className="set-select" value={cfg.mode} onChange={e => update({ mode: e.target.value })}>
-                {/* Anthropic stays in the schema for developer testing; non-devs
-                    see it as disabled "Coming soon". The backend rejects the
-                    selection regardless, so this is just UX clarity. */}
-                <option value="anthropic" disabled={!isDev}>
-                  Anthropic Claude{isDev ? ' (developer build)' : ' — Coming soon'}
+                <option value="anthropic" disabled={!isDev && !isPro}
+                  title={!isDev && !isPro ? 'Upgrade to Pro to use Claude' : ''}>
+                  Anthropic Claude
                 </option>
                 <option value="ollama">Ollama (local + cloud models)</option>
               </select>
@@ -9724,24 +9719,11 @@ function SettingsPage({ state, refresh, setPage }) {
                 <Icon name="lock" size={14}/>
                 <div className="plan-banner-body">
                   <b>{planError}</b>
-                  <span>
-                    {/coming soon/i.test(planError)
-                      ? "Anthropic Claude isn't live yet — Ollama is selected for now."
-                      : 'Switch to a local model, or upgrade to unlock the high-quality cloud models.'}
-                  </span>
+                  <span>Switch to a local model, or upgrade to unlock the high-quality cloud models.</span>
                 </div>
-                {!/coming soon/i.test(planError) && (
-                  <button className="plan-banner-cta" onClick={() => setPage && setPage('plans')}>
-                    View plans <Icon name="arrow-right" size={11}/>
-                  </button>
-                )}
-              </div>
-            )}
-            {cfg.mode === 'anthropic' && isDev && (
-              <div className="set-field">
-                <div className="set-label">Anthropic API Key <span className="set-label-hint">developer-only</span></div>
-                <input className="set-input" type="password" placeholder="sk-ant-…" value={cfg.api_key || ''}
-                  onChange={e => update({ api_key: e.target.value })}/>
+                <button className="plan-banner-cta" onClick={() => setPage && setPage('plans')}>
+                  View plans <Icon name="arrow-right" size={11}/>
+                </button>
               </div>
             )}
             {cfg.mode === 'ollama' && (
@@ -9964,7 +9946,7 @@ function PlansPage({ state, setPage }) {
               <li><Icon name="check" size={13}/> Job discovery across 22+ sources</li>
               <li><Icon name="check" size={13}/> Cover letter generation (template)</li>
               <li className="plan-feature-muted"><Icon name="x" size={13}/> High-quality cloud models</li>
-              <li className="plan-feature-muted"><Icon name="clock" size={13}/> Anthropic Claude — coming soon</li>
+              <li className="plan-feature-muted"><Icon name="x" size={13}/> Anthropic Claude (Pro only)</li>
             </ul>
             <button className="plan-cta plan-cta-ghost" disabled>
               {tier === 'free' ? 'Active' : 'Downgrade'}
@@ -9987,7 +9969,7 @@ function PlansPage({ state, setPage }) {
               <li><Icon name="check" size={13}/> Sharper résumé critique &amp; ATS gap analysis</li>
               <li><Icon name="check" size={13}/> Faster, more reliable runs (no Pi-hardware ceiling)</li>
               <li><Icon name="check" size={13}/> Priority support</li>
-              <li className="plan-feature-muted"><Icon name="clock" size={13}/> Anthropic Claude — coming soon, included when it launches</li>
+              <li className="plan-feature-hi"><Icon name="sparkles" size={13}/> Claude Sonnet 4.6 via Anthropic CLI — premium AI tailoring &amp; career advice</li>
             </ul>
             {tier === 'pro' ? (
               <button className="plan-cta plan-cta-ghost" disabled>Active</button>
@@ -10002,7 +9984,7 @@ function PlansPage({ state, setPage }) {
               </button>
             )}
             <div className="plan-helper">
-              Stripe checkout coming soon. For now, request upgrade and an admin flips you live.
+              Request upgrade and an admin will flip you live.
             </div>
           </div>
         </div>
@@ -10526,8 +10508,6 @@ function DevPage({ state: globalState, refresh: globalRefresh }) {
   const [loadingFull, setLoadingFull] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [runtime, setRuntime] = useState(null);
-  const [apiKeyDraft, setApiKeyDraft] = useState('');
-  const [savingKey, setSavingKey] = useState(false);
   const [reloadFlash, setReloadFlash] = useState(null);
   const [now, setNow] = useState(() => new Date());
   const [planFlash, setPlanFlash] = useState(null);
@@ -10667,16 +10647,6 @@ function DevPage({ state: globalState, refresh: globalRefresh }) {
     await api.post('/api/config', patch);
     globalRefresh?.();
     loadRuntime();
-  };
-
-  const saveApiKey = async () => {
-    if (!apiKeyDraft.trim()) return;
-    setSavingKey(true);
-    try {
-      await api.post('/api/config', { api_key: apiKeyDraft.trim(), mode: 'anthropic' });
-      setApiKeyDraft('');
-      globalRefresh?.();
-    } finally { setSavingKey(false); }
   };
 
   const reloadEnv = async () => {
@@ -11186,24 +11156,6 @@ function DevPage({ state: globalState, refresh: globalRefresh }) {
                       {m === 'anthropic' ? 'Claude' : 'Ollama'}
                     </button>
                   ))}
-                </div>
-                <div className="sc-field">
-                  <label>Anthropic API key</label>
-                  <div className="sc-key-row">
-                    <input
-                      type="password"
-                      className="set-input"
-                      placeholder="sk-ant-…"
-                      value={apiKeyDraft}
-                      onChange={e => setApiKeyDraft(e.target.value)}
-                      autoComplete="off"
-                      spellCheck={false}/>
-                    <button className="btn-primary sc-action" onClick={saveApiKey} disabled={savingKey || !apiKeyDraft.trim()}>
-                      {savingKey ? <span className="spin"/> : <Icon name="key" size={12}/>}
-                      Save
-                    </button>
-                  </div>
-                  <div className="sc-helper">Held in volatile session memory only. Never written to disk.</div>
                 </div>
                 <div className="sc-field">
                   <label>Ollama model</label>

@@ -1235,7 +1235,7 @@ function MissionControlPanel({ state, setPage, refresh }) {
     },
     {
       n: '06', icon: 'settings-2', label: 'Settings',
-      sub: state?.mode === 'anthropic' ? 'Claude (dev)' : (state?.is_pro ? 'cloud AI' : 'local AI'),
+      sub: state?.mode === 'anthropic' ? 'Claude' : (state?.is_pro ? 'cloud AI' : 'local AI'),
       tone: 'violet', onClick: () => setPage('settings'),
     },
   ];
@@ -9599,10 +9599,21 @@ function SettingsPage({ state, refresh, setPage }) {
       setPlanError(null);
       refresh();
     } catch (e) {
-      // 402 Pro plan required OR 503 coming-soon: roll back optimistic state,
-      // surface inline. The /api/config endpoint emits both — `Pro plan` for
-      // cloud Ollama gating and `coming soon` for Anthropic Claude.
-      if (/Pro plan/i.test(e.message || '') || /coming soon/i.test(e.message || '')) {
+      // The /api/config endpoint can reject with three codes after the
+      // Claude-CLI migration:
+      //   • 402 plan_required        — user is not Pro (cloud Ollama or Claude)
+      //   • 402 plan_required        — same code for "Cloud models require Pro"
+      //   • 503 claude_unavailable   — user IS Pro but the CLI is down server-side
+      // All three roll back the optimistic state and surface inline.
+      const msg = String(e.message || '');
+      const isGateError =
+        /Pro plan/i.test(msg) ||
+        /Pro-tier/i.test(msg) ||
+        /upgrade to (?:use )?Claude/i.test(msg) ||
+        /temporarily unavailable/i.test(msg) ||
+        /plan_required/i.test(msg) ||
+        /claude_unavailable/i.test(msg);
+      if (isGateError) {
         setPlanError(e.message);
         setCfg(prev);
       } else {
@@ -9708,8 +9719,10 @@ function SettingsPage({ state, refresh, setPage }) {
               </div>
               <select className="set-select" value={cfg.mode} onChange={e => update({ mode: e.target.value })}>
                 <option value="anthropic" disabled={!isDev && !isPro}
-                  title={!isDev && !isPro ? 'Upgrade to Pro to use Claude' : ''}>
-                  Anthropic Claude
+                  title={!isDev && !isPro
+                    ? 'Upgrade to Pro to use Claude'
+                    : 'Claude Sonnet 4.6 via Anthropic CLI — published.'}>
+                  Anthropic Claude (Published)
                 </option>
                 <option value="ollama">Ollama (local + cloud models)</option>
               </select>
@@ -10002,11 +10015,12 @@ function PlansPage({ state, setPage }) {
             </div>
           </details>
           <details className="plans-faq-item">
-            <summary>When is Claude available?</summary>
+            <summary>Is Claude available?</summary>
             <div>
-              Anthropic Claude is under active development and will launch at a future date.
-              Pro subscribers will get access automatically when it ships — no separate upgrade
-              or API key needed on your end.
+              Yes — Anthropic Claude Sonnet 4.6 is <b>published</b> and live for Pro
+              subscribers. The app invokes Claude via the official Anthropic CLI on our
+              server (so you don't need an API key — your Pro subscription covers it).
+              Switch to <i>Anthropic Claude</i> in Settings → LLM Provider once you're on Pro.
             </div>
           </details>
           <details className="plans-faq-item">

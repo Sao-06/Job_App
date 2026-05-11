@@ -840,305 +840,219 @@ TAILOR_RESUME_SCHEMA: dict = {
 
 # ── 1. Anthropic (Claude) ──────────────────────────────────────────────────────
 
-class AnthropicProvider(BaseProvider):
-    """Uses Claude Opus 4.7 via the Anthropic SDK.
 
-    Launch-ready configuration (2026-05):
-      • Model: claude-opus-4-7 — most capable, 1M context, 128K max output.
-      • Adaptive thinking only (`budget_tokens` is removed on Opus 4.7).
-      • `output_config.effort = "high"` — best balance of quality vs cost for
-        extraction / scoring / tailoring; xhigh / max are options for the
-        most intelligence-sensitive paths.
-      • Prompt caching on the tailoring tool call — the resume skeleton +
-        JD context are reused across analyze/generate within one session
-        and across multiple jobs in the same run, so we mark the system
-        content with `cache_control: ephemeral`.
-      • JSON mode uses `output_config.format = json_object` (the legacy
-        assistant-turn `{` prefill returns 400 on Opus 4.6+).
+def _collapse_messages(messages: list) -> str:
+    """Render a [{role, content}, ...] history as a single prompt string.
+
+    The CLI takes one -p prompt, not a multi-turn structure. For chat use
+    we serialize prior turns as a transcript so the model retains context.
+    Single-turn user messages return their raw content (no transcript wrapping).
+    """
+    history: list = []
+    for m in (messages or []):
+        if m.get("role") not in ("user", "assistant"):
+            continue
+        content = str(m.get("content") or "").strip()
+        if not content:
+            continue
+        history.append((m["role"], content))
+    if not history:
+        return ""
+    if len(history) == 1 and history[0][0] == "user":
+        return history[0][1]
+    parts: list = ["[Previous conversation]"]
+    for role, content in history[:-1]:
+        label = "User" if role == "user" else "Assistant"
+        parts.append(f"{label}: {content}")
+    last_role, last_content = history[-1]
+    parts.append("")
+    parts.append("[Current message]" if last_role == "user" else "[Assistant continuation]")
+    parts.append(last_content)
+    return "\n".join(parts)
+
+
+class AnthropicProvider(BaseProvider):
+    """Claude Sonnet 4.6 via the local `claude` CLI subprocess.
+
+    Replaces the previous Anthropic SDK transport. Auth is the OAuth
+    keychain on the server (run `claude /login` once during deploy).
+    No ANTHROPIC_API_KEY needed.
+
+    See pipeline.providers._run_cli for the subprocess contract.
+    Per-method effort/timeout choices:
+      • chat:                effort=high, timeout=120s
+      • extract_profile:     effort=high, timeout=120s
+      • score_job:           effort=high, timeout=120s
+      • tailor_resume:       effort=xhigh, timeout=240s (quality-sensitive)
+      • cover_letter/report: effort=high (via chat)
+      • demo_jobs:           json_mode=True via chat
     """
 
-    MODEL = "claude-opus-4-7"
-    DEFAULT_EFFORT = "high"  # low | medium | high | xhigh | max (max is Opus-tier only)
+    MODEL = "claude-sonnet-4-6"
+    DEFAULT_EFFORT = "high"
 
-    def __init__(self, api_key: str = None):
-        import anthropic as _anthropic
-        self.client = _anthropic.Anthropic(api_key=api_key)
+    def __init__(self, api_key: str | None = None):
+        # api_key kwarg kept for back-compat; CLI uses OAuth keychain.
         self.model = self.MODEL
-
-    def _output_config(self, *, effort: str | None = None,
-                       json_object: bool = False) -> dict:
-        """Build `output_config` for messages.create. Effort is required-ish
-        for Opus 4.7 (it now matters more than any prior Opus). Pass
-        `json_object=True` to enforce JSON output without an assistant prefill."""
-        cfg: dict = {"effort": effort or self.DEFAULT_EFFORT}
-        if json_object:
-            cfg["format"] = {"type": "json_object"}
-        return cfg
 
     def chat(self, system: str, messages: list, max_tokens: int = 1024,
              json_mode: bool = False) -> str:
-        # Anthropic SDK takes system as a top-level kwarg, not a message role.
-        clean = [
-            {"role": m["role"], "content": str(m.get("content", ""))}
-            for m in (messages or [])
-            if m.get("role") in ("user", "assistant") and (m.get("content") or "").strip()
-        ]
-        if not clean:
+        prompt = _collapse_messages(messages)
+        if not prompt:
             return ""
-        kwargs: dict = dict(
-            model=self.model,
-            max_tokens=max_tokens,
-            system=system or "",
-            messages=clean,
-            output_config=self._output_config(json_object=json_mode),
-        )
-        resp = self.client.messages.create(**kwargs)
-        out_parts: list[str] = []
-        for block in resp.content:
-            if getattr(block, "type", None) == "text":
-                out_parts.append(getattr(block, "text", "") or "")
-        return "".join(out_parts).strip()
+        schema = {"type": "object", "additionalProperties": True} if json_mode else None
+        return _run_cli(prompt, system=system or None, json_schema=schema,
+                        effort=self.DEFAULT_EFFORT, timeout_s=120.0).strip()
 
-    def _tool_call(self, tool_def: dict, prompt: str,
-                   max_tokens: int = 4096, thinking: bool = False,
-                   *, system: str | list | None = None,
-                   effort: str | None = None) -> dict:
-        """Invoke a forced tool call. `system` may be a string OR a list of
-        content blocks (use the latter to attach `cache_control` to a stable
-        prefix). `effort` overrides the default (e.g. "xhigh" for tailoring)."""
-        kwargs: dict = dict(
-            model=self.model, max_tokens=max_tokens,
-            tools=[tool_def],
-            tool_choice={"type": "tool", "name": tool_def["name"]},
-            messages=[{"role": "user", "content": prompt}],
-            output_config=self._output_config(effort=effort),
-        )
-        if system is not None:
-            kwargs["system"] = system
-        if thinking:
-            kwargs["thinking"] = {"type": "adaptive"}
-        resp = self.client.messages.create(**kwargs)
-        for block in resp.content:
-            if block.type == "tool_use":
-                return block.input
-        return {}
-
-    def extract_profile(self, resume_text: str, preferred_titles: list = None,
-                        heuristic_hint: dict = None) -> dict:
-        from .profile_audit import DOMAIN_TITLE_FAMILIES
-
-        tool = {
-            "name": "save_profile",
-            "description": "Save the extracted resume profile as structured data.",
-            "input_schema": EXTRACT_PROFILE_SCHEMA,
-        }
-
-        pref_hint = ""
+    def extract_profile(self, resume_text: str, preferred_titles: list | None = None,
+                        heuristic_hint: dict | None = None) -> dict:
+        import json as _json
+        prompt_parts: list[str] = []
         if preferred_titles:
-            pref_hint = (
-                f"\nThe candidate's stated preferences are: {', '.join(preferred_titles)}. "
-                "Use these as a tiebreaker only when the resume itself doesn't "
-                "obviously favor one direction."
+            prompt_parts.append(
+                "PREFERRED TITLES (rank these first if evidence supports them): "
+                + ", ".join(preferred_titles)
             )
-
         heur_block = _build_heuristic_block(heuristic_hint)
-
-        prompt = (
-            "Parse this resume in THREE ORDERED PASSES. Do not skip passes.\n\n"
-            f"{heur_block}\n"
-            "PASS 1 — Section map:\n"
-            "Identify and label Education, Research Experience, Work Experience, "
-            "Projects, Skills, and Publications. Separate research roles (lab / PI / "
-            "research group) from industry roles.\n\n"
-            "PASS 2 — Hard-skill extraction (cross-domain — DO NOT assume EE/CS):\n"
-            "Hard skills = concrete, verifiable competencies the candidate "
-            "actually exercises: programming languages, software / SaaS tools, "
-            "frameworks, lab / fab / clinical equipment, measurement techniques, "
-            "domain-specific methodologies. The candidate may be in software, "
-            "hardware, data, design, marketing, sales, healthcare, finance, "
-            "education, operations, etc. — extract whatever's actually there.\n"
-            "Soft skills = behavioral / interpersonal traits ONLY (teamwork, "
-            "communication, project management). NEVER place tools, techniques, "
-            "or platforms under soft skills.\n"
-            "Scan the ENTIRE resume. For each hard skill, include the exact "
-            "substring from the resume as `evidence`. Completeness > brevity.\n\n"
-            "PASS 3 — Target titles (GROUNDED IN RESUME, NOT IN A WHITELIST):\n"
-            "Infer 5–8 titles that match the candidate's actual experience "
-            "based on what's IN the resume — their most recent role, their "
-            "education program, their dominant skill stack, their projects.\n"
-            "Do NOT default to a domain you assume. A candidate with "
-            "marketing experience gets marketing titles. A nurse gets clinical "
-            "titles. A data scientist gets data titles. A hardware engineer "
-            "gets hardware titles. Match the resume.\n"
-            "For the `family` field on each title, you MAY pick from this "
-            "menu of common families (or supply your own if none fits):\n"
-            f"  {chr(10).join('  - ' + f for f in DOMAIN_TITLE_FAMILIES)}\n"
-            "Every suggested title MUST be justified by a specific line from "
-            "the resume — put that line in the `evidence` field. The line "
-            "should come from Work Experience, Research Experience, "
-            "Education, or Projects, whichever is most representative."
-            f"{pref_hint}\n\n"
-            f"Resume:\n{resume_text}"
+        if heur_block:
+            prompt_parts.append(
+                "HEURISTIC HINT (baseline extracted by regex/section parser — "
+                "verify and correct, do NOT discard wholesale):\n"
+                + heur_block
+            )
+        prompt_parts.append("RESUME:\n" + resume_text)
+        prompt_parts.append(
+            "Return a JSON object matching the schema. Every target_title "
+            "and hard_skill MUST include the verbatim evidence line from the resume."
         )
-        return self._tool_call(tool, prompt, thinking=True)
+        prompt = "\n\n".join(prompt_parts)
+        system = (
+            "You are a resume analyst. Extract the candidate's profile as "
+            "structured JSON. Be brutally honest in critical_analysis. Never "
+            "fabricate — every claim must trace to a line in the resume."
+        )
+        raw = _run_cli(prompt, system=system, json_schema=EXTRACT_PROFILE_SCHEMA,
+                       effort=self.DEFAULT_EFFORT, timeout_s=120.0)
+        return _json.loads(raw)
 
     def score_job(self, job: dict, profile: dict) -> dict:
-        # Deterministic skill coverage — the LLM does NOT get to invent this.
-        det_cov, det_matched, det_missing = compute_skill_coverage(job, profile)
-        tool = {
-            "name": "score_job",
-            "description": "Judge industry alignment and location/seniority fit. Skill coverage is computed deterministically and provided as input — DO NOT recompute it.",
-            "input_schema": SCORE_JOB_SCHEMA,
-        }
-        edu = (profile.get("education") or [{}])[0] if profile.get("education") else {}
-        candidate_block = (
-            f"  Skills (top): {', '.join((profile.get('top_hard_skills') or [])[:15])}\n"
-            f"  Target titles: {', '.join(profile.get('target_titles') or [])}\n"
-            f"  Education: {edu.get('degree', '?')} at {edu.get('institution', '?')} ({edu.get('dates', '')})\n"
-            f"  Location preference: {profile.get('location') or 'unspecified'}"
-        )
-        desc = (job.get("description") or "")
+        import json as _json
+        coverage_raw, matched, missing = compute_skill_coverage(job, profile)
+        keep_keys = ("title", "company", "location", "remote", "description",
+                     "requirements", "experience_level", "education_required")
+        job_summary = {k: job.get(k) for k in keep_keys}
+        target_titles = [
+            t.get("title") if isinstance(t, dict) else str(t)
+            for t in profile.get("target_titles", [])
+        ]
+        top_skills = [s.get("skill") if isinstance(s, dict) else s
+                      for s in profile.get("top_hard_skills", [])[:30]]
+        desc = job_summary.get("description") or ""
         if len(desc) > 1200:
-            desc = desc[:1200] + "…"
-        job_block = (
-            f"  Title: {job.get('title')}\n"
-            f"  Company: {job.get('company')}\n"
-            f"  Location: {job.get('location')} (remote={bool(job.get('remote'))})\n"
-            f"  Experience level: {job.get('experience_level', 'unknown')}\n"
-            f"  Requirements: {', '.join((job.get('requirements') or [])[:12]) or '(none listed)'}\n"
-            f"  Description: {desc or '(none)'}"
-        )
+            job_summary["description"] = desc[:1200] + "…"
         prompt = (
-            "You are scoring how well a job posting fits a candidate. Skill "
-            "coverage has ALREADY been computed deterministically — don't redo it. "
-            "Your job is to judge two qualitative dimensions:\n"
-            "  - industry (0.0-1.0): how aligned is the job's domain with the candidate?\n"
-            "  - location_seniority (0.0-1.0): location and seniority fit.\n"
-            "Be strict: 1.0 means perfect fit, 0.5 means partially aligned, 0.0 means clearly off. "
-            "The reasoning MUST cite a concrete requirement, skill, or detail from the JD — "
-            "not generic phrases like 'good match'.\n\n"
-            f"=== Deterministic skill coverage (FYI, do not change): "
-            f"{det_cov:.2f} ({len(det_matched)} matched / {len(det_missing)} missing) ===\n\n"
-            f"Candidate:\n{candidate_block}\n\n"
-            f"Job:\n{job_block}"
+            "Score this job for the candidate. Return JSON with these fields:\n"
+            "  industry: 0..1 (industry/sector fit)\n"
+            "  location_seniority: 0..1 (location + seniority fit)\n"
+            "  reasoning: 1–2 sentences\n\n"
+            f"JOB: {_json.dumps(job_summary, indent=2)}\n\n"
+            f"CANDIDATE: target_titles={target_titles}, top_hard_skills={top_skills}\n"
+            f"DETERMINISTIC skill coverage already computed: {coverage_raw:.2f}"
         )
-        raw = self._tool_call(tool, prompt, max_tokens=512)
+        system = "You are a rigorous job-fit scorer. Be concise. Never inflate."
+        raw = _run_cli(prompt, system=system, json_schema=SCORE_JOB_SCHEMA,
+                       effort=self.DEFAULT_EFFORT, timeout_s=120.0)
+        parsed = _json.loads(raw)
         return _build_rubric_result(
             job,
-            det_cov,
-            raw.get("industry", 0.5),
-            raw.get("location_seniority", 0.5),
-            matched=det_matched,
-            missing=det_missing,
-            reasoning=raw.get("reasoning", ""),
+            req_raw=coverage_raw,  # deterministic, not LLM
+            industry_raw=parsed.get("industry", 0.5),
+            loc_seniority_raw=parsed.get("location_seniority", 0.5),
+            matched=matched,
+            missing=missing,
+            reasoning=parsed.get("reasoning") or "",
         )
 
     def tailor_resume(self, job: dict, profile: dict, resume_text: str,
                       *, selected_keywords: list[str] | None = None,
                       source_format: str | None = None) -> dict:
-        from .tailored_schema import default_v2
-
-        tool = {
-            "name": "tailored_resume_v2",
-            "description": (
-                "Return a complete TailoredResume v2 covering every section in the source resume. "
-                "Each TextNode carries a diff marker — unchanged | modified | added — so the renderer "
-                "can paint changes in green. Never fabricate dates / titles / companies / institutions / GPAs."
-            ),
-            "input_schema": TAILOR_RESUME_SCHEMA,
-        }
-
-        skeleton = default_v2(profile)
+        import json as _json
         sel = list(selected_keywords or [])
         declined = [
             r for r in (job.get("requirements") or [])
             if isinstance(r, str) and r and r not in sel
         ]
-        skeleton_json = json.dumps(skeleton, ensure_ascii=False)
-        if len(skeleton_json) > 12000:
-            skeleton_json = skeleton_json[:12000] + "…"
-
-        # ── System prompt: stable across all tailoring calls in a session →
-        # mark with `cache_control: ephemeral` so the second + onward jobs
-        # served by /api/resume/tailor read instead of write the prefix.
-        system_blocks = [
-            {
-                "type": "text",
-                "text": (
-                    "You are tailoring resumes for specific job applications. "
-                    "Output the COMPLETE TailoredResume v2 — every section the "
-                    "candidate's source resume had — including Awards, "
-                    "Publications, Coursework, Activities, Leadership, "
-                    "Volunteer, Languages, and any custom sections. NEVER "
-                    "fabricate. NEVER change titles, companies, dates, "
-                    "institutions, degrees, or GPAs. For each user-selected "
-                    "keyword: REPHRASE an existing bullet (diff=modified) "
-                    "when it fits, else ADD a new bullet (diff=added) under "
-                    "the most relevant role. Reorder bullets within each role "
-                    "by JD relevance (no diff change for reorder alone). Set "
-                    "diff=unchanged on every TextNode you did not modify."
-                ),
-                "cache_control": {"type": "ephemeral"},
-            },
-        ]
-
+        job_summary = {k: job.get(k) for k in
+                       ("title", "company", "location", "description", "requirements")}
+        profile_summary = {k: profile.get(k) for k in
+                            ("name", "target_titles", "top_hard_skills",
+                             "top_soft_skills", "work_experience", "experience",
+                             "education")}
+        system = (
+            "You are tailoring resumes for specific job applications. "
+            "Output the COMPLETE TailoredResume v2 — every section the "
+            "candidate's source resume had. NEVER fabricate. NEVER change "
+            "titles, companies, dates, institutions, degrees, or GPAs. "
+            "For each user-selected keyword: REPHRASE an existing bullet "
+            "(diff=modified) when it fits, else ADD a new bullet (diff=added) "
+            "under the most relevant role. Reorder bullets within each role "
+            "by JD relevance (no diff change for reorder alone). Set "
+            "diff=unchanged on every TextNode you did not modify."
+        )
         prompt = (
-            f"Tailor this resume for: {job.get('title','')} at {job.get('company','')}.\n\n"
-            "INPUT — full structured profile (you must preserve every section):\n"
-            f"{skeleton_json}\n\n"
-            f"JD Requirements: {', '.join(job.get('requirements', []) or [])}\n"
-            f"JD Description: {(job.get('description') or '')[:2000]}\n\n"
+            f"Tailor this resume for: {job.get('title', '')} at {job.get('company', '')}.\n\n"
+            f"JOB:\n{_json.dumps(job_summary, indent=2)}\n\n"
+            f"CANDIDATE PROFILE:\n{_json.dumps(profile_summary, indent=2)}\n\n"
+            f"RAW RESUME:\n{resume_text[:8000]}\n\n"
             f"USER-SELECTED keywords to weave in: "
-            f"{', '.join(sel) if sel else '(none — default to all must-have JD keywords missing from the resume)'}\n"
-            f"USER-DECLINED keywords (do NOT include): {', '.join(declined[:20])}\n\n"
+            f"{', '.join(sel) if sel else '(none — default to must-have JD keywords missing from resume)'}\n"
+            f"USER-DECLINED keywords (do NOT include): {', '.join(declined[:20])}\n"
             f"Source format hint: {source_format or 'pdf'}\n"
         )
-        # `xhigh` for tailoring — best for agentic / long-output rewriting on Opus 4.7.
-        # 12288 max_tokens — Opus 4.7 token counting differs vs 4.6, give headroom.
-        return self._tool_call(
-            tool, prompt, max_tokens=12288, thinking=True,
-            system=system_blocks, effort="xhigh",
-        )
+        raw = _run_cli(prompt, system=system, json_schema=TAILOR_RESUME_SCHEMA,
+                       effort="xhigh", timeout_s=240.0)
+        return _json.loads(raw)
 
     def generate_cover_letter(self, job: dict, profile: dict) -> str:
-        name = profile.get("name") or OWNER_NAME
-        resp = self.client.messages.create(
-            model=self.model, max_tokens=1024,
-            messages=[{"role": "user", "content": (
-                f"Write a 3-paragraph cover letter for {name} applying to "
-                f"{job['title']} at {job['company']}.\n"
-                "Para 1: Hook + role name. Para 2: Top 2-3 achievements mapped to JD. "
-                "Para 3: Enthusiasm + call to action.\n"
-                f"Candidate name: {name}\n"
-                f"Candidate skills: {', '.join(profile.get('top_hard_skills', [])[:5])}\n"
-                f"Candidate education: "
-                f"{(profile.get('education') or [{}])[0].get('degree', '')} at "
-                f"{(profile.get('education') or [{}])[0].get('institution', '')}\n"
-                f"JD requirements: {', '.join(job.get('requirements', [])[:5])}"
-            )}],
+        skills_blob = ", ".join(
+            (s.get("skill") if isinstance(s, dict) else str(s))
+            for s in profile.get("top_hard_skills", [])[:10]
         )
-        return next(b.text for b in resp.content if b.type == "text")
+        prompt = (
+            "Write a 3–4 paragraph cover letter for this candidate applying "
+            "to this job. Concise, specific, no purple prose.\n\n"
+            f"JOB: {job.get('title')} at {job.get('company')}\n"
+            f"{(job.get('description') or '')[:1500]}\n\n"
+            f"CANDIDATE: {profile.get('name', '')}\n"
+            f"Key skills: {skills_blob}"
+        )
+        return self.chat(
+            system="You write concise, specific cover letters. No fluff.",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=1024,
+        )
 
     def generate_report(self, summary_data: dict) -> str:
-        resp = self.client.messages.create(
-            model=self.model, max_tokens=1024,
-            messages=[{"role": "user", "content": (
-                "Generate a concise job application run summary.\n\n"
-                f"Data:\n{json.dumps(summary_data, indent=2)}\n\n"
-                "Include: overall stats, top 3 applied jobs, manual items, "
-                "2-3 recommended next steps. Plain text only."
-            )}],
+        import json as _json
+        prompt = (
+            "Generate a markdown run report for this job-application session. "
+            "Open with one-sentence summary, then a short bullet list of "
+            "highlights, then concrete next-step recommendations.\n\n"
+            f"SUMMARY DATA:\n{_json.dumps(summary_data, indent=2)}"
         )
-        return next(b.text for b in resp.content if b.type == "text")
+        return self.chat(
+            system="You write concise markdown run-reports.",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=1500,
+        )
 
     def generate_demo_jobs(self, profile: dict, titles: list, location: str) -> list:
-        # Generalize the prompt to any candidate's domain — the previous version
-        # hardcoded "IC design, photonics, FPGA" which leaked into demo runs for
-        # users from completely different fields (marketing, healthcare, finance,
-        # design, etc.). Pull domain hints from the actual profile so the demo
-        # postings match whoever is logged in.
+        import json as _json
         target_titles = [str(t) for t in (titles or []) if str(t).strip()][:5]
-        skills_top = [str(s) for s in (profile.get("top_hard_skills") or []) if str(s).strip()][:8]
+        skills_top = [
+            (s.get("skill") if isinstance(s, dict) else str(s))
+            for s in (profile.get("top_hard_skills") or []) if s
+        ][:8]
         edu = (profile.get("education") or [{}])[0] if profile.get("education") else {}
         degree = str(edu.get("degree") or "").strip()
         # Infer a coarse industry hint from the most-frequent target-title family.
@@ -1172,21 +1086,28 @@ class AnthropicProvider(BaseProvider):
             f"Candidate location preference: {location or 'flexible'} (or Remote)\n"
             + (f"Industry hint (from titles): {industry_hint}.\n" if industry_hint else "")
             + "\n"
-            "Return a JSON array only (no markdown). Each object: "
+            "Return JSON with a 'jobs' array. Each entry: "
             "id, title, company, location, remote (bool), "
             f"posted_date (ISO, last 14 days from {date.today().isoformat()}), "
             "description (2-3 sentences), requirements (array 5-8 strings), "
             "salary_range (string or null), application_url, "
             "platform (LinkedIn|Indeed|Glassdoor|Handshake|Company Site)."
         )
-        resp = self.client.messages.create(
-            model=self.model, max_tokens=4096,
+        raw = self.chat(
+            system="You generate realistic-looking demo job postings.",
             messages=[{"role": "user", "content": prompt}],
-            output_config=self._output_config(),
+            max_tokens=4096,
+            json_mode=True,
         )
-        raw = next(b.text for b in resp.content if b.type == "text")
-        m = re.search(r'\[.*\]', raw, re.DOTALL)
-        return json.loads(m.group()) if m else []
+        try:
+            parsed = _json.loads(raw)
+        except _json.JSONDecodeError:
+            return []
+        if isinstance(parsed, dict):
+            return parsed.get("jobs") or []
+        if isinstance(parsed, list):
+            return parsed
+        return []
 
 
 # ── 2. Demo (regex / template, no API) ────────────────────────────────────────

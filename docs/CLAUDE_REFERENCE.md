@@ -87,9 +87,9 @@ When OllamaProvider's `score_job` returned malformed JSON, every job ended up at
 `/api/auth/google` set `_S["google_oauth_state"]`, but the SPA's 2 s `/api/state` poll completed AFTER and saved its pre-OAuth snapshot, wiping the state. The callback then failed `secrets.compare_digest`. **Invariants**: GET requests AND `/api/state` AND `/api/webhooks/stripe` are in the middleware `skip_save` list; `/api/auth/google` calls `_save_bound_state` explicitly. The SPA's polling `useEffect` is gated on `state.user`.
 
 ### `mode='anthropic'` gate bypass via direct phase calls
-A user could set `mode='anthropic'` before Claude moved to coming-soon, then re-run a phase. **Invariants**:
-- `_run_phase_sse` re-checks `is_developer` against the bound user and aborts non-devs with `code: 'coming_soon'` (belt-and-suspenders against the `/api/config` 503).
-- `_load_session_state` proactively migrates non-dev `mode='anthropic'` sessions back to `'ollama'` and snaps free users off `*-cloud` Ollama models — no stale config can leak past load.
+Pre-Claude-CLI-publish, a user could set `mode='anthropic'` while the gate was dev-only, then re-run a phase. **Invariants (post-publish)**:
+- `_run_phase_sse` re-checks via `_claude_gate_error(user)` and aborts with the right `code` — `plan_required` (402) when the user isn't Pro/dev, or `claude_unavailable` (503) when the user IS Pro but `_CLI_HEALTHY=False`. Belt-and-suspenders against the `/api/config` gate.
+- `_load_session_state` proactively migrates non-permitted `mode='anthropic'` sessions back to `'ollama'` and snaps free users off `*-cloud` Ollama models — no stale config can leak past load.
 
 ### Hardcoded soft-skill list defaults (`9a05dee`) — see above; cross-listed because the underlying anti-pattern (hardcoded lists in extractors) is recurring.
 

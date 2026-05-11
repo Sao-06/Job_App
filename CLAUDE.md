@@ -69,7 +69,7 @@ Canonical map of the codebase, auto-loaded by Claude Code each session. Keep acc
 ### Plan tier (billing)
 - `users.plan_tier ∈ {'free','pro'}` (default `free`). Mirrors `is_developer`: DB → `auth_user` dict → `/api/state` → `state.plan_tier`/`state.is_pro`.
 - **Pricing model**: Free = local Ollama (small open-weight). Pro = cloud Ollama (same daemon proxies `*-cloud` model names to Ollama Turbo's hosted servers).
-- **Gates**: `POST /api/config` returns **402 `plan_required`** for non-Pro/non-dev setting `*-cloud` Ollama models, and **503 `coming_soon`** for non-dev setting `mode='anthropic'`. Belt-and-suspenders mirror gates inside `_run_phase_sse` and `POST /api/resume/tailor`. `_load_session_state` migrates non-dev sessions off `mode='anthropic'` and free users off `*-cloud` models on every load.
+- **Gates**: `POST /api/config` (and mirrors in `_run_phase_sse` + `POST /api/resume/tailor`) route through `_claude_gate_error(auth_user)` which distinguishes three failure modes: **402 `plan_required`** when the caller is not Pro/dev (cloud Ollama OR mode='anthropic'), **503 `claude_unavailable`** when the caller IS Pro/dev but `_CLI_HEALTHY=False` (so a Pro user isn't shown a misleading "upgrade" message when the server-side CLI is the real problem), and **401 `sign_in_required`** when unauthenticated. `_load_session_state` migrates non-permitted sessions off `mode='anthropic'` and free users off `*-cloud` models on every load.
 - **Anthropic launch state (2026-05)**: Claude runs via the local `claude` CLI as a **Pro-tier entitlement** (no API key). Gate is `_can_use_claude(auth_user)` in `app.py` — `True` iff `pipeline.providers._CLI_HEALTHY` AND (`is_developer` OR `plan_tier == 'pro'`). Run `claude /login` once on the server for OAuth. See `docs/CLAUDE_REFERENCE.md` §7 for env vars, credential locations, ops kill switches, and what we lost vs. the former SDK integration.
 - **Manual Pro flip** (ops escape): `_user_store.set_user_plan_tier(uid,'pro')` or Dev Ops Sessions → PLAN → GRANT PRO (`POST /api/dev/users/{user_id}/plan` with `{tier}`). Both go through `_apply_plan_change(uid, tier)`, the single source of truth that writes the DB column AND refreshes every cached `auth_tokens.user_json` so the next `/api/state` poll reflects the change without re-login.
 
@@ -105,7 +105,7 @@ Wipes session state to defaults but **preserves** `user`, `dev_tweaks`, `mode`, 
 
 ## 3. Pipeline (`pipeline/phases.py`)
 
-Each phase is a function that mutates `_S` (via the proxy) and emits log lines to the SSE stream. SSE plumbing in `_run_phase_sse` claims a per-session phase slot (cap 1), runs `fn` in a daemon thread with stdout teed into a queue, and emits `start | log | done | error` events. Pre-checks: `_RUNTIME["maintenance"]` short-circuits with an error event; an `mode='anthropic'` caller who isn't a developer is rejected with `code: "coming_soon"` (belt-and-suspenders against the `/api/config` 503 — Claude is still under development).
+Each phase is a function that mutates `_S` (via the proxy) and emits log lines to the SSE stream. SSE plumbing in `_run_phase_sse` claims a per-session phase slot (cap 1), runs `fn` in a daemon thread with stdout teed into a queue, and emits `start | log | done | error` events. Pre-checks: `_RUNTIME["maintenance"]` short-circuits with an error event; an `mode='anthropic'` caller is run through `_claude_gate_error(user)` which emits the appropriate `code` (`plan_required` for not-Pro, `claude_unavailable` for Pro-but-CLI-down).
 
 | Phase | Function | What it does |
 |---|---|---|
@@ -164,7 +164,7 @@ A background sub-system keeps `data/jobs_ai_sessions.sqlite3:job_postings` fresh
 - **profile** — auto-save (700 ms debounce) form. `AutoSaveBadge` (idle/pending/saving/saved/error). `inFlightRef` + save-snapshot diff handles the keep-typing-during-save race; unmount flushes. `ProfileSelect` covers the 17 canonical US work-auth options.
 - **agent** — 7-phase orchestrator with circular progress ring. Inline `agent-tune` slider for `max_scrape_jobs`. Career-wide AtlasChat sidebar via `/api/atlas/chat/stream`.
 - **settings** — LLM backend, Ollama model picker (`/api/ollama/status`), search prefs, filters, threshold, cover-letter mode, job-discovery section (max_scrape_jobs, days_old).
-- **plans** — Free (local Ollama) vs Pro (cloud Ollama) cards; Anthropic shown as "coming soon" in both. Currently calls `requestUpgrade` stub (admin manually flips `plan_tier`); swap to `startCheckout`/`openPortal` inside `PlansPage` to go live.
+- **plans** — Free (local Ollama) vs Pro (cloud Ollama + **Claude Sonnet 4.6 via Anthropic CLI**) cards. Claude is published and listed as a live Pro feature. Currently calls `requestUpgrade` stub (admin manually flips `plan_tier`); swap to `startCheckout`/`openPortal` inside `PlansPage` to go live with Stripe.
 - **feedback** — textarea → `POST /api/feedback`.
 - **dev** — sessions table, live metrics (2 s tick), live server log SSE, plan-tier editor, restricted CLI. Hidden from non-dev users by `_is_dev_request` server-side AND `state.is_dev` client-side.
 - **auth** — email/password + Google OAuth redirect (labelled "under development").

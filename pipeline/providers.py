@@ -13,6 +13,44 @@ from pathlib import Path
 from .config import console, OWNER_NAME, DEMO_JOBS
 
 
+# ── Claude CLI transport (replaces Anthropic SDK) ──────────────────────────────
+import os as _os
+import shutil as _shutil
+import subprocess as _subprocess
+import threading as _threading
+
+CLAUDE_BIN: str = _os.environ.get("CLAUDE_BIN") or (_shutil.which("claude") or "claude")
+CLAUDE_CLI_MODEL: str = _os.environ.get("CLAUDE_CLI_MODEL", "sonnet")
+CLAUDE_CLI_SCRATCH: str = _os.environ.get("CLAUDE_CLI_SCRATCH", "/tmp/jobapp-claude")
+CLAUDE_CLI_MAX_CONCURRENCY: int = int(_os.environ.get("CLAUDE_CLI_MAX_CONCURRENCY", "5"))
+CLAUDE_CLI_PROMPT_STDIN_THRESHOLD: int = 64 * 1024  # route via stdin above this
+
+# Module-global semaphore — every subprocess spawn acquires it.
+_CLI_SEMAPHORE = _threading.BoundedSemaphore(CLAUDE_CLI_MAX_CONCURRENCY)
+
+# Health flag, toggled by app.py startup hook + 5-min ticker.
+_CLI_HEALTHY: bool = True
+
+def _ensure_scratch_dir() -> str:
+    """Idempotent: create CLAUDE_CLI_SCRATCH if missing. The dir intentionally
+    contains NO CLAUDE.md so the CLI doesn't auto-prepend it to system prompts."""
+    _os.makedirs(CLAUDE_CLI_SCRATCH, exist_ok=True)
+    return CLAUDE_CLI_SCRATCH
+
+
+class ClaudeCLIError(RuntimeError):
+    """Generic Claude CLI failure. `stderr` is the captured stderr text."""
+    def __init__(self, message: str, *, stderr: str = "", exit_code: int | None = None):
+        super().__init__(message)
+        self.stderr = stderr
+        self.exit_code = exit_code
+
+
+class ClaudeCLITimeoutError(ClaudeCLIError):
+    """The subprocess was killed by our timeout wrapper."""
+    pass
+
+
 # ── Base ───────────────────────────────────────────────────────────────────────
 
 class BaseProvider:

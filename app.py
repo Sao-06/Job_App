@@ -380,7 +380,6 @@ def _default_state() -> dict:
     return {
     # LLM backend
     "mode": "ollama",
-    "api_key": "",
     "ollama_model": DEFAULT_OLLAMA_MODEL,
     # Search / apply settings — every field that depends on who the user is
     # starts EMPTY. They get populated from the resume after Phase 1 runs;
@@ -1140,13 +1139,12 @@ def _load_session_state(session_id: str) -> dict:
     # default so every poll of /api/state returns a still-valid mode.
     if state.get("mode") == "demo":
         state["mode"] = "ollama"
-    # Claude is under active development — non-devs who saved `mode='anthropic'`
-    # before that change would otherwise hit the coming-soon gate on every
-    # phase run. Coerce them back to Ollama so the app stays usable. Devs
-    # keep their config so they can continue testing the in-progress
-    # integration.
+    # Non-permitted users who saved `mode='anthropic'` before this gate landed
+    # would otherwise hit the plan_required gate on every phase run. Coerce
+    # them back to Ollama so the app stays usable. Permitted users (devs and
+    # Pro tier) keep their config.
     user = state.get("user") or {}
-    if state.get("mode") == "anthropic" and not user.get("is_developer"):
+    if state.get("mode") == "anthropic" and not _can_use_claude(user):
         state["mode"] = "ollama"
     # Cloud Ollama models are Pro-only. A free user whose session was saved
     # while they were Pro (or before the gate landed) would otherwise silently
@@ -2006,10 +2004,8 @@ def _make_provider():
         return DemoProvider()
     if mode == "ollama":
         return OllamaProvider(model=_S.get("ollama_model", DEFAULT_OLLAMA_MODEL))
-    # Pass the key directly to avoid mutating os.environ — a process-global that
-    # would race when multiple concurrent sessions use different API keys.
-    key = _S.get("api_key", "") or os.environ.get("ANTHROPIC_API_KEY", "")
-    return AnthropicProvider(api_key=key or None)
+    # CLI uses OAuth keychain — no API key needed.
+    return AnthropicProvider()
 
 # ── SSE helper ────────────────────────────────────────────────────────────────
 
@@ -2061,17 +2057,17 @@ def _run_phase_sse(phase: int, fn, state: dict | None = None, session_id: str | 
         })
         return
     # Belt-and-suspenders gate: defends against `mode='anthropic'` sneaking past
-    # the /api/config check (e.g. saved before Claude moved to coming-soon).
-    # Anthropic is dev-only until launch — non-devs get bounced with the same
-    # `coming_soon` code the SPA already understands.
+    # the /api/config check (e.g. saved while on Pro, then downgraded).
+    # Non-permitted users get bounced with `plan_required` so the SPA can show
+    # an upgrade prompt.
     if state and state.get("mode") == "anthropic":
         user = (state.get("user") or {})
-        if not user.get("is_developer"):
+        if not _can_use_claude(user):
             yield _sse({
                 "type": "error",
                 "phase": phase,
-                "message": "Anthropic Claude is under active development — coming soon. Switch to Ollama in Settings.",
-                "code": "coming_soon",
+                "message": "Claude is a Pro-tier feature. Upgrade to use Claude.",
+                "code": "plan_required",
             })
             return
     if not _try_claim_phase(session_id, phase):
@@ -2482,6 +2478,29 @@ def _dedupe_jobs_for_state(jobs: list) -> list:
 
 # ── Resume endpoints ──────────────────────────────────────────────────────────
 
+def _can_use_claude(auth_user: dict | None) -> bool:
+    """Single source of truth for `mode='anthropic'` access.
+
+    Returns True iff the user is permitted AND the CLI subprocess is reachable.
+    Used by:
+      • _load_session_state (coerce non-permitted off anthropic)
+      • update_config (402 plan_required)
+      • _run_phase_sse (reject early in SSE start frame)
+      • resume_tailor (reject early in POST handler)
+
+    Permission = (is_developer OR plan_tier=='pro') AND CLI healthy.
+    Health is toggled by app startup hook + 5-min ticker (Task 12).
+    """
+    from pipeline.providers import _CLI_HEALTHY
+    if not _CLI_HEALTHY:
+        return False
+    if not auth_user:
+        return False
+    if auth_user.get("is_developer"):
+        return True
+    return (auth_user.get("plan_tier") or "free").lower() == "pro"
+
+
 def _require_auth_user(request: Request) -> dict:
     """Reject unauthenticated callers. Prevents ghost profiles from anonymous uploads."""
     auth_user = _auth_token_lookup(request.cookies.get(_AUTH_COOKIE, ""))
@@ -2686,15 +2705,14 @@ async def update_config(req: Request):
         raise HTTPException(400, f"Invalid mode: {body.get('mode')!r} (expected 'ollama' or 'anthropic')")
     plan = (auth_user or {}).get("plan_tier") or "free"
     is_dev = _is_underlying_dev_request(req)
-    # Anthropic Claude is under active development — reserved for developers
-    # until it launches. Non-devs get a 503 + `coming_soon` code so the SPA
-    # can show the right copy instead of an "upgrade to Pro" upsell.
-    if body.get("mode") == "anthropic" and not is_dev:
+    # Claude is a Pro-tier feature (or dev). Non-permitted users get a 402
+    # plan_required so the SPA can show an upgrade prompt.
+    if body.get("mode") == "anthropic" and not _can_use_claude(auth_user):
         return JSONResponse(
             {"ok": False,
-             "error": "Anthropic Claude is under active development — coming soon.",
-             "code": "coming_soon"},
-            status_code=503,
+             "error": "Claude is a Pro-tier feature. Upgrade to use Claude.",
+             "code": "plan_required"},
+            status_code=402,
         )
     # Cloud Ollama models (Ollama Turbo proxied through the Pi) require Pro.
     # Local Ollama models stay free.
@@ -2706,7 +2724,7 @@ async def update_config(req: Request):
             status_code=402,
         )
     for k in (
-        "mode", "api_key", "ollama_model",
+        "mode", "ollama_model",
         "threshold", "job_titles", "location",
         "max_apps", "max_scrape_jobs", "days_old",
         "cover_letter", "blacklist", "whitelist",
@@ -2986,7 +3004,7 @@ def reset_state(request: Request):
     # Preserve auth + provider/UI prefs so the user stays logged in and configured
     preserved = {
         k: _S.get(k) for k in (
-            "user", "dev_tweaks", "mode", "api_key", "ollama_model", "light_mode",
+            "user", "dev_tweaks", "mode", "ollama_model", "light_mode",
             "force_customer_mode",
         )
     }
@@ -3958,12 +3976,12 @@ async def resume_tailor(request: Request):
     if not profile:
         raise HTTPException(400, "Upload a resume first — no profile to tailor against.")
 
-    if _S.get("mode") == "anthropic" and not bool(auth_user.get("is_developer")):
+    if _S.get("mode") == "anthropic" and not _can_use_claude(auth_user):
         return JSONResponse(
             {"ok": False,
-             "error": "Anthropic Claude is under active development — coming soon. Switch to Ollama in Settings.",
-             "code": "coming_soon"},
-            status_code=503,
+             "error": "Claude is a Pro-tier feature. Upgrade to use Claude.",
+             "code": "plan_required"},
+            status_code=402,
         )
 
     body = await request.json()
@@ -5587,7 +5605,6 @@ def dev_runtime_get(request: Request):
     return {
         "runtime": dict(_RUNTIME),
         "env": {
-            "anthropic_key_present": bool(os.environ.get("ANTHROPIC_API_KEY")),
             "ollama_url": OLLAMA_URL,
             "default_ollama_model": DEFAULT_OLLAMA_MODEL,
             "smtp_configured": all(os.environ.get(k) for k in ("SMTP_HOST", "SMTP_USER", "SMTP_PASS")),
@@ -5631,7 +5648,6 @@ async def dev_reload_env(request: Request):
     return {
         "ok": True,
         "loaded": loaded,
-        "anthropic_key_present": bool(os.environ.get("ANTHROPIC_API_KEY")),
         "smtp_configured": all(os.environ.get(k) for k in ("SMTP_HOST", "SMTP_USER", "SMTP_PASS")),
     }
 

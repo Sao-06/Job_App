@@ -5693,12 +5693,14 @@ def dev_runtime_get(request: Request):
     # can still inspect/flip server runtime flags.
     if not _is_underlying_dev_request(request):
         raise HTTPException(403, "Developer access denied")
+    import pipeline.providers as _prov
     return {
         "runtime": dict(_RUNTIME),
         "env": {
             "ollama_url": OLLAMA_URL,
             "default_ollama_model": DEFAULT_OLLAMA_MODEL,
             "smtp_configured": all(os.environ.get(k) for k in ("SMTP_HOST", "SMTP_USER", "SMTP_PASS")),
+            "cli_healthy": _prov._CLI_HEALTHY,
         },
         "session": {
             "force_customer_mode": bool(_S.get("force_customer_mode")),

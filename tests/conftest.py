@@ -139,7 +139,13 @@ def _build_authed_client(tmp_db, monkeypatch, *, is_developer: bool = False,
 
 @pytest.fixture
 def fastapi_client(tmp_db, monkeypatch):
-    """TestClient + tmp DB + an authenticated free-tier user."""
+    """TestClient + tmp DB + an authenticated Pro-tier user.
+
+    Default plan_tier is "pro" (everyone-is-Pro testing phase, per
+    _build_authed_client). Tests that need a free user should call
+    _downgrade_to_free(tmp_db, user_id, token, …) which also refreshes
+    the cached auth_tokens.user_json blob.
+    """
     client, user_id, token = _build_authed_client(tmp_db, monkeypatch)
     yield client, user_id, token
     client.close()
@@ -295,7 +301,13 @@ import textwrap as _textwrap_for_fixtures
 
 @pytest.fixture
 def claude_cli_bin(tmp_path, monkeypatch):
-    """Write a fake `claude` shell script to tmp_path and prepend it to PATH.
+    """Write a fake `claude` executable to tmp_path and prepend it to PATH.
+
+    Cross-platform: on Unix the script is a `#!/usr/bin/env python3` shebang
+    file the kernel can exec directly; on Windows the same Python body lives
+    in `claude_impl.py` and a `.bat` wrapper invokes the running Python
+    interpreter (no shebang support on Windows → bare-script CreateProcess
+    fails with `[WinError 193] %1 is not a valid Win32 application`).
 
     The fake responds to a small set of canned argvs so providers tests can
     exercise _run_cli without spawning the real CLI.
@@ -307,6 +319,8 @@ def claude_cli_bin(tmp_path, monkeypatch):
             claude_cli_bin.set_error("auth failed", exit=1)
             claude_cli_bin.set_stream(["chunk one", "chunk two"])
     """
+    import sys as _sys_for_fixtures
+
     state_file = tmp_path / "claude_state.json"
     state_file.write_text(_json_for_fixtures.dumps({
         "mode": "text", "text": "OK", "exit": 0, "stderr": "",
@@ -350,9 +364,23 @@ def claude_cli_bin(tmp_path, monkeypatch):
     """)
     script_body = _SCRIPT_TEMPLATE.replace("STATE_FILE_PATH", repr(str(state_file)))
 
-    script = tmp_path / "claude"
-    script.write_text(script_body)
-    script.chmod(0o755)
+    if _os_for_fixtures.name == "nt":
+        # Windows: write the Python impl to claude_impl.py and a .bat wrapper
+        # that invokes the running Python interpreter against it. CLAUDE_BIN
+        # points at the .bat so `subprocess.run([CLAUDE_BIN, ...])` resolves.
+        impl = tmp_path / "claude_impl.py"
+        impl.write_text(script_body)
+        script = tmp_path / "claude.bat"
+        # %~dp0 = directory of the bat; %* = all forwarded args. Quote the
+        # Python interpreter path in case it sits under "Program Files".
+        script.write_text(
+            f'@"{_sys_for_fixtures.executable}" "{impl}" %*\r\n'
+        )
+    else:
+        # Unix: kernel-handled shebang, chmod +x, exec directly.
+        script = tmp_path / "claude"
+        script.write_text(script_body)
+        script.chmod(0o755)
 
     class _Helper:
         def set_response(self, text):

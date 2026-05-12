@@ -326,8 +326,8 @@ if __name__ == "__main__":
                         help="Run without any LLM — template/regex mode, zero cost")
     parser.add_argument("--ollama", action="store_true",
                         help="Use local Ollama LLM (free, requires ollama.com)")
-    parser.add_argument("--model",  default="llama3.2",
-                        help="Ollama model name (default: llama3.2)")
+    parser.add_argument("--model",  default="smollm2:135m",
+                        help="Ollama model name (default: smollm2:135m, the Free-tier local model)")
     parser.add_argument("--section-order", default=None,
                         help="Comma-separated resume section order")
     parser.add_argument("--real-apply", action="store_true",

@@ -58,8 +58,12 @@ class HimalayasSource:
         for q in self.QUERIES:
             page = 0
             while page < 6:               # safety cap
+                # Dropped the `country: "US"` filter — Himalayas catalogs
+                # remote roles globally and the country pin was halving the
+                # results to US-only listings. The native location field on
+                # each posting still tells us which countries are eligible.
                 data = http_get_json(_BASE, params={
-                    "q": q, "country": "US", "limit": self.BATCH, "offset": page * self.BATCH,
+                    "q": q, "limit": self.BATCH, "offset": page * self.BATCH,
                 }, timeout=self.timeout_seconds)
                 jobs = (data or {}).get("jobs") or []
                 if not jobs:

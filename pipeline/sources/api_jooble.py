@@ -31,15 +31,35 @@ class JoobleSource:
     MAX_PAGES = 4
     QUERY_BATCH = 8
 
+    # Jooble takes a free-text `location` filter. We rotate through every
+    # major job market so the index spans Western Europe, Asia, LatAm,
+    # Australasia, Middle East, and Africa instead of being US-pinned.
+    # Same call budget as the old US-only path (8 queries × 4 pages per
+    # cycle), now distributed across 16 regions in lockstep — full sweep
+    # of every (query, location) pair lands within ~10 hours at the
+    # 30-min cadence.
+    LOCATIONS: tuple[str, ...] = (
+        "United States", "United Kingdom", "Canada", "Australia",
+        "Germany", "France", "Netherlands", "Spain", "Italy", "Sweden",
+        "India", "Singapore", "Hong Kong", "Japan", "South Korea", "Taiwan",
+        "Brazil", "Mexico",
+        "United Arab Emirates", "Israel", "South Africa", "Poland",
+    )
+
     def __init__(self, api_key: str):
         self.api_key = api_key
         self.url = f"https://jooble.org/api/{api_key}"
         self.rotator = QueryRotator(GENERAL_QUERIES, batch_size=self.QUERY_BATCH)
+        self.location_rotator = QueryRotator(self.LOCATIONS, batch_size=self.QUERY_BATCH)
 
     def fetch(self, since: datetime | None) -> Iterator[RawJob]:
         seen: set[str] = set()
-        for keywords in self.rotator.next_batch():
-            location = "United States"
+        keywords_batch = self.rotator.next_batch()
+        location_batch = self.location_rotator.next_batch()
+        for keywords, location in zip(
+            keywords_batch,
+            location_batch or [self.LOCATIONS[0]] * len(keywords_batch),
+        ):
             for page in range(1, self.MAX_PAGES + 1):
                 data = http_post_json(self.url, {
                     "keywords": keywords,

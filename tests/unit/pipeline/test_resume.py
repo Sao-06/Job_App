@@ -105,11 +105,43 @@ class TestReadResume:
         text, latex = _read_resume(p)
         assert latex == src
 
-    def test_missing_file_returns_demo_resume(self, tmp_path):
+    def test_missing_file_returns_empty(self, tmp_path):
+        # Reader no longer hides missing-file failures behind the demo
+        # resume — empty plaintext signals the caller to surface a real
+        # error to the user instead of silently extracting "Your Name".
         text, latex = _read_resume(tmp_path / "nonexistent.txt")
+        assert text == ""
         assert latex is None
-        # Falls back to the built-in demo.
-        assert "OBJECTIVE" in text or "Your Full Name" in text
+
+    def test_docx_table_text_extracted(self, tmp_path):
+        # Many resumes use tables for sidebar layouts; paragraph-only
+        # extraction misses everything inside cells.
+        try:
+            from docx import Document
+        except ImportError:
+            import pytest
+            pytest.skip("python-docx not installed")
+        doc = Document()
+        doc.add_paragraph("Resume Body Paragraph")
+        table = doc.add_table(rows=1, cols=2)
+        table.cell(0, 0).text = "Jane Tester"
+        table.cell(0, 1).text = "jane@example.com"
+        path = tmp_path / "tabular.docx"
+        doc.save(str(path))
+        text, _ = _read_resume(path)
+        assert "Resume Body Paragraph" in text
+        assert "Jane Tester" in text
+        assert "jane@example.com" in text
+
+    def test_unsupported_extension_returns_empty(self, tmp_path):
+        p = tmp_path / "r.weird"
+        p.write_bytes(b"\x00\x01\x02not text")
+        text, latex = _read_resume(p)
+        # Non-decodable binary input → empty plaintext, no LaTeX source.
+        assert latex is None
+        # Either UTF-8 decoded (best-effort) or empty — never the demo
+        # resume placeholder which would have said "Your Full Name".
+        assert "Your Full Name" not in text
 
     def test_fixtures_resume_text(self, fixtures_dir):
         text, latex = _read_resume(fixtures_dir / "resumes" / "sample_text.txt")
@@ -128,7 +160,11 @@ class TestReadResume:
 
 
 class TestSaveTailoredResume:
-    def test_writes_tex_file(self, tmp_path):
+    """v2: _save_tailored_resume dispatches by source_format. The default path
+    (no source_format → template lib) emits HTML preview + PDF; the explicit
+    .tex path emits .tex + (optionally) PDF + HTML preview."""
+
+    def test_default_path_writes_html_preview(self, tmp_path):
         profile = {"name": "Jane Tester", "email": "j@x.com",
                    "top_hard_skills": ["Python", "Verilog"], "education": [],
                    "experience": [], "projects": []}
@@ -136,14 +172,11 @@ class TestSaveTailoredResume:
                     "experience_bullets": [], "ats_keywords_missing": [],
                     "section_order": ["Skills"]}
         job = {"title": "FPGA Intern", "company": "Acme"}
-        out = _save_tailored_resume(job, tailored, profile,
-                                     output_dir=tmp_path)
-        tex_path = tmp_path / out["tex"]
-        assert tex_path.exists()
-        content = tex_path.read_text(encoding="utf-8")
-        assert "Verilog, Python" in content
-        # Filename safe: no special chars.
-        assert "FPGA" in out["tex"] and "Acme" in out["tex"]
+        out = _save_tailored_resume(job, tailored, profile, output_dir=tmp_path)
+        assert out["html_preview"] is not None
+        html = (tmp_path / out["html_preview"]).read_text(encoding="utf-8")
+        assert "Verilog" in html and "Python" in html
+        assert "FPGA" in out["base"] and "Acme" in out["base"]
 
     def test_pdf_or_skipped(self, tmp_path):
         profile = {"name": "Jane Tester", "education": [], "experience": [],
@@ -156,7 +189,7 @@ class TestSaveTailoredResume:
         # Either a PDF was produced (reportlab path) or it's None (no backend).
         assert out["pdf"] is None or (tmp_path / out["pdf"]).exists()
 
-    def test_with_latex_source_uses_apply_tailoring(self, tmp_path):
+    def test_with_latex_source_in_place_path(self, tmp_path):
         profile = {"name": "Jane Tester", "education": [], "experience": [],
                    "projects": [], "top_hard_skills": []}
         tailored = {"skills_reordered": ["Foo", "Bar"],
@@ -168,6 +201,10 @@ class TestSaveTailoredResume:
         job = {"title": "Eng", "company": "Co"}
         out = _save_tailored_resume(job, tailored, profile,
                                      latex_source=latex_src,
-                                     output_dir=tmp_path)
+                                     output_dir=tmp_path,
+                                     source_format="tex")
+        # In-place LaTeX path emits a .tex file
+        assert out["tex"] is not None
         tex_content = (tmp_path / out["tex"]).read_text(encoding="utf-8")
-        assert "Foo, Bar" in tex_content
+        assert "Foo" in tex_content and "Bar" in tex_content
+        assert out["template_id"] == "in_place_latex"

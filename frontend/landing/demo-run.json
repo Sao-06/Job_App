@@ -1,0 +1,242 @@
+{
+  "_generated_by": "tools/freeze_landing_demo.py",
+  "_note": "Static fixture replayed by the landing-page scrubber. Re-run the freezer when DemoProvider extraction or scoring changes.",
+  "resume": {
+    "filename": "aisha-rahman-cv.pdf",
+    "name": "Aisha Rahman",
+    "email": "aisha.rahman@mit.edu",
+    "location": "Embedded Systems, ML",
+    "linkedin": "linkedin.com/in/aisha-rahman",
+    "education": [
+      {
+        "degree": "B.S. Electrical Engineering and Computer Science, /5.0 Expected May",
+        "institution": "Massachusetts Institute of Technology, Cambridge, MA",
+        "year": "2025",
+        "gpa": "4.7",
+        "location": "",
+        "coursework": [
+          "Digital Systems",
+          "VLSI",
+          "Computer Architecture",
+          "Embedded Systems",
+          "ML for Hardware"
+        ],
+        "honors": []
+      }
+    ],
+    "experience": [
+      {
+        "title": "",
+        "company": "",
+        "dates": "",
+        "bullets": [
+          "Apple Inc., Cupertino, CA"
+        ]
+      },
+      {
+        "title": "IC Design Intern                                                       Jun 2024 - Aug 2024",
+        "company": "",
+        "dates": "",
+        "bullets": [
+          "Designed RF amplifier prototypes that improved SNR by 6 dB across 5 test devices.",
+          "Wrote 2,400 lines of SystemVerilog for a low-power memory controller, reducing leakage 18%.",
+          "Automated regression tests in Python, cutting verification time from 4 hours to 22 minutes.",
+          "Presented results to a 12-engineer review board; design taped out in Q4 silicon.",
+          "NVIDIA, Santa Clara, CA"
+        ]
+      },
+      {
+        "title": "ASIC Verification Intern                                               Jun 2023 - Aug 2023",
+        "company": "",
+        "dates": "",
+        "bullets": [
+          "Built UVM testbench covering 94% of an H100 datapath module across 320 directed tests.",
+          "Triaged 47 silicon bugs against pre-tape-out RTL; root-caused 11 to incorrect FSM encoding.",
+          "Optimized a CUDA matmul kernel from 1.2 TFLOPS to 1.8 TFLOPS on Ampere by tiling shared memory.",
+          "MIT Lincoln Laboratory, Lexington, MA"
+        ]
+      },
+      {
+        "title": "Undergraduate Researcher                                               Jan 2023 - May 2023",
+        "company": "",
+        "dates": "",
+        "bullets": [
+          "Engineered a 5-stage RISC-V pipeline in Verilog; synthesized at 240 MHz on Xilinx Artix-7.",
+          "Co-authored paper on radiation-hardened SRAM cells (accepted at ISSCC 2024 student session)."
+        ]
+      }
+    ],
+    "skills": [
+      "Verilog",
+      "VHDL",
+      "FPGA",
+      "PCB Design",
+      "Rtl",
+      "Python",
+      "MATLAB",
+      "C++",
+      "Linux"
+    ],
+    "soft": [
+      "Leadership"
+    ],
+    "score": 88,
+    "metrics": {
+      "quantified_pct": 67,
+      "action_verb_pct": 71,
+      "skill_density": 8.2,
+      "weak_phrases": 2
+    }
+  },
+  "discovery": {
+    "sources": [
+      {
+        "name": "Greenhouse",
+        "found": 7
+      },
+      {
+        "name": "LinkedIn",
+        "found": 4
+      },
+      {
+        "name": "Lever",
+        "found": 4
+      },
+      {
+        "name": "Workable",
+        "found": 3
+      },
+      {
+        "name": "Ashby",
+        "found": 2
+      }
+    ],
+    "total_sources": 5,
+    "total_found": 47,
+    "after_dedupe": 42,
+    "after_filter": 28
+  },
+  "scoring": {
+    "top_jobs": [
+      {
+        "title": "Hardware Engineering Intern",
+        "company": "Apple",
+        "location": "Cupertino, CA",
+        "source": "LinkedIn",
+        "remote": false,
+        "score": 95,
+        "matched": [],
+        "missing": [],
+        "verdict": ""
+      },
+      {
+        "title": "Hardware Software Co-design Intern",
+        "company": "Microsoft Research",
+        "location": "Redmond, WA",
+        "source": "Ashby",
+        "remote": false,
+        "score": 95,
+        "matched": [],
+        "missing": [],
+        "verdict": ""
+      },
+      {
+        "title": "FPGA Design Intern",
+        "company": "Intel",
+        "location": "Hillsboro, OR",
+        "source": "Lever",
+        "remote": false,
+        "score": 83,
+        "matched": [],
+        "missing": [],
+        "verdict": ""
+      },
+      {
+        "title": "ASIC Verification Intern",
+        "company": "Apple",
+        "location": "Cupertino, CA",
+        "source": "LinkedIn",
+        "remote": false,
+        "score": 78,
+        "matched": [],
+        "missing": [],
+        "verdict": ""
+      },
+      {
+        "title": "ASIC Design Intern",
+        "company": "NVIDIA",
+        "location": "Santa Clara, CA",
+        "source": "Greenhouse",
+        "remote": false,
+        "score": 75,
+        "matched": [],
+        "missing": [],
+        "verdict": ""
+      }
+    ]
+  },
+  "tailoring": {
+    "company": "NVIDIA",
+    "title": "ASIC Design Intern",
+    "before": "Helped with research on RF amplifier prototypes.",
+    "after": "Engineered RF amplifier prototypes that improved SNR by 6 dB across 5 test devices.",
+    "diff_changes": [
+      "\"Helped with\" \u2192 \"Engineered\"",
+      "Added quantitative outcome (6 dB SNR, 5 devices)",
+      "Action verb anchored at start of bullet"
+    ]
+  },
+  "submission": {
+    "company": "NVIDIA",
+    "portal": "Greenhouse",
+    "fields_filled": 14,
+    "status": "Submitted"
+  },
+  "tracker": {
+    "rows": 12,
+    "applied": 3,
+    "manual": 7,
+    "rejected": 0,
+    "preview_rows": [
+      {
+        "company": "NVIDIA",
+        "title": "ASIC Design Intern",
+        "score": 95,
+        "status": "Applied"
+      },
+      {
+        "company": "Apple",
+        "title": "Hardware Engineering Intern",
+        "score": 95,
+        "status": "Manual"
+      },
+      {
+        "company": "Intel",
+        "title": "FPGA Design Intern",
+        "score": 83,
+        "status": "Applied"
+      },
+      {
+        "company": "Google",
+        "title": "ML Hardware Acceleration",
+        "score": 78,
+        "status": "Manual"
+      },
+      {
+        "company": "Boston Dynamics",
+        "title": "Robotics Embedded Intern",
+        "score": 75,
+        "status": "Queued"
+      }
+    ]
+  },
+  "report": {
+    "headline": "3 submitted \u00b7 7 manual queue \u00b7 12 tracked",
+    "summary": "Top picks lean ASIC + verification \u2014 your SystemVerilog and UVM coverage put you in NVIDIA's top decile.",
+    "next_steps": [
+      "Review the 7 manual-queue postings (Greenhouse + Apple don't accept auto-apply).",
+      "Apple's HW EE Intern wants 1 more concrete CUDA project \u2014 add the H100 testbench bullet.",
+      "Re-run discovery on Friday for Q1 intern requisitions opening at AMD and Qualcomm."
+    ]
+  }
+}

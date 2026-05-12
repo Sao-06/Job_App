@@ -2,6 +2,7 @@
 import pytest
 
 from pipeline.profile_extractor import (
+    _scan_target_titles,
     heuristic_summary,
     merge_profiles,
     parse_experience_robust,
@@ -231,3 +232,67 @@ class TestHeuristicSummary:
         assert "Jane" in out
         assert "hard_skills=2" in out
         assert "projects=1" in out
+
+
+# ── Cross-domain target-title inference ─────────────────────────────────────
+
+
+class TestCrossDomainTitles:
+    """Locks down the regression: titles must reflect the candidate's actual
+    field, not a hardcoded EE/semiconductor default. Each input is a tiny
+    skill-bag drawn from a different professional domain.
+    """
+
+    def test_data_scientist_skills(self):
+        text = "Built ML models with PyTorch and analyzed data with SQL."
+        skills = ["Python", "PyTorch", "SQL", "Pandas"]
+        titles = _scan_target_titles(text, skills)
+        joined = " ".join(titles).lower()
+        assert "machine learning" in joined or "data" in joined
+        # No EE/semiconductor default leaking in.
+        for forbidden in ("ic design", "vlsi", "fpga", "photonics", "rf engineer"):
+            assert forbidden not in joined
+
+    def test_marketing_skills(self):
+        text = "Ran SEO campaigns and managed HubSpot workflows for growth."
+        skills = ["SEO", "HubSpot", "Google Ads", "Content Marketing"]
+        titles = _scan_target_titles(text, skills)
+        joined = " ".join(titles).lower()
+        assert "marketing" in joined
+        assert "ic design" not in joined
+        assert "fpga" not in joined
+
+    def test_nursing_skills(self):
+        text = "Registered Nurse with EKG and patient-care experience."
+        skills = ["Patient Care", "EKG", "Phlebotomy"]
+        titles = _scan_target_titles(text, skills)
+        joined = " ".join(titles).lower()
+        assert "clinical" in joined or "nurs" in joined
+        assert "fpga" not in joined
+
+    def test_devops_skills(self):
+        text = "Built CI/CD pipelines on Kubernetes with Terraform."
+        skills = ["Kubernetes", "Docker", "Terraform", "Jenkins"]
+        titles = _scan_target_titles(text, skills)
+        joined = " ".join(titles).lower()
+        assert "devops" in joined or "sre" in joined or "site reliability" in joined
+
+    def test_recent_role_title_promoted(self):
+        # When the most recent work entry has a clean role label, that
+        # title surfaces first as the most authoritative signal.
+        titles = _scan_target_titles(
+            "Some resume text",
+            hard_skills=[],
+            parsed_profile={
+                "work_experience": [
+                    {"title": "Senior Marketing Manager", "company": "Acme",
+                     "dates": "2024–", "bullets": []},
+                ],
+                "experience": [],
+                "research_experience": [],
+            },
+        )
+        assert titles[0] == "Senior Marketing Manager"
+
+    def test_no_skills_no_text_returns_empty(self):
+        assert _scan_target_titles("", []) == []

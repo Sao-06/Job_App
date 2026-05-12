@@ -34,6 +34,10 @@ import os
 #     off the 60-second parallel backfill.
 os.environ.setdefault("JOBS_AI_SKIP_MIGRATION", "1")
 os.environ.setdefault("JOBS_AI_DISABLE_INGESTION", "1")
+# Skip the Claude CLI boot probe — no real `claude` binary in CI/test env.
+# When CLAUDE_CLI_DISABLE_HEALTH_CHECK=1 the startup hooks short-circuit and
+# leave _CLI_HEALTHY=True (tests that need it False monkeypatch directly).
+os.environ.setdefault("CLAUDE_CLI_DISABLE_HEALTH_CHECK", "1")
 # Localhost-safe Ollama URL so OllamaProvider construction never hits a real
 # network when accidentally reached during tests; respx intercepts the call.
 os.environ.setdefault("OLLAMA_URL", "http://ollama-test.local:11434")
@@ -88,9 +92,13 @@ def tmp_db(tmp_path):
 
 
 def _build_authed_client(tmp_db, monkeypatch, *, is_developer: bool = False,
-                         plan_tier: str = "free"):
+                         plan_tier: str = "pro"):
     """Shared builder for fastapi_client / dev_client / pro_client. Returns
     ``(client, user_id, token)`` with both auth and session cookies attached.
+
+    Default plan_tier is "pro" — the app is currently in testing-phase mode
+    where every user is upgraded to Pro automatically (see the migration in
+    pipeline/migrations.py + create_user default).
     """
     import app as app_module
     from fastapi.testclient import TestClient
@@ -109,8 +117,11 @@ def _build_authed_client(tmp_db, monkeypatch, *, is_developer: bool = False,
     )
     if is_developer:
         tmp_db.set_user_developer(user_id, True)
-    if plan_tier != "free":
-        tmp_db.set_user_plan_tier(user_id, plan_tier)
+    # Always sync the DB plan_tier to the requested tier so the users row and
+    # the cached auth_user payload agree. Without this, tests that opt back
+    # into the "free" tier would still see plan_tier='pro' from the column
+    # default set by the migration.
+    tmp_db.set_user_plan_tier(user_id, plan_tier)
 
     auth_user = {
         "id": user_id,
@@ -128,7 +139,13 @@ def _build_authed_client(tmp_db, monkeypatch, *, is_developer: bool = False,
 
 @pytest.fixture
 def fastapi_client(tmp_db, monkeypatch):
-    """TestClient + tmp DB + an authenticated free-tier user."""
+    """TestClient + tmp DB + an authenticated Pro-tier user.
+
+    Default plan_tier is "pro" (everyone-is-Pro testing phase, per
+    _build_authed_client). Tests that need a free user should call
+    _downgrade_to_free(tmp_db, user_id, token, …) which also refreshes
+    the cached auth_tokens.user_json blob.
+    """
     client, user_id, token = _build_authed_client(tmp_db, monkeypatch)
     yield client, user_id, token
     client.close()
@@ -275,3 +292,121 @@ def seed_resume(fastapi_client, patched_provider, wait_extraction):
         client.post("/api/resume/demo")
         return wait_extraction(client)
     return _seed
+
+
+import json as _json_for_fixtures
+import os as _os_for_fixtures
+import textwrap as _textwrap_for_fixtures
+
+
+@pytest.fixture
+def claude_cli_bin(tmp_path, monkeypatch):
+    """Write a fake `claude` executable to tmp_path and prepend it to PATH.
+
+    Cross-platform: on Unix the script is a `#!/usr/bin/env python3` shebang
+    file the kernel can exec directly; on Windows the same Python body lives
+    in `claude_impl.py` and a `.bat` wrapper invokes the running Python
+    interpreter (no shebang support on Windows → bare-script CreateProcess
+    fails with `[WinError 193] %1 is not a valid Win32 application`).
+
+    The fake responds to a small set of canned argvs so providers tests can
+    exercise _run_cli without spawning the real CLI.
+
+    Usage:
+        def test_x(claude_cli_bin):
+            claude_cli_bin.set_response("Hello world")   # text mode
+            claude_cli_bin.set_json({"ok": True})        # json mode
+            claude_cli_bin.set_error("auth failed", exit=1)
+            claude_cli_bin.set_stream(["chunk one", "chunk two"])
+    """
+    import sys as _sys_for_fixtures
+
+    state_file = tmp_path / "claude_state.json"
+    state_file.write_text(_json_for_fixtures.dumps({
+        "mode": "text", "text": "OK", "exit": 0, "stderr": "",
+        "stream_chunks": [], "delay_s": 0,
+    }))
+
+    # Build the embedded script body using a plain string + substitution
+    # to avoid f-string brace-doubling confusion.
+    _SCRIPT_TEMPLATE = _textwrap_for_fixtures.dedent("""\
+        #!/usr/bin/env python3
+        import json, sys, time
+        state = json.loads(open(STATE_FILE_PATH).read())
+        time.sleep(state.get("delay_s", 0))
+        if state.get("exit", 0) != 0:
+            sys.stderr.write(state.get("stderr", ""))
+            sys.exit(state["exit"])
+        # Find --output-format
+        argv = sys.argv[1:]
+        out_fmt = "text"
+        if "--output-format" in argv:
+            i = argv.index("--output-format")
+            if i + 1 < len(argv):
+                out_fmt = argv[i + 1]
+        if out_fmt == "stream-json":
+            for chunk in state.get("stream_chunks", []):
+                sys.stdout.write(json.dumps({
+                    "type": "stream_event",
+                    "event": {
+                        "type": "content_block_delta",
+                        "delta": {"type": "text_delta", "text": chunk},
+                    },
+                }) + "\\n")
+                sys.stdout.flush()
+            sys.stdout.write(json.dumps({
+                "type": "result", "subtype": "success", "total_cost_usd": 0.001,
+            }) + "\\n")
+            sys.exit(0)
+        # text or json output: print whatever 'text' field holds
+        sys.stdout.write(state["text"])
+        sys.exit(0)
+    """)
+    script_body = _SCRIPT_TEMPLATE.replace("STATE_FILE_PATH", repr(str(state_file)))
+
+    if _os_for_fixtures.name == "nt":
+        # Windows: write the Python impl to claude_impl.py and a .bat wrapper
+        # that invokes the running Python interpreter against it. CLAUDE_BIN
+        # points at the .bat so `subprocess.run([CLAUDE_BIN, ...])` resolves.
+        impl = tmp_path / "claude_impl.py"
+        impl.write_text(script_body)
+        script = tmp_path / "claude.bat"
+        # %~dp0 = directory of the bat; %* = all forwarded args. Quote the
+        # Python interpreter path in case it sits under "Program Files".
+        script.write_text(
+            f'@"{_sys_for_fixtures.executable}" "{impl}" %*\r\n'
+        )
+    else:
+        # Unix: kernel-handled shebang, chmod +x, exec directly.
+        script = tmp_path / "claude"
+        script.write_text(script_body)
+        script.chmod(0o755)
+
+    class _Helper:
+        def set_response(self, text):
+            d = _json_for_fixtures.loads(state_file.read_text())
+            d.update({"mode": "text", "text": text, "exit": 0})
+            state_file.write_text(_json_for_fixtures.dumps(d))
+
+        def set_json(self, obj):
+            self.set_response(_json_for_fixtures.dumps(obj))
+
+        def set_error(self, stderr, exit=1):
+            d = _json_for_fixtures.loads(state_file.read_text())
+            d.update({"exit": exit, "stderr": stderr})
+            state_file.write_text(_json_for_fixtures.dumps(d))
+
+        def set_stream(self, chunks):
+            d = _json_for_fixtures.loads(state_file.read_text())
+            d.update({"mode": "stream", "stream_chunks": list(chunks), "exit": 0})
+            state_file.write_text(_json_for_fixtures.dumps(d))
+
+        def set_delay(self, seconds):
+            d = _json_for_fixtures.loads(state_file.read_text())
+            d.update({"delay_s": seconds})
+            state_file.write_text(_json_for_fixtures.dumps(d))
+
+    monkeypatch.setenv("PATH", str(tmp_path) + _os_for_fixtures.pathsep + _os_for_fixtures.environ["PATH"])
+    monkeypatch.setenv("CLAUDE_BIN", str(script))
+    monkeypatch.setenv("CLAUDE_CLI_MODEL", "sonnet")  # deterministic for tests
+    return _Helper()

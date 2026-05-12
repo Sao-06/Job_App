@@ -13,6 +13,250 @@ from pathlib import Path
 from .config import console, OWNER_NAME, DEMO_JOBS
 
 
+# ── Claude CLI transport (replaces Anthropic SDK) ──────────────────────────────
+import os as _os
+import shutil as _shutil
+import subprocess as _subprocess
+import threading as _threading
+
+CLAUDE_BIN: str = _os.environ.get("CLAUDE_BIN") or (_shutil.which("claude") or "claude")
+CLAUDE_CLI_MODEL: str = _os.environ.get("CLAUDE_CLI_MODEL", "sonnet")
+CLAUDE_CLI_SCRATCH: str = _os.environ.get("CLAUDE_CLI_SCRATCH", "/tmp/jobapp-claude")
+CLAUDE_CLI_MAX_CONCURRENCY: int = int(_os.environ.get("CLAUDE_CLI_MAX_CONCURRENCY", "5"))
+CLAUDE_CLI_PROMPT_STDIN_THRESHOLD: int = 64 * 1024  # route via stdin above this
+
+# Module-global semaphore — every subprocess spawn acquires it.
+_CLI_SEMAPHORE = _threading.BoundedSemaphore(CLAUDE_CLI_MAX_CONCURRENCY)
+
+# Health flag, toggled by app.py startup hook + 5-min ticker.
+_CLI_HEALTHY: bool = True
+
+def _ensure_scratch_dir() -> str:
+    """Idempotent: create CLAUDE_CLI_SCRATCH if missing. The dir intentionally
+    contains NO CLAUDE.md so the CLI doesn't auto-prepend it to system prompts."""
+    _os.makedirs(CLAUDE_CLI_SCRATCH, exist_ok=True)
+    return CLAUDE_CLI_SCRATCH
+
+
+class ClaudeCLIError(RuntimeError):
+    """Generic Claude CLI failure. `stderr` is the captured stderr text."""
+    def __init__(self, message: str, *, stderr: str = "", exit_code: int | None = None):
+        super().__init__(message)
+        self.stderr = stderr
+        self.exit_code = exit_code
+
+
+class ClaudeCLITimeoutError(ClaudeCLIError):
+    """The subprocess was killed by our timeout wrapper."""
+    pass
+
+
+def _json_min(obj: dict) -> str:
+    """Compact JSON encode for argv injection."""
+    return json.dumps(obj, separators=(",", ":"), ensure_ascii=False)
+
+
+def _run_cli(
+    prompt: str,
+    *,
+    system: str | None = None,
+    json_schema: dict | None = None,
+    effort: str = "high",
+    timeout_s: float = 120.0,
+    budget_usd: float = 100.0,
+) -> str:
+    """Spawn `claude -p` once, return its stdout. Blocking.
+
+    Acquires `_CLI_SEMAPHORE` so total concurrent subprocesses are bounded
+    by CLAUDE_CLI_MAX_CONCURRENCY (default 5).
+
+    When `json_schema` is provided, uses `--output-format json` so the
+    schema is actually enforced (the CLI silently ignores --json-schema
+    when --output-format=text). The response envelope is parsed and the
+    `structured_output` field is returned as a JSON string for symmetry
+    with the text-mode return type.
+
+    Raises `ClaudeCLITimeoutError` on timeout, `ClaudeCLIError` on any
+    other nonzero exit or malformed JSON envelope.
+    """
+    _ensure_scratch_dir()
+
+    # Re-read CLAUDE_BIN / CLAUDE_CLI_MODEL from env at call time so the
+    # claude_cli_bin fixture (which only monkeypatches os.environ, not the
+    # module-level constants) works without further patching.  Code that
+    # directly monkeypatches `pipeline.providers.CLAUDE_BIN` should be
+    # aware that this runtime re-read takes precedence.
+    _bin = _os.environ.get("CLAUDE_BIN") or CLAUDE_BIN
+    _model = _os.environ.get("CLAUDE_CLI_MODEL") or CLAUDE_CLI_MODEL
+
+    out_format = "json" if json_schema is not None else "text"
+    argv: list[str] = [
+        _bin,
+        "--model", _model,
+        "--effort", effort,
+        "--output-format", out_format,
+        "--disable-slash-commands",
+        # `--tools ""` disables ALL built-in tools (Bash, Edit, Read, Write, …).
+        # This CLI is Claude Code; without this flag a prompt injection in a
+        # user-controlled input (Atlas chat, resume text, job description)
+        # could in principle trigger filesystem or shell actions. We only
+        # want pure text/JSON generation here.
+        "--tools", "",
+        "--max-budget-usd", f"{budget_usd:.2f}",
+        "--exclude-dynamic-system-prompt-sections",
+    ]
+    if system:
+        argv += ["--append-system-prompt", system]
+    if json_schema is not None:
+        argv += ["--json-schema", _json_min(json_schema)]
+
+    use_stdin = len(prompt) > CLAUDE_CLI_PROMPT_STDIN_THRESHOLD
+    if not use_stdin:
+        argv += ["-p", prompt]
+    else:
+        # Large prompts go via stdin to avoid argv length limits.
+        # --input-format text tells the CLI to read the prompt from stdin.
+        argv += ["-p", "--input-format", "text"]
+
+    env = dict(_os.environ)
+    env["CLAUDE_CODE_NONINTERACTIVE"] = "1"
+
+    run_kwargs = dict(
+        capture_output=True, text=True, env=env,
+        cwd=CLAUDE_CLI_SCRATCH, timeout=timeout_s,
+    )
+    if use_stdin:
+        run_kwargs["input"] = prompt
+
+    with _CLI_SEMAPHORE:
+        try:
+            result = _subprocess.run(argv, **run_kwargs)
+        except _subprocess.TimeoutExpired as e:
+            raise ClaudeCLITimeoutError(
+                f"claude -p timed out after {timeout_s}s",
+                stderr=(e.stderr or b"").decode("utf-8", "replace") if isinstance(e.stderr, bytes) else (e.stderr or ""),
+                exit_code=124,
+            ) from e
+
+    if result.returncode != 0:
+        raise ClaudeCLIError(
+            f"claude -p exit {result.returncode}: {result.stderr.strip()[:240]}",
+            stderr=result.stderr or "",
+            exit_code=result.returncode,
+        )
+
+    if json_schema is None:
+        return result.stdout
+
+    # Schema mode: stdout is a JSON envelope; extract structured_output.
+    try:
+        envelope = json.loads(result.stdout)
+    except json.JSONDecodeError as e:
+        raise ClaudeCLIError(
+            f"claude -p returned non-JSON in json output mode: {result.stdout[:240]}"
+        ) from e
+    structured = envelope.get("structured_output")
+    if structured is None:
+        raise ClaudeCLIError(
+            f"claude -p json envelope missing structured_output: {result.stdout[:240]}"
+        )
+    return json.dumps(structured)
+
+
+def _run_cli_stream(
+    prompt: str,
+    *,
+    system: str | None = None,
+    effort: str = "high",
+    budget_usd: float = 100.0,
+):
+    """Generator. Yields text deltas as the CLI streams. Closes/kills the
+    subprocess if the consumer abandons the generator early.
+
+    Acquires `_CLI_SEMAPHORE` for the lifetime of the stream — be aware
+    that long Atlas chats can hold a slot for many seconds.
+
+    Uses --output-format stream-json + --include-partial-messages
+    + --verbose (the CLI requires --verbose when stream-json is paired
+    with -p; discovered in Phase 0 smoke test).
+    """
+    import json as _json
+    _ensure_scratch_dir()
+
+    # Re-read env at call time so test fixtures (which only monkeypatch
+    # os.environ) take effect — same pattern as _run_cli.
+    bin_path = _os.environ.get("CLAUDE_BIN") or CLAUDE_BIN
+    model = _os.environ.get("CLAUDE_CLI_MODEL") or CLAUDE_CLI_MODEL
+
+    argv: list[str] = [
+        bin_path,
+        "--model", model,
+        "--effort", effort,
+        "--output-format", "stream-json",
+        "--include-partial-messages",
+        "--verbose",  # required by CLI for stream-json in -p mode
+        "--disable-slash-commands",
+        # See _run_cli for rationale — disables all built-in tools so a
+        # prompt injection in an Atlas chat can't trigger destructive actions.
+        "--tools", "",
+        "--max-budget-usd", f"{budget_usd:.2f}",
+        "--exclude-dynamic-system-prompt-sections",
+        "-p", prompt,
+    ]
+    if system:
+        argv += ["--append-system-prompt", system]
+
+    env = dict(_os.environ)
+    env["CLAUDE_CODE_NONINTERACTIVE"] = "1"
+
+    _CLI_SEMAPHORE.acquire()
+    proc = None
+    try:
+        proc = _subprocess.Popen(
+            argv, stdout=_subprocess.PIPE, stderr=_subprocess.PIPE,
+            text=True, bufsize=1, env=env, cwd=CLAUDE_CLI_SCRATCH,
+        )
+        for line in proc.stdout:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                evt = _json.loads(line)
+            except _json.JSONDecodeError:
+                continue
+            etype = evt.get("type")
+            if etype == "stream_event":
+                inner = evt.get("event") or {}
+                if inner.get("type") == "content_block_delta":
+                    delta = inner.get("delta") or {}
+                    if delta.get("type") == "text_delta":
+                        text = delta.get("text") or ""
+                        if text:
+                            yield text
+            elif etype == "result" and evt.get("subtype") != "success":
+                err = evt.get("error") or "Claude CLI stream failed"
+                raise ClaudeCLIError(str(err))
+        # After stdout EOF, check exit code — a non-zero exit (e.g. auth failure,
+        # rate-limit) that produces no stream-json output would otherwise be silent.
+        proc.wait()
+        if proc.returncode != 0:
+            stderr_text = (proc.stderr.read() if proc.stderr else "") or ""
+            raise ClaudeCLIError(
+                f"Claude CLI exited {proc.returncode}: {stderr_text.strip() or 'no stderr'}"
+            )
+    finally:
+        if proc is not None and proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=2)
+            except _subprocess.TimeoutExpired:
+                proc.kill()
+        try:
+            _CLI_SEMAPHORE.release()
+        except ValueError:
+            pass  # already released — defensive
+
+
 # ── Base ───────────────────────────────────────────────────────────────────────
 
 class BaseProvider:
@@ -128,6 +372,77 @@ def _build_heuristic_block(heuristic: dict | None) -> str:
 RUBRIC_WEIGHTS = {"required_skills": 50, "industry": 30, "location_seniority": 20}
 
 
+def profile_strength(profile: dict | None) -> float:
+    """Return a [0, 1] multiplier reflecting how complete / genuine a profile is.
+
+    Applied as a final-score multiplier in `user_scoring` and the lazy
+    `/api/jobs/score-batch` path so a template resume — which yields a few
+    placeholder skills + a placeholder title + a stub work entry — can't
+    show up as a "confidently 40% match" on every job. The rubric still
+    runs; this just refuses to inflate hollow matches.
+
+    Components (each clamped to [0, 1]):
+      - skills:       count of `top_hard_skills` vs 10-target
+      - titles:       count of `target_titles` vs 3-target
+      - work:         number of work_experience entries with title/company
+      - bullets:      total bullet count across roles vs 10-target
+      - quantified:   fraction of bullets containing digits (proxy for impact)
+
+    Weighted sum reflects what actually moves the needle on real hiring:
+    skills + work history + quantified bullets carry the most weight.
+    Returns near-zero for an empty profile; ~0.20 for a typical
+    placeholder template; ~0.85+ for a fully-populated real resume.
+
+    Caller multiplies the rubric score by max(0.2, strength) so an
+    extreme-low strength still leaves a *small* signal for downstream
+    sort/dedup, rather than slamming everything to zero. The clamp also
+    matches the existing UI behavior of "—" / low-confidence states.
+    """
+    if not profile or not isinstance(profile, dict):
+        return 0.0
+
+    def _count(seq) -> int:
+        if not seq:
+            return 0
+        return sum(1 for x in seq if x and str(x).strip())
+
+    n_skills = _count(profile.get("top_hard_skills") or [])
+    n_titles = _count(profile.get("target_titles") or [])
+
+    # Work-experience entries that have at least a title or company.
+    # Pull from the standard buckets in priority order; we only need a count.
+    n_work = 0
+    total_bullets = 0
+    quantified_bullets = 0
+    for bucket in ("work_experience", "experience", "research_experience"):
+        for row in (profile.get(bucket) or []):
+            if not isinstance(row, dict):
+                continue
+            if row.get("title") or row.get("company"):
+                n_work += 1
+            for b in (row.get("bullets") or []):
+                if not b:
+                    continue
+                total_bullets += 1
+                if any(c.isdigit() for c in str(b)):
+                    quantified_bullets += 1
+
+    skill_score   = min(1.0, n_skills / 10.0)            # 10 skills ≈ full
+    title_score   = min(1.0, n_titles / 3.0)             # 3 targets ≈ full
+    work_score    = min(1.0, n_work / 3.0)               # 3 roles ≈ full
+    bullet_score  = min(1.0, total_bullets / 10.0)       # 10 bullets ≈ full
+    quant_score   = (min(1.0, quantified_bullets / 5.0)  # 5 quantified ≈ full
+                     if total_bullets else 0.0)
+
+    return (
+        0.30 * skill_score
+        + 0.10 * title_score
+        + 0.25 * work_score
+        + 0.15 * bullet_score
+        + 0.20 * quant_score
+    )
+
+
 _TOKEN_SPLIT_RE = re.compile(r"[^a-z0-9+#.\-]+")
 
 
@@ -154,7 +469,13 @@ def compute_skill_coverage(job: dict, profile: dict) -> tuple[float, list, list]
     skills = [str(s).strip() for s in (profile.get("top_hard_skills") or []) if s]
     skills_lower = {s.lower(): s for s in skills}
     if not skills_lower:
-        result = (0.5, [], [])
+        # No skills in profile → no meaningful coverage signal. Returning a
+        # neutral 0.5 (the previous behavior) inflated every job to a fake
+        # ~50% match for blank/incomplete resumes — a senior hardware role
+        # would read "68% match" against a two-word resume. Returning 0.0
+        # makes the rubric correctly score these as low-signal until the
+        # user fills their profile.
+        result = (0.0, [], [])
         job["_skill_coverage"] = result
         return result
 
@@ -273,385 +594,537 @@ def _build_rubric_result(job: dict, req_raw: float, industry_raw: float,
     }
 
 
+# ── JSON schemas for --json-schema CLI mode ────────────────────────────────────
+# These dicts are the structural contract for the three structured Anthropic
+# methods. Originally embedded inside `tool["input_schema"]` for the SDK's
+# forced tool-calling path; lifted to module scope so the upcoming CLI rewrite
+# can pass them directly to `claude -p --json-schema`. The methods still use
+# them via the tool definition until the CLI swap in later tasks.
+
+EXTRACT_PROFILE_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        "name":     {"type": "string"},
+        "email":    {"type": "string"},
+        "linkedin": {"type": "string"},
+        "github":   {"type": "string"},
+        "phone":    {"type": "string"},
+        "location": {"type": "string"},
+        "target_titles": {
+            "type": "array",
+            "description": (
+                "5–8 job titles that fit the candidate's actual "
+                "experience based on what's IN the resume. The "
+                "candidate may be in software, hardware, data, "
+                "design, marketing, sales, healthcare, finance, "
+                "education, operations, etc. Pick titles drawn "
+                "from THEIR background — never default to a "
+                "domain you assume. Every title MUST include an "
+                "`evidence` line quoted from the resume that "
+                "justifies it."
+            ),
+            "items": {
+                "type": "object",
+                "properties": {
+                    "title":    {"type": "string"},
+                    "family":   {"type": "string",
+                                 "description": "Coarse family label (e.g. 'Software Engineering', 'Marketing', 'Clinical')."},
+                    "evidence": {"type": "string",
+                                 "description": "Exact line from the resume that justifies this title."},
+                },
+                "required": ["title", "family", "evidence"],
+            },
+        },
+        "top_hard_skills": {
+            "type": "array",
+            "description": (
+                "Concrete, verifiable competencies the candidate "
+                "actually exercises — programming languages, "
+                "software / SaaS tools, frameworks, lab / fab / "
+                "clinical equipment, measurement techniques, "
+                "domain-specific methodologies. NEVER include "
+                "interpersonal traits. Scan EVERY section — "
+                "coursework, projects, work bullets, skills list — "
+                "and extract every concrete competency you see. "
+                "Completeness over brevity. Categories cover "
+                "every professional domain, not just hardware: "
+                "use whichever category best fits each skill."
+            ),
+            "items": {
+                "type": "object",
+                "properties": {
+                    "skill":    {"type": "string"},
+                    "category": {
+                        "type": "string",
+                        "enum": [
+                            "programming_language",
+                            "software_tool",
+                            "framework_library",
+                            "data_platform",
+                            "simulation_environment",
+                            "fab_process",
+                            "lab_instrument",
+                            "measurement_technique",
+                            "hardware_platform",
+                            "design_tool",
+                            "marketing_platform",
+                            "sales_crm",
+                            "finance_accounting",
+                            "healthcare_clinical",
+                            "methodology",
+                            "other",
+                        ],
+                    },
+                    "evidence": {
+                        "type": "string",
+                        "description": "Exact substring from the resume where this skill appears.",
+                    },
+                },
+                "required": ["skill", "category", "evidence"],
+            },
+        },
+        "top_soft_skills": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": (
+                "Behavioral/interpersonal traits ONLY (e.g. Teamwork, "
+                "Technical Writing, Project Management). NEVER include "
+                "lab techniques, instruments, software, or languages."
+            ),
+        },
+        "education": {
+            "type": "array",
+            "items": {"type": "object", "properties": {
+                "degree": {"type": "string"}, "institution": {"type": "string"},
+                "year":   {"type": "string"}, "gpa":         {"type": "string"},
+            }},
+        },
+        "research_experience": {
+            "type": "array",
+            "description": "Academic / lab / research roles — anything with a PI, lab, or research group. Keep SEPARATE from work_experience.",
+            "items": {"type": "object", "properties": {
+                "title":   {"type": "string"}, "company": {"type": "string"},
+                "dates":   {"type": "string"},
+                "bullets": {"type": "array", "items": {"type": "string"}},
+            }},
+        },
+        "work_experience": {
+            "type": "array",
+            "description": "Industry / internship / part-time jobs (non-research).",
+            "items": {"type": "object", "properties": {
+                "title":   {"type": "string"}, "company": {"type": "string"},
+                "dates":   {"type": "string"},
+                "bullets": {"type": "array", "items": {"type": "string"}},
+            }},
+        },
+        "experience": {
+            "type": "array",
+            "description": "Back-compat: union of research_experience + work_experience.",
+            "items": {"type": "object", "properties": {
+                "title":   {"type": "string"}, "company": {"type": "string"},
+                "dates":   {"type": "string"},
+                "bullets": {"type": "array", "items": {"type": "string"}},
+            }},
+        },
+        "projects": {
+            "type": "array",
+            "items": {"type": "object", "properties": {
+                "name":        {"type": "string"},
+                "description": {"type": "string"},
+                "skills_used": {"type": "array", "items": {"type": "string"}},
+            }},
+        },
+        "resume_gaps": {"type": "array", "items": {"type": "string"}},
+        "critical_analysis": {
+            "type": "string",
+            "description": "A 3-4 paragraph brutally honest and detailed critique of the resume. Analyze: 1. Impact & Quantified Achievements (or lack thereof), 2. Skill Density vs. Industry Standards, 3. Structural Clarity for ATS and Human Reviewers, 4. Specific high-value action items to land top-tier roles."
+        },
+    },
+    "required": ["name", "top_hard_skills", "top_soft_skills", "target_titles", "critical_analysis"],
+}
+
+SCORE_JOB_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        "industry":           {"type": "number", "minimum": 0, "maximum": 1,
+                               "description": "How well the job's domain/industry aligns with the candidate's target field and background. 1.0 = exact target field, 0.5 = adjacent/transferable, 0.0 = unrelated."},
+        "location_seniority": {"type": "number", "minimum": 0, "maximum": 1,
+                               "description": "Combined fit of location AND seniority. 1.0 = remote OR matches candidate location AND seniority matches candidate's level. 0.5 = one mismatch. 0.0 = both mismatch."},
+        "reasoning":          {"type": "string",
+                               "description": "ONE sentence grounded in actual JD/profile content — cite a specific requirement, skill, or detail. Do not generalize."},
+    },
+    "required": ["industry", "location_seniority", "reasoning"],
+}
+
+# Module-level sub-dicts reused inside TAILOR_RESUME_SCHEMA.
+_TAILOR_TEXT_NODE: dict = {
+    "type": "object",
+    "properties": {
+        "text":     {"type": "string"},
+        "diff":     {"type": "string", "enum": ["unchanged", "modified", "added"]},
+        "original": {"type": "string"},
+    },
+    "required": ["text"],
+}
+_TAILOR_ROLE_OBJ: dict = {
+    "type": "object",
+    "properties": {
+        "title":    {"type": "string"},
+        "company":  {"type": "string"},
+        "dates":    {"type": "string"},
+        "location": {"type": "string"},
+        "bullets":  {"type": "array", "items": _TAILOR_TEXT_NODE},
+    },
+}
+_TAILOR_GENERIC: dict = {
+    "type": "object",
+    "properties": {
+        "title":   _TAILOR_TEXT_NODE,
+        "detail":  _TAILOR_TEXT_NODE,
+        "bullets": {"type": "array", "items": _TAILOR_TEXT_NODE},
+    },
+}
+_TAILOR_PROJECT: dict = {
+    "type": "object",
+    "properties": {
+        "name":        {"type": "string"},
+        "description": _TAILOR_TEXT_NODE,
+        "skills_used": {"type": "array", "items": _TAILOR_TEXT_NODE},
+        "bullets":     {"type": "array", "items": _TAILOR_TEXT_NODE},
+        "dates":       {"type": "string"},
+        "url":         {"type": "string"},
+    },
+}
+_TAILOR_EDUCATION: dict = {
+    "type": "object",
+    "properties": {
+        "institution": {"type": "string"},
+        "degree":      {"type": "string"},
+        "dates":       {"type": "string"},
+        "gpa":         {"type": "string"},
+        "notes":       {"type": "array", "items": _TAILOR_TEXT_NODE},
+    },
+}
+_TAILOR_SKILL_CAT: dict = {
+    "type": "object",
+    "properties": {
+        "name":  {"type": "string"},
+        "items": {"type": "array", "items": _TAILOR_TEXT_NODE},
+    },
+}
+_TAILOR_CUSTOM: dict = {
+    "type": "object",
+    "properties": {
+        "name":  {"type": "string"},
+        "items": {"type": "array", "items": _TAILOR_GENERIC},
+    },
+}
+
+TAILOR_RESUME_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        "schema_version":       {"type": "integer"},
+        "name":                 {"type": "string"},
+        "email":                {"type": "string"},
+        "phone":                {"type": "string"},
+        "linkedin":             {"type": "string"},
+        "github":               {"type": "string"},
+        "location":             {"type": "string"},
+        "website":              {"type": "string"},
+        "summary":              _TAILOR_TEXT_NODE,
+        "skills":               {"type": "array", "items": _TAILOR_SKILL_CAT},
+        "experience":           {"type": "array", "items": _TAILOR_ROLE_OBJ},
+        "projects":             {"type": "array", "items": _TAILOR_PROJECT},
+        "education":            {"type": "array", "items": _TAILOR_EDUCATION},
+        "awards":               {"type": "array", "items": _TAILOR_GENERIC},
+        "certifications":       {"type": "array", "items": _TAILOR_GENERIC},
+        "publications":         {"type": "array", "items": _TAILOR_GENERIC},
+        "activities":           {"type": "array", "items": _TAILOR_GENERIC},
+        "leadership":           {"type": "array", "items": _TAILOR_GENERIC},
+        "volunteer":            {"type": "array", "items": _TAILOR_GENERIC},
+        "coursework":           {"type": "array", "items": _TAILOR_GENERIC},
+        "languages":            {"type": "array", "items": _TAILOR_GENERIC},
+        "custom_sections":      {"type": "array", "items": _TAILOR_CUSTOM},
+        "section_order":        {"type": "array", "items": {"type": "string"}},
+        "ats_keywords_added":   {"type": "array", "items": {"type": "string"}},
+        "ats_keywords_missing": {"type": "array", "items": {"type": "string"}},
+        "ats_score_before":     {"type": "integer"},
+        "ats_score_after":      {"type": "integer"},
+    },
+    "required": ["name", "skills", "experience", "education", "section_order"],
+}
+
+
 # ── 1. Anthropic (Claude) ──────────────────────────────────────────────────────
 
-class AnthropicProvider(BaseProvider):
-    """Uses Claude Opus 4.6 via the Anthropic SDK."""
 
-    def __init__(self, api_key: str = None):
-        import anthropic as _anthropic
-        self.client = _anthropic.Anthropic(api_key=api_key)
-        self.model = "claude-opus-4-6"
+def _collapse_messages(messages: list) -> str:
+    """Render a [{role, content}, ...] history as a single prompt string.
+
+    The CLI takes one -p prompt, not a multi-turn structure. For chat use
+    we serialize prior turns as a transcript so the model retains context.
+    Single-turn user messages return their raw content (no transcript wrapping).
+    """
+    history: list = []
+    for m in (messages or []):
+        if m.get("role") not in ("user", "assistant"):
+            continue
+        content = str(m.get("content") or "").strip()
+        if not content:
+            continue
+        history.append((m["role"], content))
+    if not history:
+        return ""
+    if len(history) == 1 and history[0][0] == "user":
+        return history[0][1]
+    parts: list = ["[Previous conversation]"]
+    for role, content in history[:-1]:
+        label = "User" if role == "user" else "Assistant"
+        parts.append(f"{label}: {content}")
+    last_role, last_content = history[-1]
+    parts.append("")
+    parts.append("[Current message]" if last_role == "user" else "[Assistant continuation]")
+    parts.append(last_content)
+    return "\n".join(parts)
+
+
+class AnthropicProvider(BaseProvider):
+    """Claude Sonnet 4.6 via the local `claude` CLI subprocess.
+
+    Replaces the previous Anthropic SDK transport. Auth is the OAuth
+    keychain on the server (run `claude /login` once during deploy).
+    No ANTHROPIC_API_KEY needed.
+
+    See pipeline.providers._run_cli for the subprocess contract.
+    Per-method effort/timeout choices:
+      • chat:                effort=high, timeout=120s
+      • extract_profile:     effort=high, timeout=120s
+      • score_job:           effort=high, timeout=120s
+      • tailor_resume:       effort=xhigh, timeout=240s (quality-sensitive)
+      • cover_letter/report: effort=high (via chat)
+      • demo_jobs:           json_mode=True via chat
+    """
+
+    MODEL = "claude-sonnet-4-6"
+    DEFAULT_EFFORT = "high"
+
+    def __init__(self, api_key: str | None = None):
+        # api_key kwarg kept for back-compat; CLI uses OAuth keychain.
+        self.model = self.MODEL
 
     def chat(self, system: str, messages: list, max_tokens: int = 1024,
              json_mode: bool = False) -> str:
-        # Anthropic SDK takes system as a top-level kwarg, not a message role.
-        clean = [
-            {"role": m["role"], "content": str(m.get("content", ""))}
-            for m in (messages or [])
-            if m.get("role") in ("user", "assistant") and (m.get("content") or "").strip()
-        ]
-        if not clean:
+        prompt = _collapse_messages(messages)
+        if not prompt:
             return ""
-        # JSON mode: prefill the assistant turn with `{` so Anthropic continues
-        # from there. We then prepend the brace to the response before parsing.
-        if json_mode and clean[-1]["role"] == "user":
-            clean.append({"role": "assistant", "content": "{"})
-        resp = self.client.messages.create(
-            model=self.model,
-            max_tokens=max_tokens,
-            system=system or "",
-            messages=clean,
-        )
-        out_parts: list[str] = []
-        for block in resp.content:
-            if getattr(block, "type", None) == "text":
-                out_parts.append(getattr(block, "text", "") or "")
-        out = "".join(out_parts).strip()
-        if json_mode and out and not out.startswith("{"):
-            out = "{" + out
-        return out
+        schema = {"type": "object", "additionalProperties": True} if json_mode else None
+        return _run_cli(prompt, system=system or None, json_schema=schema,
+                        effort=self.DEFAULT_EFFORT, timeout_s=120.0).strip()
 
-    def _tool_call(self, tool_def: dict, prompt: str,
-                   max_tokens: int = 4096, thinking: bool = False) -> dict:
-        kwargs = dict(
-            model=self.model, max_tokens=max_tokens,
-            tools=[tool_def],
-            tool_choice={"type": "tool", "name": tool_def["name"]},
-            messages=[{"role": "user", "content": prompt}],
-        )
-        if thinking:
-            kwargs["thinking"] = {"type": "adaptive"}
-        resp = self.client.messages.create(**kwargs)
-        for block in resp.content:
-            if block.type == "tool_use":
-                return block.input
-        return {}
-
-    def extract_profile(self, resume_text: str, preferred_titles: list = None,
-                        heuristic_hint: dict = None) -> dict:
-        from .profile_audit import DOMAIN_TITLE_FAMILIES, FORBIDDEN_GENERIC_TITLES
-
-        tool = {
-            "name": "save_profile",
-            "description": "Save the extracted resume profile as structured data.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "name":     {"type": "string"},
-                    "email":    {"type": "string"},
-                    "linkedin": {"type": "string"},
-                    "github":   {"type": "string"},
-                    "phone":    {"type": "string"},
-                    "location": {"type": "string"},
-                    "target_titles": {
-                        "type": "array",
-                        "description": (
-                            "5–8 domain-specific job titles drawn ONLY from the "
-                            "hardware / semiconductor / photonics / embedded title "
-                            "families listed in the prompt. Every title MUST include "
-                            "an 'evidence' line quoted from the resume's Education or "
-                            "Research Experience section justifying it."
-                        ),
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "title":    {"type": "string"},
-                                "family":   {"type": "string",
-                                             "description": "Which title family from the whitelist"},
-                                "evidence": {"type": "string",
-                                             "description": "Exact line from Education or Research Experience that justifies this title"},
-                            },
-                            "required": ["title", "family", "evidence"],
-                        },
-                    },
-                    "top_hard_skills": {
-                        "type": "array",
-                        "description": (
-                            "TECHNICAL NOUNS ONLY: programming languages, software "
-                            "tools, simulation environments, lab equipment, "
-                            "fabrication processes, measurement techniques, hardware "
-                            "platforms, named methodologies. NEVER include "
-                            "interpersonal traits. Scan EVERY section — coursework, "
-                            "research bullets, projects, skills list — and extract "
-                            "every technical noun you see. Completeness over brevity."
-                        ),
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "skill":    {"type": "string"},
-                                "category": {
-                                    "type": "string",
-                                    "enum": [
-                                        "programming_language",
-                                        "software_tool",
-                                        "simulation_environment",
-                                        "fab_process",
-                                        "lab_instrument",
-                                        "measurement_technique",
-                                        "hardware_platform",
-                                        "methodology",
-                                    ],
-                                },
-                                "evidence": {
-                                    "type": "string",
-                                    "description": "Exact substring from the resume where this skill appears.",
-                                },
-                            },
-                            "required": ["skill", "category", "evidence"],
-                        },
-                    },
-                    "top_soft_skills": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": (
-                            "Behavioral/interpersonal traits ONLY (e.g. Teamwork, "
-                            "Technical Writing, Project Management). NEVER include "
-                            "lab techniques, instruments, software, or languages."
-                        ),
-                    },
-                    "education": {
-                        "type": "array",
-                        "items": {"type": "object", "properties": {
-                            "degree": {"type": "string"}, "institution": {"type": "string"},
-                            "year":   {"type": "string"}, "gpa":         {"type": "string"},
-                        }},
-                    },
-                    "research_experience": {
-                        "type": "array",
-                        "description": "Academic / lab / research roles — anything with a PI, lab, or research group. Keep SEPARATE from work_experience.",
-                        "items": {"type": "object", "properties": {
-                            "title":   {"type": "string"}, "company": {"type": "string"},
-                            "dates":   {"type": "string"},
-                            "bullets": {"type": "array", "items": {"type": "string"}},
-                        }},
-                    },
-                    "work_experience": {
-                        "type": "array",
-                        "description": "Industry / internship / part-time jobs (non-research).",
-                        "items": {"type": "object", "properties": {
-                            "title":   {"type": "string"}, "company": {"type": "string"},
-                            "dates":   {"type": "string"},
-                            "bullets": {"type": "array", "items": {"type": "string"}},
-                        }},
-                    },
-                    "experience": {
-                        "type": "array",
-                        "description": "Back-compat: union of research_experience + work_experience.",
-                        "items": {"type": "object", "properties": {
-                            "title":   {"type": "string"}, "company": {"type": "string"},
-                            "dates":   {"type": "string"},
-                            "bullets": {"type": "array", "items": {"type": "string"}},
-                        }},
-                    },
-                    "projects": {
-                        "type": "array",
-                        "items": {"type": "object", "properties": {
-                            "name":        {"type": "string"},
-                            "description": {"type": "string"},
-                            "skills_used": {"type": "array", "items": {"type": "string"}},
-                        }},
-                    },
-                    "resume_gaps": {"type": "array", "items": {"type": "string"}},
-                    "critical_analysis": {
-                        "type": "string",
-                        "description": "A 3-4 paragraph brutally honest and detailed critique of the resume. Analyze: 1. Impact & Quantified Achievements (or lack thereof), 2. Skill Density vs. Industry Standards, 3. Structural Clarity for ATS and Human Reviewers, 4. Specific high-value action items to land top-tier roles."
-                    },
-                },
-                "required": ["name", "top_hard_skills", "top_soft_skills", "target_titles", "critical_analysis"],
-            },
-        }
-
-        pref_hint = ""
+    def extract_profile(self, resume_text: str, preferred_titles: list | None = None,
+                        heuristic_hint: dict | None = None) -> dict:
+        import json as _json
+        prompt_parts: list[str] = []
         if preferred_titles:
-            pref_hint = (
-                f"\nThe candidate's stated preferences are: {', '.join(preferred_titles)}. "
-                "Use these as a TIEBREAKER only — they do NOT override the domain whitelist."
+            prompt_parts.append(
+                "PREFERRED TITLES (rank these first if evidence supports them): "
+                + ", ".join(preferred_titles)
             )
-
         heur_block = _build_heuristic_block(heuristic_hint)
-
-        prompt = (
-            "Parse this resume in THREE ORDERED PASSES. Do not skip passes.\n\n"
-            f"{heur_block}\n"
-            "PASS 1 — Section map:\n"
-            "Identify and label Education, Research Experience, Work Experience, "
-            "Projects, Skills, and Publications. Separate research roles (lab / PI / "
-            "research group) from industry roles.\n\n"
-            "PASS 2 — Hard-skill extraction (STRICT taxonomy):\n"
-            "Hard skills = TECHNICAL NOUNS ONLY: tools, software, programming "
-            "languages, lab equipment, fabrication processes, measurement techniques, "
-            "simulation environments, named methodologies.\n"
-            "Soft skills = BEHAVIORAL / INTERPERSONAL traits ONLY (teamwork, "
-            "communication, project management). NEVER place lab techniques, "
-            "instruments, or software packages under soft skills.\n"
-            "Scan the ENTIRE resume — every bullet under Research Experience, "
-            "Projects, Coursework, and the Skills list. List EVERY technical noun. "
-            "Completeness > brevity. For each hard skill, include the exact "
-            "substring from the resume as `evidence`.\n\n"
-            "PASS 3 — Target titles:\n"
-            "Suggest 5–8 titles DRAWN ONLY from this whitelist of "
-            "hardware / semiconductor / photonics / embedded role families:\n"
-            f"  {chr(10).join('  - ' + f for f in DOMAIN_TITLE_FAMILIES)}\n\n"
-            "FORBIDDEN titles (do NOT suggest unless the candidate's primary Education "
-            "is Computer Science AND there is ZERO lab/fab/device research experience):\n"
-            f"  {', '.join(sorted(FORBIDDEN_GENERIC_TITLES))}\n\n"
-            "Every suggested title MUST be justified by a specific line from the "
-            "Education or Research Experience section — put that line in the "
-            "`evidence` field. Weight Education and Research Experience much more "
-            "heavily than Work Experience when choosing titles."
-            f"{pref_hint}\n\n"
-            f"Resume:\n{resume_text}"
+        if heur_block:
+            prompt_parts.append(
+                "HEURISTIC HINT (baseline extracted by regex/section parser — "
+                "verify and correct, do NOT discard wholesale):\n"
+                + heur_block
+            )
+        prompt_parts.append("RESUME:\n" + resume_text)
+        prompt_parts.append(
+            "Return a JSON object matching the schema. Every target_title "
+            "and hard_skill MUST include the verbatim evidence line from the resume."
         )
-        return self._tool_call(tool, prompt, thinking=True)
+        prompt = "\n\n".join(prompt_parts)
+        system = (
+            "You are a resume analyst. Extract the candidate's profile as "
+            "structured JSON. Be brutally honest in critical_analysis. Never "
+            "fabricate — every claim must trace to a line in the resume."
+        )
+        raw = _run_cli(prompt, system=system, json_schema=EXTRACT_PROFILE_SCHEMA,
+                       effort=self.DEFAULT_EFFORT, timeout_s=120.0)
+        return _json.loads(raw)
 
     def score_job(self, job: dict, profile: dict) -> dict:
-        # Deterministic skill coverage — the LLM does NOT get to invent this.
-        det_cov, det_matched, det_missing = compute_skill_coverage(job, profile)
-        tool = {
-            "name": "score_job",
-            "description": "Judge industry alignment and location/seniority fit. Skill coverage is computed deterministically and provided as input — DO NOT recompute it.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "industry":           {"type": "number", "minimum": 0, "maximum": 1,
-                                           "description": "How well the job's domain/industry aligns with the candidate's target field and background. 1.0 = exact target field, 0.5 = adjacent/transferable, 0.0 = unrelated."},
-                    "location_seniority": {"type": "number", "minimum": 0, "maximum": 1,
-                                           "description": "Combined fit of location AND seniority. 1.0 = remote OR matches candidate location AND seniority matches candidate's level. 0.5 = one mismatch. 0.0 = both mismatch."},
-                    "reasoning":          {"type": "string",
-                                           "description": "ONE sentence grounded in actual JD/profile content — cite a specific requirement, skill, or detail. Do not generalize."},
-                },
-                "required": ["industry", "location_seniority", "reasoning"],
-            },
-        }
-        edu = (profile.get("education") or [{}])[0] if profile.get("education") else {}
-        candidate_block = (
-            f"  Skills (top): {', '.join((profile.get('top_hard_skills') or [])[:15])}\n"
-            f"  Target titles: {', '.join(profile.get('target_titles') or [])}\n"
-            f"  Education: {edu.get('degree', '?')} at {edu.get('institution', '?')} ({edu.get('dates', '')})\n"
-            f"  Location preference: {profile.get('location') or 'unspecified'}"
-        )
-        desc = (job.get("description") or "")
+        import json as _json
+        coverage_raw, matched, missing = compute_skill_coverage(job, profile)
+        keep_keys = ("title", "company", "location", "remote", "description",
+                     "requirements", "experience_level", "education_required")
+        job_summary = {k: job.get(k) for k in keep_keys}
+        target_titles = [
+            t.get("title") if isinstance(t, dict) else str(t)
+            for t in profile.get("target_titles", [])
+        ]
+        top_skills = [s.get("skill") if isinstance(s, dict) else s
+                      for s in profile.get("top_hard_skills", [])[:30]]
+        desc = job_summary.get("description") or ""
         if len(desc) > 1200:
-            desc = desc[:1200] + "…"
-        job_block = (
-            f"  Title: {job.get('title')}\n"
-            f"  Company: {job.get('company')}\n"
-            f"  Location: {job.get('location')} (remote={bool(job.get('remote'))})\n"
-            f"  Experience level: {job.get('experience_level', 'unknown')}\n"
-            f"  Requirements: {', '.join((job.get('requirements') or [])[:12]) or '(none listed)'}\n"
-            f"  Description: {desc or '(none)'}"
-        )
+            job_summary["description"] = desc[:1200] + "…"
         prompt = (
-            "You are scoring how well a job posting fits a candidate. Skill "
-            "coverage has ALREADY been computed deterministically — don't redo it. "
-            "Your job is to judge two qualitative dimensions:\n"
-            "  - industry (0.0-1.0): how aligned is the job's domain with the candidate?\n"
-            "  - location_seniority (0.0-1.0): location and seniority fit.\n"
-            "Be strict: 1.0 means perfect fit, 0.5 means partially aligned, 0.0 means clearly off. "
-            "The reasoning MUST cite a concrete requirement, skill, or detail from the JD — "
-            "not generic phrases like 'good match'.\n\n"
-            f"=== Deterministic skill coverage (FYI, do not change): "
-            f"{det_cov:.2f} ({len(det_matched)} matched / {len(det_missing)} missing) ===\n\n"
-            f"Candidate:\n{candidate_block}\n\n"
-            f"Job:\n{job_block}"
+            "Score this job for the candidate. Return JSON with these fields:\n"
+            "  industry: 0..1 (industry/sector fit)\n"
+            "  location_seniority: 0..1 (location + seniority fit)\n"
+            "  reasoning: 1–2 sentences\n\n"
+            f"JOB: {_json.dumps(job_summary, indent=2)}\n\n"
+            f"CANDIDATE: target_titles={target_titles}, top_hard_skills={top_skills}\n"
+            f"DETERMINISTIC skill coverage already computed: {coverage_raw:.2f}"
         )
-        raw = self._tool_call(tool, prompt, max_tokens=512)
+        system = "You are a rigorous job-fit scorer. Be concise. Never inflate."
+        raw = _run_cli(prompt, system=system, json_schema=SCORE_JOB_SCHEMA,
+                       effort=self.DEFAULT_EFFORT, timeout_s=120.0)
+        parsed = _json.loads(raw)
         return _build_rubric_result(
             job,
-            det_cov,
-            raw.get("industry", 0.5),
-            raw.get("location_seniority", 0.5),
-            matched=det_matched,
-            missing=det_missing,
-            reasoning=raw.get("reasoning", ""),
+            req_raw=coverage_raw,  # deterministic, not LLM
+            industry_raw=parsed.get("industry", 0.5),
+            loc_seniority_raw=parsed.get("location_seniority", 0.5),
+            matched=matched,
+            missing=missing,
+            reasoning=parsed.get("reasoning") or "",
         )
 
-    def tailor_resume(self, job: dict, profile: dict, resume_text: str) -> dict:
-        tool = {
-            "name": "tailored_resume",
-            "description": "Return tailored resume sections for this specific job.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "skills_reordered":   {"type": "array", "items": {"type": "string"}},
-                    "experience_bullets": {
-                        "type": "array",
-                        "items": {"type": "object", "properties": {
-                            "role":    {"type": "string"},
-                            "bullets": {"type": "array", "items": {"type": "string"}},
-                        }},
-                    },
-                    "ats_keywords_missing": {"type": "array", "items": {"type": "string"}},
-                    "section_order":        {"type": "array", "items": {"type": "string"}},
-                },
-                "required": ["skills_reordered", "ats_keywords_missing"],
-            },
-        }
-        prompt = (
-            f"Tailor this resume for: {job['title']} at {job['company']}.\n"
-            "Rules: reorder skills to front-load JD keywords, rephrase bullets naturally — "
-            "NEVER fabricate, never change dates/titles/companies. "
-            "Do NOT include a summary or objective section.\n"
-            "ATS check: flag top JD keywords missing from resume.\n\n"
-            f"JD Requirements: {', '.join(job.get('requirements', []))}\n"
-            f"JD Description: {job.get('description', '')}\n\n"
-            f"Candidate Skills: {', '.join(profile.get('top_hard_skills', []))}\n\n"
-            f"Current Resume:\n{resume_text}"
+    def tailor_resume(self, job: dict, profile: dict, resume_text: str,
+                      *, selected_keywords: list[str] | None = None,
+                      source_format: str | None = None) -> dict:
+        import json as _json
+        sel = list(selected_keywords or [])
+        declined = [
+            r for r in (job.get("requirements") or [])
+            if isinstance(r, str) and r and r not in sel
+        ]
+        job_summary = {k: job.get(k) for k in
+                       ("title", "company", "location", "description", "requirements")}
+        profile_summary = {k: profile.get(k) for k in
+                            ("name", "target_titles", "top_hard_skills",
+                             "top_soft_skills", "work_experience", "experience",
+                             "education")}
+        system = (
+            "You are tailoring resumes for specific job applications. "
+            "Output the COMPLETE TailoredResume v2 — every section the "
+            "candidate's source resume had. NEVER fabricate. NEVER change "
+            "titles, companies, dates, institutions, degrees, or GPAs. "
+            "For each user-selected keyword: REPHRASE an existing bullet "
+            "(diff=modified) when it fits, else ADD a new bullet (diff=added) "
+            "under the most relevant role. Reorder bullets within each role "
+            "by JD relevance (no diff change for reorder alone). Set "
+            "diff=unchanged on every TextNode you did not modify."
         )
-        return self._tool_call(tool, prompt, max_tokens=4096, thinking=True)
+        prompt = (
+            f"Tailor this resume for: {job.get('title', '')} at {job.get('company', '')}.\n\n"
+            f"JOB:\n{_json.dumps(job_summary, indent=2)}\n\n"
+            f"CANDIDATE PROFILE:\n{_json.dumps(profile_summary, indent=2)}\n\n"
+            f"RAW RESUME:\n{resume_text[:8000]}\n\n"
+            f"USER-SELECTED keywords to weave in: "
+            f"{', '.join(sel) if sel else '(none — default to must-have JD keywords missing from resume)'}\n"
+            f"USER-DECLINED keywords (do NOT include): {', '.join(declined[:20])}\n"
+            f"Source format hint: {source_format or 'pdf'}\n"
+        )
+        raw = _run_cli(prompt, system=system, json_schema=TAILOR_RESUME_SCHEMA,
+                       effort="xhigh", timeout_s=240.0)
+        return _json.loads(raw)
 
     def generate_cover_letter(self, job: dict, profile: dict) -> str:
-        name = profile.get("name") or OWNER_NAME
-        resp = self.client.messages.create(
-            model=self.model, max_tokens=1024,
-            messages=[{"role": "user", "content": (
-                f"Write a 3-paragraph cover letter for {name} applying to "
-                f"{job['title']} at {job['company']}.\n"
-                "Para 1: Hook + role name. Para 2: Top 2-3 achievements mapped to JD. "
-                "Para 3: Enthusiasm + call to action.\n"
-                f"Candidate name: {name}\n"
-                f"Candidate skills: {', '.join(profile.get('top_hard_skills', [])[:5])}\n"
-                f"Candidate education: "
-                f"{(profile.get('education') or [{}])[0].get('degree', '')} at "
-                f"{(profile.get('education') or [{}])[0].get('institution', '')}\n"
-                f"JD requirements: {', '.join(job.get('requirements', [])[:5])}"
-            )}],
+        skills_blob = ", ".join(
+            (s.get("skill") if isinstance(s, dict) else str(s))
+            for s in profile.get("top_hard_skills", [])[:10]
         )
-        return next(b.text for b in resp.content if b.type == "text")
+        prompt = (
+            "Write a 3–4 paragraph cover letter for this candidate applying "
+            "to this job. Concise, specific, no purple prose.\n\n"
+            f"JOB: {job.get('title')} at {job.get('company')}\n"
+            f"{(job.get('description') or '')[:1500]}\n\n"
+            f"CANDIDATE: {profile.get('name', '')}\n"
+            f"Key skills: {skills_blob}"
+        )
+        return self.chat(
+            system="You write concise, specific cover letters. No fluff.",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=1024,
+        )
 
     def generate_report(self, summary_data: dict) -> str:
-        resp = self.client.messages.create(
-            model=self.model, max_tokens=1024,
-            messages=[{"role": "user", "content": (
-                "Generate a concise job application run summary.\n\n"
-                f"Data:\n{json.dumps(summary_data, indent=2)}\n\n"
-                "Include: overall stats, top 3 applied jobs, manual items, "
-                "2-3 recommended next steps. Plain text only."
-            )}],
+        import json as _json
+        prompt = (
+            "Generate a markdown run report for this job-application session. "
+            "Open with one-sentence summary, then a short bullet list of "
+            "highlights, then concrete next-step recommendations.\n\n"
+            f"SUMMARY DATA:\n{_json.dumps(summary_data, indent=2)}"
         )
-        return next(b.text for b in resp.content if b.type == "text")
+        return self.chat(
+            system="You write concise markdown run-reports.",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=1500,
+        )
 
     def generate_demo_jobs(self, profile: dict, titles: list, location: str) -> list:
-        skills = ", ".join(profile.get("top_hard_skills", [])[:5])
-        resp = self.client.messages.create(
-            model=self.model, max_tokens=4096,
-            messages=[{"role": "user", "content": (
-                "Generate 12 realistic internship job postings.\n"
-                f"Titles: {', '.join(titles)}\nLocation: {location} or Remote\n"
-                f"Key skills: {skills}\n\n"
-                "Return a JSON array only (no markdown). Each object: "
-                "id, title, company, location, remote (bool), "
-                f"posted_date (ISO, last 14 days from {date.today().isoformat()}), "
-                "description (2-3 sentences), requirements (array 5-8 strings), "
-                "salary_range (string or null), application_url, "
-                "platform (LinkedIn|Indeed|Glassdoor|Handshake|Company Site).\n"
-                "Focus on IC design, photonics, FPGA, hardware at top EE companies."
-            )}],
+        import json as _json
+        target_titles = [str(t) for t in (titles or []) if str(t).strip()][:5]
+        skills_top = [
+            (s.get("skill") if isinstance(s, dict) else str(s))
+            for s in (profile.get("top_hard_skills") or []) if s
+        ][:8]
+        edu = (profile.get("education") or [{}])[0] if profile.get("education") else {}
+        degree = str(edu.get("degree") or "").strip()
+        # Infer a coarse industry hint from the most-frequent target-title family.
+        industry_hint = ""
+        title_blob = " ".join(target_titles).lower()
+        for keyword, family in (
+            ("software", "software / web / SaaS"),
+            ("data", "data science / analytics"),
+            ("machine learning", "ML / applied AI"),
+            ("hardware", "hardware / electronics"),
+            ("design", "product / industrial / UX design"),
+            ("marketing", "marketing / growth"),
+            ("sales", "sales / business development"),
+            ("nurse", "healthcare / clinical"),
+            ("clinical", "healthcare / clinical"),
+            ("teacher", "education"),
+            ("finance", "finance / banking"),
+            ("accountant", "accounting"),
+        ):
+            if keyword in title_blob:
+                industry_hint = family
+                break
+
+        prompt = (
+            "Generate 12 realistic job postings tailored to the candidate below. "
+            "Each posting must match the candidate's domain, seniority, and skills "
+            "— do NOT default to a generic field if the profile is in a different one.\n\n"
+            f"Candidate target titles: {', '.join(target_titles) or '(none specified)'}\n"
+            f"Candidate top skills: {', '.join(skills_top) or '(none specified)'}\n"
+            f"Candidate education: {degree or '(unspecified)'}\n"
+            f"Candidate location preference: {location or 'flexible'} (or Remote)\n"
+            + (f"Industry hint (from titles): {industry_hint}.\n" if industry_hint else "")
+            + "\n"
+            "Return JSON with a 'jobs' array. Each entry: "
+            "id, title, company, location, remote (bool), "
+            f"posted_date (ISO, last 14 days from {date.today().isoformat()}), "
+            "description (2-3 sentences), requirements (array 5-8 strings), "
+            "salary_range (string or null), application_url, "
+            "platform (LinkedIn|Indeed|Glassdoor|Handshake|Company Site)."
         )
-        raw = next(b.text for b in resp.content if b.type == "text")
-        m = re.search(r'\[.*\]', raw, re.DOTALL)
-        return json.loads(m.group()) if m else []
+        raw = self.chat(
+            system="You generate realistic-looking demo job postings.",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=4096,
+            json_mode=True,
+        )
+        try:
+            parsed = _json.loads(raw)
+        except _json.JSONDecodeError:
+            return []
+        if isinstance(parsed, dict):
+            return parsed.get("jobs") or []
+        if isinstance(parsed, list):
+            return parsed
+        return []
 
 
 # ── 2. Demo (regex / template, no API) ────────────────────────────────────────
@@ -663,12 +1136,13 @@ def _extract_name_from_text(text: str) -> str:
 
     Tier 1 — spaCy NER (highest accuracy, optional):
         Uses the 'en_core_web_sm' model to find PERSON entities in the first
-        200 characters. Skipped gracefully if spaCy is not installed.
+        ~300 characters. Skipped gracefully if spaCy is not installed.
 
     Tier 2 — First-line heuristic:
         The very first non-empty, non-contact line of a well-structured resume
         is almost always the candidate's name.  Applies strict sanity guards
-        (no @, no digits, no URLs, no section-header words, 2–4 tokens).
+        (no @, no digits, no URLs, no section-header / role-title words, 2–4
+        tokens).
 
     Tier 3 — Scored window scan:
         Scans the first 30 lines with a confidence model:
@@ -677,10 +1151,10 @@ def _extract_name_from_text(text: str) -> str:
         - must match a name-safe character pattern
         Best-scoring candidate wins.
 
-    Falls back to OWNER_NAME placeholder if all three tiers fail.
+    Falls back to "" if all three tiers fail (do NOT inject the placeholder
+    OWNER_NAME — the upstream merger would treat the placeholder as truth,
+    masking real extraction failures).
     """
-    from .config import OWNER_NAME as _placeholder
-
     _SECTION_HEADERS = {
         "education", "experience", "skills", "projects", "objective",
         "summary", "profile", "about", "interests", "certifications",
@@ -688,12 +1162,24 @@ def _extract_name_from_text(text: str) -> str:
         "technical skills", "core competencies", "work experience",
         "professional experience", "research experience",
         "volunteer", "activities", "languages", "coursework",
+        "achievements", "honors", "leadership",
     }
+    # Words that almost always mark a job title or institution line — never
+    # a person name. If a candidate line contains any of these, reject.
+    _ROLE_OR_INSTITUTION_RE = re.compile(
+        r"\b(?:engineer|developer|analyst|manager|director|scientist|"
+        r"researcher|architect|consultant|designer|specialist|associate|"
+        r"officer|coordinator|technician|fellow|assistant|administrator|"
+        r"intern|internship|nurse|paralegal|accountant|teacher|tutor|"
+        r"professor|trader|recruiter|operator|representative|"
+        r"university|college|institute|school|academy|department|"
+        r"corporation|company|inc|llc|ltd|gmbh)\b",
+        re.IGNORECASE,
+    )
     _BAD_RE = re.compile(
         r'[@/\\]|https?://|www\.|\.com|\.edu|\.org|\.io|\.net|'
         r'\d{3}[\s.\-]\d{3,4}|'          # phone fragments
-        r'\b(?:university|college|institute|school|department|'
-        r'gpa|grade|phone|tel|fax|email)\b',
+        r'\b(?:gpa|grade|phone|tel|fax|email|cv|resume|curriculum)\b',
         re.I,
     )
     # Name-safe: each word must match one of:
@@ -723,9 +1209,53 @@ def _extract_name_from_text(text: str) -> str:
 
     _NAME_RE = _name_re_match  # callable, same interface as re.match
 
+    # Two-word title-case "city-shaped" lines that match _NAME_RE but are
+    # never personal names. Cities fronting a sidebar contact block (Colin's
+    # CV puts "Hong Kong" four lines under CONTACT) are the canonical
+    # collision; the section-aware rejection below handles the general case,
+    # this list is belt-and-suspenders for resumes whose section markers got
+    # stripped during PDF text extraction.
+    _CITY_BLACKLIST = {
+        s.lower() for s in (
+            "Hong Kong", "New York", "Los Angeles", "San Francisco",
+            "San Diego", "San Jose", "Las Vegas", "New Delhi", "New Orleans",
+            "Mexico City", "Tel Aviv", "Cape Town", "Buenos Aires",
+            "Sao Paulo", "Rio de Janeiro", "Hong Kong SAR", "Kuala Lumpur",
+            "Saudi Arabia", "South Korea", "South Africa", "United Kingdom",
+            "United States", "United Arab Emirates", "New Zealand",
+            "Czech Republic", "Costa Rica", "Puerto Rico", "El Salvador",
+        )
+    }
+
+    def _line_is_name_safe(line: str) -> bool:
+        """Hard rejects regardless of which tier is checking."""
+        if _BAD_RE.search(line):
+            return False
+        if _ROLE_OR_INSTITUTION_RE.search(line):
+            return False
+        if line.lower().rstrip(":.,") in _SECTION_HEADERS:
+            return False
+        if line.strip().rstrip(",.;:|").lower() in _CITY_BLACKLIST:
+            return False
+        return _NAME_RE(line)
+
     lines = [l.strip() for l in text.splitlines() if l.strip()]
     if not lines:
-        return _placeholder
+        return ""
+
+    # Build a per-line section label. The "header" zone is everything BEFORE
+    # the first recognised section header. Lines after that point sit inside
+    # CONTACT / SKILLS / EDUCATION / etc. and are NOT eligible to be the name —
+    # this is what kills "Hong Kong" winning over the actual name in a sidebar
+    # resume layout. If extraction is uncertain we'd rather return "" and let
+    # the LLM merge fill the field than commit to a wrong guess.
+    section_at: list[str] = []
+    current_section = "header"
+    for ln in lines:
+        norm = ln.lower().rstrip(":.,;-").strip()
+        if norm in _SECTION_HEADERS:
+            current_section = norm
+        section_at.append(current_section)
 
     # ── Tier 1: spaCy NER ────────────────────────────────────────────────────
     try:
@@ -740,38 +1270,33 @@ def _extract_name_from_text(text: str) -> str:
             doc = nlp(snippet)
             for ent in doc.ents:
                 if ent.label_ == "PERSON" and len(ent.text.split()) >= 2:
-                    # Confirm the token passes basic sanity (no @, no digits).
                     candidate = ent.text.strip()
-                    if not _BAD_RE.search(candidate) and _NAME_RE(candidate):
+                    if _line_is_name_safe(candidate):
                         return candidate
     except ImportError:
         pass  # spaCy optional — move to next tier
 
     # ── Tier 2: first-line heuristic ─────────────────────────────────────────
     # The first non-empty line of a resume is the name ~80% of the time.
-    first = lines[0]
-    if (
-        not _BAD_RE.search(first)
-        and first.lower().rstrip(":.") not in _SECTION_HEADERS
-        and _NAME_RE(first)
-    ):
-        return first
+    if _line_is_name_safe(lines[0]):
+        return lines[0]
 
     # ── Tier 3: scored window scan ────────────────────────────────────────────
+    # Widened from 30 to 60 lines so sidebar resumes (where the name is drawn
+    # in PDF order *after* the left-column CONTACT/EDUCATION blocks — like
+    # Colin Tse's CV at line 41) still have a chance. The section-aware
+    # rejection below keeps false-positives like "Hong Kong" or "Project
+    # Management" from winning when they sit inside CONTACT/SKILLS blocks.
     candidates: list[tuple[int, str]] = []
 
-    for i, line in enumerate(lines[:30]):
+    for i, line in enumerate(lines[:60]):
         if len(line) > 55:          # long lines are addresses / bullets
             continue
-        if _BAD_RE.search(line):
+        if not _line_is_name_safe(line):
             continue
-        low = line.lower().rstrip(":,.")
-        if low in _SECTION_HEADERS:
-            continue
-        words = line.split()
-        if not (2 <= len(words) <= 4):
-            continue
-        if not _NAME_RE(line):
+        # Only the "header" zone (before any section marker) is eligible.
+        # Names inside CONTACT/SKILLS/etc. are virtually always false hits.
+        if i < len(section_at) and section_at[i] != "header":
             continue
 
         score = max(0, 15 - i)                              # earlier → higher
@@ -779,7 +1304,7 @@ def _extract_name_from_text(text: str) -> str:
             score += 6                                       # Title Case bonus
         elif line == line.upper():
             score += 4                                       # ALL CAPS bonus
-        if len(words) == 3:
+        if len(line.split()) == 3:
             score += 2                                       # first middle last
         candidates.append((score, line))
 
@@ -787,18 +1312,24 @@ def _extract_name_from_text(text: str) -> str:
         candidates.sort(key=lambda x: -x[0])
         return candidates[0][1]
 
-    return _placeholder
+    return ""
 
 
 def _extract_location_from_text(text: str) -> str:
-    """Best-effort location extraction from raw resume text.
+    """Best-effort residence-location extraction from the resume header.
 
-    Detects locations in order of confidence:
-      1. Inline contact separator — "City, ST  |  email  |  phone"
-      2. US "City, ST" / "City, State" pattern (2- and 3-word cities).
-      3. International "City, Country" pattern.
-      4. Standalone US state name in the first 20 lines.
-      5. Empty string — never injects a hardcoded location.
+    Strategy:
+      1. Restrict the search to the first 12 lines (header block) — anything
+         later is almost certainly an Education/Experience location, not the
+         candidate's residence.
+      2. Skip any line that is part of an Education entry: lines that contain
+         "university", "college", "institute", or a degree token.
+      3. Try the inline contact-bar pattern first (City, ST | email | phone).
+      4. Fall back to a "City, ST"/"City, State" / "City, Country" match
+         in the same restricted header, again skipping institution lines.
+      5. Last resort: a standalone state name on a contact-style line.
+      6. Return empty string when nothing safely matches — never inject
+         a hardcoded location.
     """
     _US_STATES = {
         "Alabama","Alaska","Arizona","Arkansas","California","Colorado",
@@ -815,38 +1346,126 @@ def _extract_location_from_text(text: str) -> str:
     _US_STATE_RE = (
         r'(?:' + '|'.join(re.escape(s) for s in _US_STATES) + r'|[A-Z]{2})'
     )
-    # Pattern 1: inline separator bar — grab first segment that looks like a location.
-    # e.g. "Austin, TX  |  john@email.com  |  (512) 555-1234"
     bar_line_re = re.compile(
         r'\b([A-Z][a-z]+(?:[\s-][A-Z][a-z]+){0,2}),\s*' + _US_STATE_RE + r'\b'
     )
-    # Pattern 2: International — "City, Country" where country is title-case.
+    # International: "City, Country" — explicit country list keeps us from
+    # matching arbitrary "Word, Word" pairs (which previously matched things
+    # like "Stanford, CA" and "Engineering, Inc").
+    _COUNTRIES = (
+        "Canada", "Mexico", "United Kingdom", "UK", "Ireland", "France",
+        "Germany", "Spain", "Italy", "Portugal", "Netherlands", "Belgium",
+        "Switzerland", "Austria", "Denmark", "Norway", "Sweden", "Finland",
+        "Iceland", "Poland", "Czech Republic", "Hungary", "Romania", "Greece",
+        "Turkey", "Israel", "United Arab Emirates", "UAE", "Saudi Arabia",
+        "India", "Pakistan", "Bangladesh", "Nepal", "Sri Lanka",
+        "China", "Japan", "South Korea", "Singapore", "Malaysia", "Thailand",
+        "Vietnam", "Philippines", "Indonesia", "Australia", "New Zealand",
+        "Brazil", "Argentina", "Chile", "Colombia", "Peru", "Mexico City",
+        "South Africa", "Nigeria", "Kenya", "Egypt", "Morocco",
+    )
     intl_re = re.compile(
-        r'\b([A-Z][a-z]+(?:[\s-][A-Z][a-z]+){0,2}),\s*'
-        r'([A-Z][a-z]+(?:\s[A-Z][a-z]+)?)\b'
+        r'\b([A-Z][a-z]+(?:[\s-][A-Z][a-z]+){0,2}),\s*('
+        + r'|'.join(re.escape(c) for c in _COUNTRIES)
+        + r')\b'
+    )
+    institution_re = re.compile(
+        r"\b(?:university|college|institute|institut|school|academy|"
+        r"polytechnic|conservatory|seminary)\b",
+        re.IGNORECASE,
+    )
+    degree_re = re.compile(
+        r"\b(?:b\.?[as]\.?|bsc|m\.?[as]\.?|msc|m\.?eng|ph\.?d|doctorate|"
+        r"bachelor|master|associate|diploma)\b",
+        re.IGNORECASE,
     )
 
-    header = "\n".join(text.splitlines()[:25])   # location always near the top
+    def _line_is_institution(line: str) -> bool:
+        # Education / school lines mention a city only as the school's city,
+        # not the candidate's residence — skip them.
+        return bool(institution_re.search(line) or degree_re.search(line))
 
-    m = bar_line_re.search(header)
-    if m:
-        return m.group(0)
+    # Standalone metropolises that act as a complete location on their own
+    # line — they don't need a "City, Country" comma. Sidebar-style PDFs
+    # routinely list these alone (e.g. Colin's CV: "Hong Kong" sits one line
+    # under his email). To avoid matching mid-sentence prose ("Worked in
+    # Singapore"), Pass 4 below requires the standalone line to live within
+    # a contact-block (email/phone/| within a few lines).
+    _STANDALONE_CITIES = {
+        "Hong Kong", "Singapore", "Macau", "Macao", "Dubai", "Abu Dhabi",
+        "Doha", "Kuwait City", "Tel Aviv", "Tokyo", "Osaka", "Kyoto",
+        "Seoul", "Busan", "Taipei", "Shanghai", "Beijing", "Shenzhen",
+        "Bangkok", "Manila", "Jakarta", "Hanoi", "Ho Chi Minh City",
+        "Mumbai", "Bangalore", "Bengaluru", "Delhi", "New Delhi",
+        "Hyderabad", "Chennai", "Pune", "Kolkata",
+        "Berlin", "Munich", "Hamburg", "Frankfurt", "Cologne",
+        "Paris", "Lyon", "Marseille", "Madrid", "Barcelona", "Valencia",
+        "Rome", "Milan", "Naples", "Florence", "Vienna", "Zurich",
+        "Geneva", "Brussels", "Amsterdam", "Rotterdam",
+        "Prague", "Warsaw", "Krakow", "Budapest", "Bucharest",
+        "Stockholm", "Oslo", "Copenhagen", "Helsinki", "Reykjavik",
+        "Moscow", "Saint Petersburg", "Istanbul", "Athens", "Dublin",
+        "Edinburgh", "Glasgow", "Manchester", "Birmingham", "London",
+        "Sydney", "Melbourne", "Brisbane", "Perth", "Auckland",
+        "Toronto", "Montreal", "Vancouver", "Ottawa", "Calgary",
+        "Mexico City", "Guadalajara", "Monterrey",
+        "Buenos Aires", "São Paulo", "Sao Paulo", "Rio de Janeiro",
+        "Brasília", "Brasilia", "Bogotá", "Bogota", "Lima", "Santiago",
+        "Cairo", "Lagos", "Nairobi", "Johannesburg", "Cape Town",
+    }
+    standalone_re = re.compile(
+        r'^\s*(' + '|'.join(re.escape(c) for c in sorted(_STANDALONE_CITIES,
+                                                          key=len, reverse=True)) + r')\s*$'
+    )
 
-    # Pattern 3: international match (lower confidence — only use if no US match).
-    intl_m = intl_re.search(header)
+    contact_signal = re.compile(r"[@|]|\d{3}[\s.\-]\d{3,4}", re.IGNORECASE)
 
-    # Pattern 4: standalone state name scan.
-    for line in text.splitlines()[:20]:
+    # Sidebar layouts (Colin's CV) push the contact block well past the first
+    # 12 lines — extracted text reads main column first, then sidebar. 30
+    # lines covers the common cases without venturing into experience prose.
+    raw_header_lines = [l for l in text.splitlines()[:30] if l.strip()]
+    header_lines = raw_header_lines
+
+    # Pass 1: contact-bar — strongest signal because it sits next to email.
+    for line in header_lines:
+        if _line_is_institution(line):
+            continue
+        m = bar_line_re.search(line)
+        if m:
+            return m.group(0)
+
+    # Pass 2: international city/country.
+    for line in header_lines:
+        if _line_is_institution(line):
+            continue
+        m = intl_re.search(line)
+        if m:
+            return m.group(0)
+
+    # Pass 3: standalone state name on a contact-style line. We require the
+    # line to look like contact info (has @ / phone / pipe) so we don't pull
+    # "Worked at the California Institute of Technology" → "California".
+    for line in header_lines:
+        if _line_is_institution(line):
+            continue
+        if not contact_signal.search(line):
+            continue
         for state in _US_STATES:
             if re.search(rf'\b{re.escape(state)}\b', line, re.I):
-                # Prefer "City, State" over bare state.
-                m2 = bar_line_re.search(line)
-                if m2:
-                    return m2.group(0)
                 return state
 
-    if intl_m:
-        return intl_m.group(0)
+    # Pass 4: standalone metropolis on a line whose ±3-line neighborhood
+    # contains a contact signal (email / phone / pipe). The neighborhood
+    # gate is what stops "Worked in Tokyo on …" from registering.
+    for i, line in enumerate(header_lines):
+        if _line_is_institution(line):
+            continue
+        m = standalone_re.match(line)
+        if not m:
+            continue
+        nearby = header_lines[max(0, i - 3):i + 4]
+        if any(contact_signal.search(l) for l in nearby if l != line):
+            return m.group(1)
 
     return ""
 
@@ -1540,14 +2159,22 @@ class DemoProvider(BaseProvider):
             "Next actions: add LinkedIn, work authorization, target salary, and target titles to improve matching and autofill."
         )
 
+        # Soft skills are extracted from the resume text itself (same lexicon
+        # the heuristic uses upstream). NEVER hand back a hardcoded list — a
+        # marketing resume that doesn't say "Teamwork" anywhere should not
+        # come out the other side claiming Teamwork is one of the
+        # candidate's top soft skills. Empty list is the right answer when
+        # the lexicon doesn't see any of these tokens.
+        from .profile_extractor import _scan_soft_skills
+        soft_skills = _scan_soft_skills(resume_text)
+
         return {
             "name": name, "email": email, "linkedin": linkedin, "github": github, "phone": phone,
             "location": location,
             "summary": summary,
             "target_titles": target_titles,
             "top_hard_skills": hard_skills,
-            "top_soft_skills": ["Teamwork", "Problem-solving", "Communication",
-                                 "Attention to detail", "Time management"],
+            "top_soft_skills": soft_skills,
             "education":  education_parsed,
             "experience": experience,
             "work_experience": experience,
@@ -1582,25 +2209,18 @@ class DemoProvider(BaseProvider):
         return _build_rubric_result(job, req_raw, industry_raw, loc_seniority_raw,
                                     matched=matched, missing=missing)
 
-    def tailor_resume(self, job: dict, profile: dict, resume_text: str) -> dict:  # noqa: ARG002
-        jd_keywords  = [r.lower() for r in job.get("requirements", [])]
-        skills       = profile.get("top_hard_skills", [])
-        skills_lower = {s.lower(): s for s in skills}
-
-        matching         = [skills_lower[k] for k in jd_keywords if k in skills_lower]
-        other            = [s for s in skills if s not in matching]
-        skills_reordered = matching + other
-
-        missing_kw = [
-            r.title() for r in jd_keywords
-            if not any(r in s.lower() or s.lower() in r for s in skills)
-        ]
-        return {
-            "skills_reordered":     skills_reordered,
-            "experience_bullets":   [],
-            "ats_keywords_missing": missing_kw[:5],
-            "section_order":        ["Skills", "Projects", "Experience", "Education"],
-        }
+    def tailor_resume(self, job: dict, profile: dict, resume_text: str,
+                      *, selected_keywords: list[str] | None = None,
+                      source_format: str | None = None) -> dict:
+        # Demo mode IS the heuristic — delegate to the shared v2 module so the
+        # output matches what phase4_tailor_resume falls back to when the
+        # configured LLM glitches.  Demo always returns a TailoredResume v2
+        # dict; downstream callers (renderer + frontend) consume v2 directly.
+        from .heuristic_tailor import heuristic_tailor_resume_v2
+        return heuristic_tailor_resume_v2(
+            job, profile, resume_text,
+            selected_keywords=selected_keywords,
+        )
 
     def generate_cover_letter(self, job: dict, profile: dict) -> str:
         name       = profile.get("name") or OWNER_NAME
@@ -1657,9 +2277,11 @@ class DemoProvider(BaseProvider):
         # gracefully instead of bubbling a NotImplementedError.
         return (
             "Demo mode doesn't include a live chat assistant — switch to Ollama "
-            "(free, local) or Anthropic Claude (Pro plan) in Settings to enable "
-            "Ask Atlas. The job description and your profile are still loaded for "
-            "scoring and tailoring; only the chat advisor is gated."
+            "in Settings to enable Ask Atlas. Local models on the Pi work on the "
+            "Free tier; Pro unlocks the higher-quality cloud models. (Anthropic "
+            "Claude is in active development and will land in Pro when it ships.) "
+            "The job description and your profile are still loaded for scoring "
+            "and tailoring; only the chat advisor is gated."
         )
 
 
@@ -1674,7 +2296,7 @@ class OllamaProvider(BaseProvider):
     deployment is the RPi's own Ollama, not the visiting user's laptop.
     """
 
-    def __init__(self, model: str = "llama3.2"):
+    def __init__(self, model: str = "smollm2:135m"):
         # Read OLLAMA_URL per-instance so tests can monkeypatch the env after
         # import. Class-body reads happen at module-import time and are
         # effectively frozen for the process lifetime.
@@ -1896,8 +2518,15 @@ class OllamaProvider(BaseProvider):
             "  • Hard skills = technical nouns only (languages, tools, equipment, methods).\n"
             "  • Soft skills = behavioral traits only (teamwork, communication).\n"
             "  • Never put lab techniques or software under soft skills.\n\n"
-            "TARGET TITLES:\n"
-            f"  Pick 5–8 from these families: {', '.join(DOMAIN_TITLE_FAMILIES)}\n"
+            "TARGET TITLES (ground in the resume, NOT a fixed whitelist):\n"
+            "  • Infer 5–8 titles that fit the candidate's actual experience.\n"
+            "  • Pick from THEIR background — software / hardware / data / "
+            "design / marketing / sales / healthcare / finance / education / "
+            "operations / legal — whatever's in the resume.\n"
+            "  • Use the recent work role + dominant skills + degree as cues.\n"
+            "  • Common families to pick from (use your own if none fits):\n"
+            f"      {', '.join(DOMAIN_TITLE_FAMILIES[:18])}\n"
+            f"      {', '.join(DOMAIN_TITLE_FAMILIES[18:])}\n"
             f"{pref_hint}"
             "\ncritical_analysis: 3-4 paragraph honest critique covering impact & "
             "quantified achievements, skill density, ATS/structural clarity, and "
@@ -1969,27 +2598,43 @@ class OllamaProvider(BaseProvider):
             reasoning=parsed.get("reasoning", ""),
         )
 
-    def tailor_resume(self, job: dict, profile: dict, resume_text: str) -> dict:
-        prompt = (
-            f"Tailor this resume for '{job['title']}' at '{job['company']}'.\n"
-            "Return ONLY a JSON object with:\n"
-            "  skills_reordered (array, JD-matching skills first),\n"
-            "  experience_bullets (array of {role, bullets[]}),\n"
-            "  ats_keywords_missing (array of JD keywords not in resume),\n"
-            "  section_order (array of section names, do NOT include Summary or Objective).\n"
-            "Do NOT include a summary or objective field. "
-            "NEVER fabricate experience. Only rephrase what exists.\n\n"
-            f"JD Requirements: {', '.join(job.get('requirements', []))}\n"
-            f"Candidate Skills: {', '.join(profile.get('top_hard_skills', []))}\n\n"
-            f"Resume (excerpt):\n{resume_text[:2000]}"
+    def tailor_resume(self, job: dict, profile: dict, resume_text: str,
+                      *, selected_keywords: list[str] | None = None,
+                      source_format: str | None = None) -> dict:
+        """Ollama: ask for v2 JSON via response_format json_object."""
+        from .tailored_schema import default_v2
+
+        skeleton = default_v2(profile)
+        sel = list(selected_keywords or [])
+        requirements = list(job.get("requirements") or [])
+        declined = [
+            r for r in requirements
+            if isinstance(r, str) and r and r not in sel
+        ]
+        skeleton_json = json.dumps(skeleton, ensure_ascii=False)
+        if len(skeleton_json) > 6000:
+            skeleton_json = skeleton_json[:6000] + "…"
+
+        system_msg = (
+            "You are a resume tailoring assistant. Output ONLY valid JSON matching "
+            "the TailoredResume v2 schema. Preserve every section from the input "
+            "skeleton — do not drop any. Diff markers: 'unchanged' (default), "
+            "'modified' (you rewrote the text), 'added' (new content). Never fabricate "
+            "titles, companies, dates, institutions, degrees, or GPAs."
         )
-        raw = self._chat(prompt)
-        return self._parse_json(raw, {
-            "skills_reordered":     profile.get("top_hard_skills", []),
-            "experience_bullets":   [],
-            "ats_keywords_missing": [],
-            "section_order":        ["Skills", "Projects", "Experience", "Education"],
-        })
+        user_msg = (
+            f"Tailor for: {job.get('title','')} at {job.get('company','')}\n\n"
+            f"INPUT skeleton:\n{skeleton_json}\n\n"
+            f"JD requirements: {', '.join(requirements)}\n"
+            f"JD description: {(job.get('description') or '')[:1500]}\n\n"
+            f"USER-SELECTED keywords: {', '.join(sel) or '(default to all missing must-haves)'}\n"
+            f"USER-DECLINED keywords: {', '.join(declined[:15])}\n\n"
+            "Return ONLY the full TailoredResume v2 JSON, no markdown, no commentary. "
+            "Required top-level keys: schema_version, name, skills, experience, education, section_order."
+        )
+        prompt = system_msg + "\n\n" + user_msg
+        raw = self._chat(prompt, json_mode=True)
+        return self._parse_json(raw, {})
 
     def generate_cover_letter(self, job: dict, profile: dict) -> str:
         prompt = (

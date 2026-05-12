@@ -181,3 +181,52 @@ def make_raw_job(*, company="Acme Robotics", title="FPGA Intern",
         "posted_date": posted_date,
         "source": "fake:test",
     }
+
+
+# ── Shared TailoredResume v2 fixture ────────────────────────────────────────
+# Used by test_latex_tailor / test_docx_tailor / test_template_render. Lifted
+# into this module so the three suites share one canonical Jane Doe resume —
+# previously each file copy-pasted a near-identical _v2() helper, which drifts
+# silently when the schema changes.
+
+JANE_PROFILE = {
+    "name": "Jane Doe",
+    "email": "jane@example.com",
+    "top_hard_skills": ["Python", "Verilog", "C++", "MATLAB"],
+    "experience": [
+        {"title": "Intern", "company": "Acme Corp", "dates": "2024",
+         "bullets": ["Built a thing for the team", "Tested another thing"]},
+        {"title": "Research Assistant", "company": "Cal Photonics Lab", "dates": "2023",
+         "bullets": ["Aligned an interferometer"]},
+    ],
+    "education": [
+        {"degree": "B.S. Electrical Engineering",
+         "institution": "University of California, Berkeley", "year": "2025"},
+    ],
+}
+
+
+def jane_doe_tailored_v2(*, with_added_bullet: bool = False) -> dict:
+    """Canonical TailoredResume v2 fixture used across the tailor test suite.
+
+    Defaults match what test_latex_tailor expects: one modified bullet
+    ("Built a Verilog testbench…") and one added skill ("FPGA verification").
+    Pass ``with_added_bullet=True`` to also append an added bullet under the
+    Intern role — what test_docx_tailor needs to exercise the clone path.
+    """
+    from pipeline.tailored_schema import default_v2  # local import — tests/fakes
+    # is imported by conftest before pipeline modules are guaranteed loaded.
+    v2 = default_v2(JANE_PROFILE)
+    v2["experience"][0]["bullets"][0] = {
+        "text": "Built a Verilog testbench for the team",
+        "original": "Built a thing for the team",
+        "diff": "modified",
+    }
+    v2["skills"][0]["items"].append({"text": "FPGA verification", "diff": "added"})
+    if with_added_bullet:
+        v2["experience"][0]["bullets"].append({
+            "text": "Wrote AXI4 transaction generators",
+            "original": "",
+            "diff": "added",
+        })
+    return v2

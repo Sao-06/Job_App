@@ -26,6 +26,7 @@ session_store or job_repo again.
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 import sys
 from typing import Any
@@ -150,11 +151,41 @@ def apply_all_migrations(conn: sqlite3.Connection) -> list[str]:
     ensure_column(conn, "users", "is_developer",
                   "INTEGER NOT NULL DEFAULT 0")
     ensure_column(conn, "users", "plan_tier",
-                  "TEXT NOT NULL DEFAULT 'free'")
+                  "TEXT NOT NULL DEFAULT 'pro'")
     ensure_column(conn, "users", "stripe_customer_id", "TEXT")
     ensure_column(conn, "users", "stripe_subscription_id", "TEXT")
     ensure_index(conn, "ix_users_stripe_customer", "users",
                  "stripe_customer_id")
+
+    # Testing-phase: everyone is Pro. Promote any pre-existing 'free' rows
+    # AND refresh the cached plan_tier on every active auth_token so the
+    # next /api/state poll reflects the bump without a re-login (the cached
+    # user_json in auth_tokens otherwise wins over the live users-row read).
+    #
+    # Guarded by `table_exists` because `pipeline.job_repo.init_schema()`
+    # also calls `apply_all_migrations` after creating only the
+    # job_postings / source_runs tables — without the guard, this UPDATE
+    # would raise "no such table: users" on every job-search test and on
+    # any standalone jobs-only recovery DB.
+    if table_exists(conn, "users"):
+        promoted = conn.execute(
+            "UPDATE users SET plan_tier = 'pro' WHERE plan_tier != 'pro'"
+        ).rowcount
+        if promoted:
+            _log(f"promoted {promoted} user(s) to pro (testing phase)")
+            if table_exists(conn, "auth_tokens"):
+                rows = conn.execute("SELECT token, user_json FROM auth_tokens").fetchall()
+                for token, user_json in rows:
+                    try:
+                        payload = json.loads(user_json or "{}")
+                    except (TypeError, ValueError):
+                        payload = {}
+                    if payload.get("plan_tier") != "pro":
+                        payload["plan_tier"] = "pro"
+                        conn.execute(
+                            "UPDATE auth_tokens SET user_json = ? WHERE token = ?",
+                            (json.dumps(payload), token),
+                        )
 
     # job_postings — added the cross-industry category label after launch.
     # The matching index lives here too: CREATE INDEX validates the referenced
@@ -163,6 +194,49 @@ def apply_all_migrations(conn: sqlite3.Connection) -> list[str]:
     ensure_column(conn, "job_postings", "job_category", "TEXT")
     ensure_index(conn, "ix_jobs_category", "job_postings",
                  "deleted, job_category")
+
+    # job_postings.description — full posting body (HTML stripped, plain text).
+    # Empty / NULL on rows whose source doesn't expose a description in the
+    # listing response; lazy-filled by Phase 3 LLM-scoring + the SPA detail
+    # view via pipeline.job_details. ~3-5 KB per row when populated; bounded
+    # naturally by how much of the index ever gets scored or viewed.
+    ensure_column(conn, "job_postings", "description", "TEXT")
+
+    # ── user_job_scores ────────────────────────────────────────────────────
+    # Persistent per-(user, job) score cache. Populated by
+    # `pipeline.user_scoring.score_jobs_for_user` whenever a user's primary
+    # resume changes, and periodically refreshed as new jobs land in
+    # `job_postings`. Read by `pipeline.job_search.search` so the feed can
+    # ORDER BY user-specific score DESC without recomputing for every
+    # request. Stored as 0-100 INTEGER to match the SPA's wire shape.
+    if not table_exists(conn, "user_job_scores"):
+        try:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS user_job_scores (
+                    user_id      TEXT NOT NULL,
+                    job_id       TEXT NOT NULL,
+                    score        INTEGER NOT NULL,
+                    coverage     REAL,
+                    title_match  REAL,
+                    loc_sen      REAL,
+                    matched_json TEXT,
+                    missing_json TEXT,
+                    profile_hash TEXT,
+                    computed_at  TEXT NOT NULL,
+                    PRIMARY KEY (user_id, job_id)
+                )
+                """
+            )
+            _log("created table user_job_scores")
+        except sqlite3.OperationalError as exc:
+            _log(f"FAILED creating user_job_scores: {type(exc).__name__}: {exc}")
+            raise
+    ensure_index(conn, "ix_ujs_user_score", "user_job_scores",
+                 "user_id, score DESC")
+    ensure_index(conn, "ix_ujs_user_computed", "user_job_scores",
+                 "user_id, computed_at DESC")
+    ensure_index(conn, "ix_ujs_job", "user_job_scores", "job_id")
 
     conn.commit()
     return get_log()

@@ -28,30 +28,67 @@ from __future__ import annotations
 
 import re
 
-# ── Domain whitelist (used by the LLM prompt AND the reranker) ─────────────
-
+# ── Domain hint families (passed to LLM prompts as a non-restrictive HINT) ──
+#
+# This list is a *menu* the LLM can use to label which family it picked from,
+# NOT a restriction. The reranker no longer enforces "must be on this list" —
+# it grounds titles to actual resume evidence instead. Earlier versions of
+# this list were narrowly EE/semiconductor and produced hardcoded hardware
+# titles even on data-science / PM / nursing resumes; that's the bug.
 DOMAIN_TITLE_FAMILIES = [
+    # Software / data
+    "Software Engineering",
+    "Frontend / Backend / Full-Stack Engineering",
+    "Mobile / iOS / Android Engineering",
+    "DevOps / Site Reliability / Cloud",
+    "Security / Application Security",
+    "Data Science / Data Analytics",
+    "Machine Learning / AI Engineering",
+    "Data Engineering / ETL",
+    # Hardware / EE
     "IC Design / VLSI",
     "Analog / Mixed-Signal Design",
-    "Semiconductor Process / Device Engineering",
-    "Photonics / Optoelectronics Engineering",
-    "Nanofabrication / MEMS",
     "FPGA / Digital Design",
-    "RF / Hardware Engineering",
     "Embedded Systems / Firmware",
-    "Research Assistant (semiconductor / photonics / device)",
+    "RF / Hardware Engineering",
+    "Photonics / Optoelectronics",
+    "Semiconductor Process / Device Engineering",
+    "Nanofabrication / MEMS",
+    "Mechanical / Robotics / Mechatronics",
+    "Aerospace / Controls",
+    # Product / design / business
+    "Product Management",
+    "Program / Project Management",
+    "UX / UI / Product Design",
+    "Graphic / Brand Design",
+    "Marketing / Growth / Content",
+    "Sales / Business Development / Account Management",
+    "Customer Success / Customer Support",
+    # Operations / functions
+    "Operations / Supply Chain / Logistics",
+    "Finance / Accounting / FP&A",
+    "Investment / Banking / Trading",
+    "Human Resources / Talent Acquisition",
+    "Legal / Compliance / Paralegal",
+    # Healthcare / sciences
+    "Clinical / Nursing / Healthcare",
+    "Biology / Chemistry / Lab Research",
+    "Pharma / Biotech R&D",
+    # Education / public sector / trades
+    "Teaching / Education / Tutoring",
+    "Public Policy / Government / Civic",
+    "Skilled Trades / Technician / Field Service",
+    "Media / Journalism / Communications",
+    # Catch-all for anything we haven't enumerated.
+    "Other (specify family in the title itself)",
 ]
 
-# Titles that should NOT be suggested for a hardware/semiconductor/photonics
-# candidate unless their primary Education is Computer Science AND there is
-# zero lab/fab/device research experience.
-FORBIDDEN_GENERIC_TITLES = {
-    "software engineer", "software developer",
-    "data scientist", "data analyst", "data engineer",
-    "web developer", "full stack developer", "frontend developer",
-    "backend developer", "ml engineer", "machine learning engineer",
-    "devops engineer", "product manager",
-}
+# Retained as a back-compat alias so any imports outside this module keep
+# resolving. Reranker no longer hard-rejects these — it only grounds titles
+# to evidence in the resume corpus, which catches both "fabricated software
+# engineer for an EE candidate" AND "fabricated EE intern for a data
+# scientist" with the same logic.
+FORBIDDEN_GENERIC_TITLES: set[str] = set()
 
 
 # ── Hard-skill lexicon (used by quarantine + retention audit) ──────────────
@@ -306,30 +343,64 @@ def verify_evidence(profile: dict, resume_text: str) -> dict:
     return profile
 
 
+_TITLE_NOISE_RE = re.compile(
+    r"\b(?:intern(?:ship)?|engineer|engineering|developer|analyst|"
+    r"manager|director|associate|specialist|assistant|coordinator|"
+    r"officer|consultant|scientist|architect|designer|representative|"
+    r"junior|senior|sr|jr|lead|principal|staff|the|of|at|for|in|to|and)\b",
+    re.IGNORECASE,
+)
+
+
+def _title_signal_tokens(title: str) -> set[str]:
+    """Return content tokens of a title with role-noise filler stripped.
+
+    "Software Engineering Intern" → {"software"}
+    "Photonics / Optoelectronics Engineering Intern" → {"photonics", "optoelectronics"}
+    "Marketing Manager" → {"marketing"}
+    Used by the reranker to verify a title's *domain* signal appears in the
+    candidate's resume, ignoring generic role words that match every resume.
+    """
+    if not title:
+        return set()
+    cleaned = _TITLE_NOISE_RE.sub(" ", title.lower())
+    cleaned = re.sub(r"[^a-z0-9+\-#.]+", " ", cleaned)
+    return {tok for tok in cleaned.split() if len(tok) >= 3}
+
+
 def rerank_titles(profile: dict) -> dict:
-    """Keep only target titles whose evidence line traces back to
-    Education or Research Experience; drop forbidden generic titles
-    unless the candidate is CS-only with no research."""
+    """Keep target titles only when the title's domain signal is grounded in
+    the candidate's actual resume content (Education / Experience / Projects).
+
+    No domain whitelist — a candidate's resume is the source of truth. The
+    reranker drops a title only when none of its content tokens appear in
+    the resume corpus AND the LLM-supplied evidence string also doesn't
+    match. This catches LLM fabrication ("FPGA Intern" on a marketing
+    resume; "Marketing Manager" on a hardware resume) without baking in a
+    domain bias of our own.
+    """
     detailed = profile.get("target_titles_detailed") or []
     if not detailed:
         return profile
 
-    # Build an "anchor" corpus from Education + Research/Experience + Projects.
+    # Build an "anchor" corpus from Education + Experience + Projects + Skills.
     chunks: list = []
     for e in profile.get("education") or []:
         chunks.append(f"{e.get('degree', '')} {e.get('institution', '')}")
-    for r in (profile.get("research_experience") or profile.get("experience") or []):
-        chunks.append(r.get("title", ""))
-        chunks.append(r.get("company", ""))
-        chunks.extend(r.get("bullets") or [])
+        chunks.extend(e.get("coursework") or [])
+    for bucket in ("research_experience", "work_experience", "experience"):
+        for r in profile.get(bucket) or []:
+            chunks.append(r.get("title", ""))
+            chunks.append(r.get("company", ""))
+            chunks.extend(r.get("bullets") or [])
     for pr in profile.get("projects") or []:
         chunks.append(pr.get("name", ""))
         chunks.append(pr.get("description", ""))
         chunks.extend(pr.get("skills_used") or [])
+        chunks.extend(pr.get("bullets") or [])
+    chunks.extend(profile.get("top_hard_skills") or [])
     anchor = " ".join(c for c in chunks if c).lower()
-
-    # Does the candidate have ANY lab/hardware footprint?
-    has_hw_footprint = _is_hard_token(anchor)
+    anchor_tokens = set(re.findall(r"[a-z0-9+\-#.]+", anchor))
 
     kept: list = []
     dropped: list = []
@@ -337,35 +408,36 @@ def rerank_titles(profile: dict) -> dict:
         title = (t.get("title") or "").strip()
         if not title:
             continue
-        title_l = title.lower()
 
-        # Rule 1: forbidden generics get dropped unless the candidate truly
-        # has no hardware/lab footprint at all.
-        if has_hw_footprint and any(fg in title_l for fg in FORBIDDEN_GENERIC_TITLES):
-            dropped.append(title)
-            continue
+        # Domain-signal grounding: at least one content token of the title
+        # must appear in the resume corpus. Generic role words (engineer,
+        # intern, manager, ...) are stripped before this check so a title
+        # like "Software Engineering Intern" is grounded by "software", not
+        # by "engineer" / "intern" which match almost every resume.
+        title_tokens = _title_signal_tokens(title)
+        title_grounded = bool(title_tokens & anchor_tokens) if title_tokens else True
 
-        # Rule 2: soft evidence check — if evidence is provided but doesn't
-        # match the anchor corpus, keep the title anyway (LLMs paraphrase).
-        # Only drop if the title itself is completely absent from the resume
-        # AND evidence is actively contradictory (non-empty but zero overlap).
+        # Evidence grounding: if the LLM provided an evidence string, at
+        # least one significant token (>3 chars) of that evidence should
+        # appear in the resume corpus. Optional — many heuristic-only
+        # entries have no evidence and that's fine.
         ev = (t.get("evidence") or "").strip().lower()
         if ev:
-            tokens = [tok for tok in ev.split() if len(tok) > 3]
-            title_in_anchor = any(
-                tok in anchor for tok in title_l.split() if len(tok) > 3
-            )
-            ev_in_anchor = tokens and any(tok in anchor for tok in tokens)
-            if not ev_in_anchor and not title_in_anchor and anchor:
-                dropped.append(title)
-                continue
+            ev_tokens = {tok for tok in re.findall(r"[a-z0-9+\-#.]+", ev) if len(tok) > 3}
+            ev_grounded = bool(ev_tokens & anchor_tokens) if ev_tokens else True
+        else:
+            ev_grounded = True
+
+        if anchor and not title_grounded and not ev_grounded:
+            dropped.append(title)
+            continue
         kept.append(t)
 
     if kept:
         profile["target_titles_detailed"] = kept
         profile["target_titles"] = _dedup_preserve_order([t["title"] for t in kept])
     if dropped:
-        _log(profile, f"reranker dropped {len(dropped)} titles: {dropped}")
+        _log(profile, f"reranker dropped {len(dropped)} ungrounded titles: {dropped}")
     return profile
 
 

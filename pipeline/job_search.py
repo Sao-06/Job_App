@@ -44,6 +44,14 @@ class SearchFilters:
     blacklist: Sequence[str] = field(default_factory=tuple)           # company names (case-insensitive)
     whitelist: Sequence[str] = field(default_factory=tuple)
     include_unknown_education: bool = True
+    # Most ingested rows have experience_level = NULL/'unknown' because the
+    # source didn't carry a clean tag. Treating the chip as a hard exclude
+    # squashes the entire NULL-bucket — e.g. picking "Internship" and
+    # searching "marketing" returned 0 because every marketing intern role
+    # was untagged. Default to including unknowns so the chip narrows
+    # rather than nukes; advanced UI can flip this off when a user
+    # explicitly wants strict-match.
+    include_unknown_experience: bool = True
     # Coarse industry / job-family filter — values must match the labels emitted
     # by ``pipeline.helpers.infer_job_category`` (e.g. 'engineering', 'sales',
     # 'healthcare', 'general'). Multiple values OR together at the SQL layer.
@@ -66,6 +74,7 @@ class JobDTO:
     job_category: str
     posted_at: str | None
     source: str
+    description: str = ""        # may be empty when source didn't carry one
     score: float = 0.0           # final ranking score [0..1]
 
 
@@ -101,27 +110,98 @@ def _profile_terms(profile: dict | None, max_skills: int = 8,
     return out
 
 
-def _build_fts_query(filters: SearchFilters, profile: dict | None) -> str:
-    """Build a permissive FTS5 query string. Returns "" when no terms.
+_ASCII_ALNUM_RE = re.compile(r"^[a-z0-9]+$", re.IGNORECASE)
+# FTS5 binary operators — must be quoted (and can't take a `*` suffix)
+# when they appear as raw tokens in the user's query.
+_FTS5_KEYWORDS = frozenset({"and", "or", "not", "near"})
 
-    SQLite FTS5 syntax: a list of bare tokens joined by space is an OR
-    in unicode61 tokenizer; quoting with double-quotes phrase-locks. We
-    OR the user's query tokens with the profile-derived ones so the
-    same query that drives the SQL filter also drives the relevance.
+
+def _to_prefix_token(tok: str) -> str:
+    """Render a typed token as a porter-tolerant FTS5 prefix-match term.
+
+    The job_postings_fts virtual table uses ``tokenize='porter unicode61'``,
+    which stems aggressively at index time — ``robotics`` and ``robotic``
+    both become ``robot``. A user typing ``roboti`` doesn't match porter's
+    suffix rules (no rule strips a lone ``i``), so it survives un-stemmed
+    and FTS5 then prefix-matches ``roboti*`` against indexed ``robot`` —
+    which fails because ``robot`` doesn't start with ``roboti``.
+
+    Strategy: OR several prefix lengths so we hit porter's stem regardless
+    of how many chars it stripped. Min prefix length is 5 to avoid
+    over-broad matches. Examples:
+
+      "roboti"   (6) → ``(roboti* OR robot*)``
+      "robotics" (8) → ``(robotics* OR robotic* OR robot* OR robo*)``
+      "engineer" (8) → ``(engineer* OR enginee* OR engine* OR engin*)``
+      "fpga"     (4) → ``fpga*``        (single 4-char prefix, no OR)
+      "ai"       (2) → ``"ai"``         (too short; exact match only)
+
+    FTS5 reserved keywords (AND/OR/NOT/NEAR) and tokens with non-ASCII /
+    non-alphanumeric chars are quoted without a wildcard — quoting is
+    required to neutralize the operator parse, and FTS5 disallows
+    ``"quoted"*``.
     """
-    parts: list[str] = []
-    parts.extend(_tokenize(filters.q))
-    parts.extend(_profile_terms(profile))
-    seen: set[str] = set()
-    deduped: list[str] = []
-    for p in parts:
-        if p and p not in seen and p.isascii():
-            seen.add(p)
-            deduped.append(p)
-    if not deduped:
+    if not tok:
         return ""
-    # Quote each token to guard against FTS5 reserved words / operators.
-    return " OR ".join(f"\"{p}\"" for p in deduped[:24])
+    if not _ASCII_ALNUM_RE.match(tok) or tok.lower() in _FTS5_KEYWORDS:
+        return f'"{tok}"'
+    n = len(tok)
+    if n <= 3:
+        return f'"{tok}"'
+    if n == 4:
+        return f"{tok}*"
+    # Generate prefix lengths from the full token down to a 5-char floor.
+    # Porter can strip more than 3-4 chars on some suffixes (-ation, -ically,
+    # -ing-er-s chains), so reaching all the way to 5 chars is what makes
+    # "marketing" reliably match indexed "market", "infrastructure" reach
+    # "infrastr", etc. Hard-cap at 8 OR-terms so very long words don't
+    # explode the FTS5 query plan.
+    prefixes = [tok[:k] for k in range(n, 4, -1)][:8]
+    inner = " OR ".join(f"{p}*" for p in prefixes)
+    return f"({inner})"
+
+
+def _build_fts_query(filters: SearchFilters, profile: dict | None) -> str:
+    """Build the FTS5 query string. Returns "" when no terms.
+
+    Two regimes:
+
+    * **User typed something** (``filters.q`` non-empty): every typed token
+      is REQUIRED (FTS5 implicit-AND), each rendered as a porter-tolerant
+      prefix-match via ``_to_prefix_token``. Profile terms are dropped
+      from the MATCH — they influence relevance via skill_overlap +
+      title_match in the Python rerank below. Without prefix-tolerance the
+      user typing "roboti" returns zero results despite many "Robotics"
+      jobs in the index (porter-stemmed to "robot", which the literal
+      "roboti" can't reach).
+
+    * **No typed query**: profile-driven feed. OR every profile term
+      together so any candidate role surfaces; the rerank picks order.
+    """
+    user_tokens: list[str] = []
+    seen_user: set[str] = set()
+    for tok in _tokenize(filters.q):
+        if tok and tok not in seen_user and tok.isascii():
+            seen_user.add(tok)
+            user_tokens.append(tok)
+
+    if user_tokens:
+        # Explicit AND between parts. Implicit AND (whitespace join) only
+        # parses for bare phrases — parenthesized OR-groups from
+        # ``_to_prefix_token`` need ``AND`` to combine. Cap at 24 to bound
+        # query size.
+        rendered = [_to_prefix_token(t) for t in user_tokens[:24] if t]
+        return " AND ".join(p for p in rendered if p)
+
+    profile_tokens: list[str] = []
+    seen_profile: set[str] = set()
+    for tok in _profile_terms(profile):
+        if tok and tok not in seen_profile and tok.isascii():
+            seen_profile.add(tok)
+            profile_tokens.append(tok)
+    if not profile_tokens:
+        return ""
+    return " OR ".join(f'"{p}"' for p in profile_tokens[:24])
 
 
 def _decode_cursor(cursor: str | None) -> tuple[float, str, int] | None:
@@ -167,12 +247,18 @@ def _skill_overlap(profile_skills: Iterable[str], requirements: Iterable[str]) -
     users with broad skill sets: matching 3 of 3 reqs out of a 30-skill
     profile produced 0.10, not 1.00, and crushed the entire scoring scale.
 
-    Empty requirements OR empty profile → 0.3 (neutral) so jobs whose source
-    didn't expose tags don't get pinned to zero on this signal.
+    Empty profile → 0.0 (NOT 0.3). The previous "neutral" 0.3 contributed
+    ~13.5pts to the rerank composite for every job regardless of fit, which
+    is what produced the "blank resume gets 68% match on senior hardware
+    roles" bug. Empty *requirements* on a job → 0.3 stays (the job's source
+    didn't expose tags, but we still have something to rank by — title +
+    description signals from BM25).
     """
     skills = {s.lower().strip() for s in profile_skills if s and str(s).strip()}
     reqs = [str(r).lower().strip() for r in requirements if r and str(r).strip()]
-    if not skills or not reqs:
+    if not skills:
+        return 0.0
+    if not reqs:
         return 0.3
     matched = 0
     for req in reqs:
@@ -186,19 +272,30 @@ def _skill_overlap(profile_skills: Iterable[str], requirements: Iterable[str]) -
 
 
 def _title_match(profile_titles: Iterable[str], title: str) -> float:
+    """Best partial match across all target titles, in [0, 1].
+
+    Per-target: fraction of its (length>2) words that appear in the job
+    title. Take the max across targets so the score reflects the closest
+    fit rather than averaging in unrelated targets (e.g. a candidate
+    with both "Software Engineer" and "Product Manager" targets viewing
+    an SWE role should read 1.0, not 0.5). Returning the per-target
+    average penalised broad targets and was contributing to the "title
+    alignment looks random" reports.
+    """
     if not title:
         return 0.0
     t = title.lower()
-    hits = 0
-    total = 0
+    best = 0.0
     for pt in profile_titles:
         if not pt:
             continue
-        total += 1
-        words = [w for w in re.split(r"\s+", pt.lower()) if len(w) > 2]
-        if any(w in t for w in words):
-            hits += 1
-    return (hits / total) if total else 0.0
+        words = [w for w in re.split(r"\s+", str(pt).lower()) if len(w) > 2]
+        if not words:
+            continue
+        hits = sum(1 for w in words if w in t)
+        if hits:
+            best = max(best, hits / len(words))
+    return best
 
 
 def _normalize_bm25(raw_scores: list[float]) -> list[float]:
@@ -372,10 +469,17 @@ _DEFAULT_PER_ROUND = 1
 
 
 def _row_to_dto(row: tuple, score: float) -> JobDTO:
-    # Row layout matches the SELECT in `search()` and `newer_than()` —
-    # 14 leading columns + bm25_score column (always present).
+    # Row layout: 14 base columns + description, then optionally `user_score`
+    # (when callers passed user_id), then always `bm25_score` as the last
+    # column. The dispatch below handles all three historical shapes so
+    # this function works with the legacy callers in tests and with the
+    # current /api/jobs/feed shape.
     (jid, url, source, company, title, location, remote, reqs_json,
      salary, exp, edu, cit, category, posted_at) = row[:14]
+    if len(row) == 15:
+        description = ""
+    else:
+        description = (row[14] or "") if isinstance(row[14], str) else ""
     reqs = json.loads(reqs_json) if reqs_json else []
     return JobDTO(
         id=jid, url=url, source=source, company=company, title=title,
@@ -386,6 +490,7 @@ def _row_to_dto(row: tuple, score: float) -> JobDTO:
         citizenship_required=cit or "unknown",
         job_category=category or "general",
         posted_at=posted_at,
+        description=description,
         score=round(float(score), 4),
     )
 
@@ -397,8 +502,19 @@ def search(*, conn: sqlite3.Connection,
            limit: int = 30,
            rank_pool: int = _DEFAULT_RANK_POOL,
            dedupe: bool = True,
-           per_round: int = _DEFAULT_PER_ROUND) -> SearchPage:
-    """One-shot read against the active jobs index. p95 target < 250 ms."""
+           per_round: int = _DEFAULT_PER_ROUND,
+           user_id: str | None = None) -> SearchPage:
+    """One-shot read against the active jobs index. p95 target < 250 ms.
+
+    When *user_id* is provided AND the ``user_job_scores`` table contains
+    rows for that user, the SQL pool join surfaces the stored 0–100 match
+    score as ``user_score`` and the rerank step uses it as the dominant
+    signal. This keeps the feed sorted by genuine per-user fit (vs. the
+    legacy BM25-only rerank) the moment a primary resume change has been
+    background-scored. Falls through to the rerank composite below for
+    users with no scores yet, and for any individual rows the user hasn't
+    been scored against (newly ingested jobs since their last refresh).
+    """
     cur_state = _decode_cursor(cursor)
     page_offset = cur_state[2] if cur_state else 0
 
@@ -425,9 +541,23 @@ def search(*, conn: sqlite3.Connection,
         order_extra = ""
 
     if filters.experience_levels:
-        placeholders = ",".join("?" * len(filters.experience_levels))
-        where.append(f"jp.experience_level IN ({placeholders})")
-        where_params.extend(filters.experience_levels)
+        # See SearchFilters docstring: most rows have experience_level NULL/
+        # unknown, so a strict IN excludes the entire untagged bucket. Mirror
+        # the education-filter behavior — fold 'unknown' into the IN list and
+        # also accept SQL NULL via an explicit OR. Without the NULL branch
+        # SQL `IN ('unknown')` doesn't match `NULL` (per ANSI), and a chunk
+        # of ingested rows persist as NULL rather than the literal 'unknown'.
+        levels = list(filters.experience_levels)
+        if filters.include_unknown_experience:
+            levels = list(set(levels) | {"unknown"})
+        placeholders = ",".join("?" * len(levels))
+        if filters.include_unknown_experience:
+            where.append(
+                f"(jp.experience_level IS NULL OR jp.experience_level IN ({placeholders}))"
+            )
+        else:
+            where.append(f"jp.experience_level IN ({placeholders})")
+        where_params.extend(levels)
     if filters.education_levels:
         edus = list(filters.education_levels)
         if filters.include_unknown_education:
@@ -479,19 +609,42 @@ def search(*, conn: sqlite3.Connection,
     # 3000-row rank in well under a second, and we cap to keep memory bounded.
     effective_pool = min(rank_pool * max(1, page_offset + 1), 8000)
 
+    # Cheap LEFT JOIN against the persistent per-user score table. Always
+    # safe — emits NULLs when the user has no row yet (incomplete background
+    # scoring run, or no user_id at all). When at least one row matches,
+    # the rerank below uses the stored 0-100 score as the dominant signal
+    # and the SQL ORDER BY surfaces highest scores first inside each
+    # bm25/posted_at bucket so dedup + diversification operate on the best
+    # rows first.
+    join_scores = ""
+    score_select = ", NULL AS user_score"
+    user_id_params: list[Any] = []
+    score_order_extra = ""
+    if user_id:
+        join_scores = (
+            "LEFT JOIN user_job_scores ujs "
+            "  ON ujs.user_id = ? AND ujs.job_id = jp.id "
+        )
+        user_id_params = [user_id]
+        score_select = ", ujs.score AS user_score"
+        score_order_extra = "ujs.score IS NULL ASC, ujs.score DESC,"
+
     sql = f"""
         SELECT jp.id, jp.canonical_url, jp.source, jp.company, jp.title,
                jp.location, jp.remote, jp.requirements_json, jp.salary_range,
                jp.experience_level, jp.education_required,
                jp.citizenship_required, jp.job_category, jp.posted_at,
+               jp.description
+               {score_select},
                {bm25_select}
           FROM job_postings jp
           {join_fts}
+          {join_scores}
          WHERE {' AND '.join(where)}
-         ORDER BY {order_extra} jp.posted_at DESC, jp.id ASC
+         ORDER BY {score_order_extra} {order_extra} jp.posted_at DESC, jp.id ASC
          LIMIT ?
     """
-    main_params = [*fts_params, *where_params, effective_pool]
+    main_params = [*fts_params, *user_id_params, *where_params, effective_pool]
     pool = conn.execute(sql, main_params).fetchall()
     if not pool:
         # Total estimate uses ONLY WHERE bindings — the COUNT(*) query has no
@@ -506,6 +659,8 @@ def search(*, conn: sqlite3.Connection,
     profile_titles = (profile or {}).get("target_titles") or []
     profile_skills = (profile or {}).get("top_hard_skills") or []
     whitelist_lower = {w.strip().lower() for w in (filters.whitelist or ()) if w and w.strip()}
+    # user_score column index — see the SQL: 14 base cols + description + user_score + bm25
+    user_score_idx = 15 if user_id else None
 
     ranked: list[tuple[float, tuple]] = []
     for row, bm in zip(pool, bm25_scores):
@@ -513,7 +668,18 @@ def search(*, conn: sqlite3.Connection,
         sk_ov = _skill_overlap(profile_skills, reqs)
         fr    = _freshness(row[13])              # posted_at column
         tm    = _title_match(profile_titles, row[4])
-        if not fts_q and not profile_skills and not profile_titles:
+        # Persistent per-user score (0-100 INTEGER) — when present this is
+        # the dominant signal: it already encodes coverage, title match,
+        # and location/seniority via the same RUBRIC_WEIGHTS the lazy
+        # path uses. Treat the raw 0-100 as 0-1, blend a small slice of
+        # the live rerank (freshness + bm25) so newly-posted matches
+        # surface within a band of equivalents instead of pinning to
+        # one frozen ordering.
+        user_score_raw = row[user_score_idx] if user_score_idx is not None else None
+        if user_score_raw is not None:
+            us = max(0.0, min(1.0, float(user_score_raw) / 100.0))
+            final = 0.80 * us + 0.10 * fr + 0.10 * bm
+        elif not fts_q and not profile_skills and not profile_titles:
             # No personalization signals at all — sort by recency only.
             final = fr
         else:
@@ -617,7 +783,7 @@ def newer_than(*, conn: sqlite3.Connection, top_id: str, limit: int = 30) -> lis
         SELECT id, canonical_url, source, company, title, location, remote,
                requirements_json, salary_range, experience_level,
                education_required, citizenship_required, job_category,
-               posted_at, 0.0 AS bm25_score
+               posted_at, description, 0.0 AS bm25_score
           FROM job_postings
          WHERE deleted = 0 AND last_seen_at > ?
          ORDER BY last_seen_at DESC

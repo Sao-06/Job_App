@@ -23,26 +23,77 @@ class TestPhase1SSE:
 
 
 class TestPhasePlanGate:
-    def test_anthropic_phase_blocked_for_free_user(self, fastapi_client, patched_provider,
-                                                       seed_resume, read_sse_frames):
-        """Mode='anthropic' set on a session whose user later loses Pro must
-        be caught by the belt-and-suspenders gate inside _run_phase_sse."""
+    """The Anthropic-mode gate runs in two layers:
+
+      1. Load-time coerce in _load_session_state (app.py:1252): when a
+         free user's session has mode='anthropic', mode is flipped back
+         to 'ollama' BEFORE the request handler sees it. This is the
+         primary gate.
+      2. Belt-and-suspenders SSE gate in _run_phase_sse (app.py:2172):
+         if mode='anthropic' somehow reaches the phase handler, emit a
+         plan_required error frame and bail.
+
+      Because layer 1 fires on every state load, layer 2 is unreachable
+      via the normal HTTP flow — it only fires if someone races a state
+      write between load and phase execution. The original test of layer 2
+      via /api/phase/1/run could never trigger that race deterministically,
+      so it was asserting on a code path that production users never reach.
+
+      This test now verifies BOTH layers directly:
+      - layer 1 by reloading the state and checking the coerce ran;
+      - layer 2 by calling _claude_gate_error directly with the same
+        free-user dict the SSE handler would receive.
+    """
+
+    def test_load_coerce_demotes_anthropic_to_ollama_for_free_user(
+        self, fastapi_client, tmp_db
+    ):
+        """Layer 1: free user with saved mode='anthropic' → coerced to 'ollama' on load."""
         import app as app_module
-        client, _, _ = fastapi_client
-        seed_resume()
+
+        client, user_id, token = fastapi_client
+        tmp_db.set_user_plan_tier(user_id, "free")
+        tmp_db.create_auth_token(token, user_id, {
+            "id": user_id,
+            "email": "tester@example.com",
+            "is_developer": False,
+            "plan_tier": "free",
+        })
+        app_module._AUTH_SESSIONS_FALLBACK.pop(token, None)
+
         sid = client.cookies.get("jobs_ai_session", "")
-        # Resume seeding routes through _save_bound_state, which routes to
-        # _memory_sessions when state["user"] hasn't been set (the fixture
-        # creates an auth_token but doesn't go through login). Write directly
-        # to where the state actually lives.
-        state = app_module._memory_sessions.get(sid) or {}
+        store = app_module._session_store
+        state = store.peek_state(sid) or app_module._default_state()
         state["mode"] = "anthropic"
-        app_module._memory_sessions[sid] = state
-        with client.stream("GET", "/api/phase/1/run") as resp:
-            frames = list(read_sse_frames(resp))
-        plan_errs = [f for f in frames
-                     if f.get("type") == "error" and f.get("code") == "plan_required"]
-        assert plan_errs
+        state["user"] = {
+            "id": user_id,
+            "email": "tester@example.com",
+            "is_developer": False,
+            "plan_tier": "free",
+        }
+        store.save_state(sid, state)
+
+        # _load_session_state must coerce mode back to ollama for the free user.
+        loaded = app_module._load_session_state(sid)
+        assert loaded.get("mode") == "ollama", \
+            f"Expected mode='ollama' after coerce, got {loaded.get('mode')!r}"
+
+    def test_claude_gate_error_blocks_free_user_with_plan_required(self):
+        """Layer 2: the SSE belt-and-suspenders gate function — given a free
+        user dict, must return a 402 plan_required error envelope."""
+        import app as app_module
+
+        free_user = {
+            "id": "test-user",
+            "email": "tester@example.com",
+            "is_developer": False,
+            "plan_tier": "free",
+        }
+        err = app_module._claude_gate_error(free_user)
+        assert err is not None, "Expected gate to block free user"
+        assert err.get("status_code") == 402
+        body = err.get("body") or {}
+        assert body.get("code") == "plan_required", body
 
 
 class TestPhaseConcurrencyCap:

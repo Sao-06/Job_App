@@ -23,7 +23,10 @@ from .config import console, OUTPUT_DIR, RESOURCES_DIR, MAX_SCRAPE_JOBS, _CliSpi
 from .helpers import (infer_experience_level, infer_education_required,
                       infer_citizenship_required, deduplicate_jobs,
                       filter_jobs_by_education, validate_job_urls)
-from .providers import BaseProvider, RUBRIC_WEIGHTS, compute_skill_coverage
+from .providers import (
+    BaseProvider, RUBRIC_WEIGHTS, compute_skill_coverage,
+    ClaudeCLIError, ClaudeCLITimeoutError,
+)
 from .resume import _build_demo_resume, _save_tailored_resume
 from .heuristic_tailor import (
     validate_tailoring,
@@ -77,6 +80,12 @@ def phase1_ingest_resume(resume_text: str, provider: BaseProvider,
         console.print(f"  🔎 Heuristic scan → {heuristic_summary(heuristic)}")
 
         # ── LLM verification + enrichment ───────────────────────────────────
+        # Wrap in try/except so a CLI timeout or transport error degrades to
+        # the heuristic baseline instead of hard-failing the whole phase.
+        # The docstring guarantees a complete profile even when the LLM
+        # skips fields — that promise is only honored if we actually
+        # survive the LLM call raising.
+        llm_profile: dict = {}
         with _CliSpinner(interval=20):
             try:
                 llm_profile = provider.extract_profile(
@@ -86,9 +95,16 @@ def phase1_ingest_resume(resume_text: str, provider: BaseProvider,
                 )
             except TypeError:
                 # Older provider implementations won't accept the hint kwarg.
-                llm_profile = provider.extract_profile(
-                    resume_text, preferred_titles=preferred_titles,
-                )
+                try:
+                    llm_profile = provider.extract_profile(
+                        resume_text, preferred_titles=preferred_titles,
+                    )
+                except (ClaudeCLITimeoutError, ClaudeCLIError) as exc:
+                    console.print(f"  [yellow]⚠️  LLM extraction failed ({type(exc).__name__}): {exc}. Falling back to heuristic profile.[/yellow]")
+                    llm_profile = {}
+            except (ClaudeCLITimeoutError, ClaudeCLIError) as exc:
+                console.print(f"  [yellow]⚠️  LLM extraction failed ({type(exc).__name__}): {exc}. Falling back to heuristic profile.[/yellow]")
+                llm_profile = {}
 
         # ── Merge: heuristic baseline + LLM corrections ─────────────────────
         profile = merge_profiles(heuristic, llm_profile)

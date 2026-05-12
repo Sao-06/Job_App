@@ -898,7 +898,10 @@ class AnthropicProvider(BaseProvider):
     See pipeline.providers._run_cli for the subprocess contract.
     Per-method effort/timeout choices:
       • chat:                effort=high, timeout=120s
-      • extract_profile:     effort=high, timeout=120s
+      • extract_profile:     effort=high, timeout=240s (complex schema +
+                              evidence-quoting routinely exceeds 120s with
+                              extended thinking; heuristic baseline in
+                              phase1 catches the residual timeouts)
       • score_job:           effort=high, timeout=120s
       • tailor_resume:       effort=xhigh, timeout=240s (quality-sensitive)
       • cover_letter/report: effort=high (via chat)
@@ -949,7 +952,7 @@ class AnthropicProvider(BaseProvider):
             "fabricate — every claim must trace to a line in the resume."
         )
         raw = _run_cli(prompt, system=system, json_schema=EXTRACT_PROFILE_SCHEMA,
-                       effort=self.DEFAULT_EFFORT, timeout_s=120.0)
+                       effort=self.DEFAULT_EFFORT, timeout_s=240.0)
         return _json.loads(raw)
 
     def score_job(self, job: dict, profile: dict) -> dict:

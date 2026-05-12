@@ -250,6 +250,22 @@ def root():
         "Expires":       "0",
     })
 
+
+@app.get("/favicon.ico")
+def favicon_root():
+    # Browsers (and link-preview crawlers, slack/discord unfurlers, etc.)
+    # probe the root path /favicon.ico in addition to honoring the
+    # <link rel="icon"> tags in our HTML. Returning the SVG with the
+    # correct content-type silences the journalctl 404 noise; modern
+    # browsers happily accept SVG via the .ico path. Same long-lived
+    # cache as other static assets — favicon rarely changes and a stale
+    # one would never hide a meaningful bug.
+    return FileResponse(
+        "frontend/favicon.svg",
+        media_type="image/svg+xml",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
 @app.get("/app")
 def dashboard():
     # Cache-bust the in-browser-Babel JSX import. Without a versioned URL,

@@ -26,6 +26,7 @@ import json
 import re
 import urllib.error
 import urllib.request
+from datetime import date
 from typing import Any
 
 from .config import console
@@ -461,6 +462,57 @@ def _coerce_str_list(value: Any, limit: int = 8) -> list[str]:
     return out
 
 
+# Regexes for stripping AI-generated date hallucinations. The verifier prompt
+# tells the model not to emit these, but some models (older Ollama checkpoints
+# in particular) still leak training-cutoff bias into the output. This filter
+# is the belt to the prompt's suspenders.
+_TEMPORAL_HALLUCINATION_RES = [
+    re.compile(r"chronolog\w*\s+(?:inconsistenc|issue|problem|error)", re.I),
+    re.compile(r"future[-\s]?dat", re.I),
+    re.compile(r"(?:date|year)s?\s+in\s+the\s+future", re.I),
+    re.compile(r"fabricat\w*\s+or\s+careless", re.I),
+    re.compile(r"(?:typo|fabrication|fabricated)\s+by\s+(?:strict\s+)?screener", re.I),
+    re.compile(r"interpret\w*\s+as\s+(?:a\s+)?(?:typo|fabrication)", re.I),
+    re.compile(r"date\s+discrepanc", re.I),
+    re.compile(r"(?:listing|listed)\s+(?:roles?|positions?|dates?)\s+in\s+\d{4}", re.I),
+    re.compile(r"currently\s+in\s+(?:202[0-5])\b", re.I),
+    re.compile(r"while\s+(?:we\s+are\s+)?(?:currently\s+)?in\s+(?:202[0-5])\b", re.I),
+]
+
+
+def _strip_temporal_hallucinations(items: list[str]) -> list[str]:
+    """Drop entries that flag legitimate future dates as inconsistencies.
+
+    See `_TEMPORAL_HALLUCINATION_RES` for the patterns. This is a safety net
+    over the prompt-level instruction; without it, a single noisy item from
+    an older Ollama checkpoint can poison the entire review.
+    """
+    out: list[str] = []
+    for item in items:
+        if any(pattern.search(item) for pattern in _TEMPORAL_HALLUCINATION_RES):
+            continue
+        out.append(item)
+    return out
+
+
+def _scrub_narrative_temporal(text: str) -> str:
+    """Drop individual sentences from a narrative that match temporal-
+    hallucination patterns. Keeps paragraph breaks intact."""
+    if not text:
+        return text
+    paragraphs = text.split("\n\n")
+    cleaned_paragraphs: list[str] = []
+    for para in paragraphs:
+        # Split on sentence boundaries while keeping the trailing punctuation.
+        sentences = re.split(r"(?<=[.!?])\s+", para)
+        keep = [s for s in sentences
+                if not any(p.search(s) for p in _TEMPORAL_HALLUCINATION_RES)]
+        joined = " ".join(keep).strip()
+        if joined:
+            cleaned_paragraphs.append(joined)
+    return "\n\n".join(cleaned_paragraphs)
+
+
 def _extract_json_object(raw: str) -> dict | None:
     """Find the largest balanced `{...}` block in *raw* and parse it."""
     if not raw:
@@ -502,7 +554,39 @@ def _verifier_prompt(resume_text: str, insights: dict) -> str:
     """The verification prompt — provider-agnostic, asked of any LLM."""
     metrics_for_prompt = {k: v for k, v in (insights.get("metrics") or {}).items()
                          if k != "sections"}
+    today_iso = date.today().isoformat()
+    today_year = date.today().year
+    next_year = today_year + 1
+    plus_two = today_year + 2
+    plus_four = today_year + 4
     return (
+        f"=== HARD CONSTRAINT — TEMPORAL CONTEXT (read this first) ===\n"
+        f"Today's date is {today_iso}. The current year is {today_year}. Your "
+        f"training data is older than this; ignore any internal sense that the "
+        f"year is 2024 or 2025 — IT IS {today_year}. Resumes routinely list "
+        f"future-dated items that are completely legitimate:\n"
+        f"  • Expected graduation in {next_year}, {plus_two}, {plus_four} — "
+        f"normal for current students.\n"
+        f"  • Research, internships, study-abroad programs, or fellowships with "
+        f"start dates in the coming months — normal for accepted offers.\n"
+        f"  • Any date between {today_iso} and roughly {today_year + 5} on a "
+        f"student/early-career resume is plausible and should NOT be flagged "
+        f"as an inconsistency, typo, or fabrication.\n"
+        f"Anything dated at or before {today_iso} is in the past or present — "
+        f"NEVER call it 'in the future'.\n\n"
+        f"FORBIDDEN OUTPUTS — do not include any red flag, suggestion, or "
+        f"narrative sentence that:\n"
+        f"  • claims the resume contains 'future dates' as a problem;\n"
+        f"  • describes 'chronological inconsistency' based purely on year "
+        f"values being in {today_year} or later;\n"
+        f"  • says recruiters will 'flag the document as fabricated or "
+        f"careless' because of {today_year}+ dates;\n"
+        f"  • implies the current year is anything other than {today_year}.\n"
+        f"You MAY still flag a genuine self-contradiction *within* the resume "
+        f"(e.g., one role says 2023–2024 and another says it ended in 2022). "
+        f"That's a real chronology issue — the rule above only forbids "
+        f"flagging legitimate future-dated items.\n\n"
+        "=== TASK ===\n"
         "You are a senior technical resume reviewer. A heuristic scanner "
         "produced the analysis below from a candidate's resume. Your job:\n"
         "  1. VERIFY each item — silently DROP any inaccurate/misleading entries.\n"
@@ -547,20 +631,32 @@ def verify_with_provider(resume_text: str, insights: dict, provider) -> dict:
         return {"_error": "no_provider", "_message": "AI verification unavailable."}
 
     prompt = _verifier_prompt(resume_text or "", insights)
+    today_iso = date.today().isoformat()
+    today_year = date.today().year
+    system_prompt = (
+        f"You are a strict, careful resume reviewer. Today's date is "
+        f"{today_iso}; the current year is {today_year}. Your training "
+        f"data is older than today — IGNORE any internal sense that the "
+        f"year is 2024 or 2025. Future-dated items on student resumes "
+        f"(expected graduation in {today_year + 1}+, upcoming research/"
+        f"internships, planned study-abroad) are LEGITIMATE and must "
+        f"NEVER be flagged as 'fabrication', 'chronological "
+        f"inconsistency', or 'future dates'. Reply with JSON only."
+    )
 
     try:
         # Try with strict JSON mode first; fall back to plain text on TypeError
         # (older provider implementations didn't accept the kwarg).
         try:
             raw = chat_fn(
-                "You are a strict, careful resume reviewer. Reply with JSON only.",
+                system_prompt,
                 [{"role": "user", "content": prompt}],
                 max_tokens=1500,
                 json_mode=True,
             )
         except TypeError:
             raw = chat_fn(
-                "You are a strict, careful resume reviewer. Reply with JSON only.",
+                system_prompt,
                 [{"role": "user", "content": prompt}],
                 max_tokens=1500,
             )
@@ -591,8 +687,12 @@ def verify_with_provider(resume_text: str, insights: dict, provider) -> dict:
 
     out: dict[str, Any] = {}
     strengths = _coerce_str_list(parsed.get("strengths"))
-    red_flags = _coerce_str_list(parsed.get("red_flags"))
-    suggestions = _coerce_str_list(parsed.get("suggestions"))
+    red_flags = _strip_temporal_hallucinations(
+        _coerce_str_list(parsed.get("red_flags"))
+    )
+    suggestions = _strip_temporal_hallucinations(
+        _coerce_str_list(parsed.get("suggestions"))
+    )
     if strengths:
         out["strengths"] = strengths
     if red_flags:
@@ -601,7 +701,9 @@ def verify_with_provider(resume_text: str, insights: dict, provider) -> dict:
         out["suggestions"] = suggestions
     narrative = parsed.get("narrative")
     if isinstance(narrative, str) and narrative.strip():
-        out["narrative"] = narrative.strip()
+        cleaned_narrative = _scrub_narrative_temporal(narrative.strip())
+        if cleaned_narrative:
+            out["narrative"] = cleaned_narrative
     notes = parsed.get("verification_notes")
     if isinstance(notes, str) and notes.strip():
         out["verification_notes"] = notes.strip()

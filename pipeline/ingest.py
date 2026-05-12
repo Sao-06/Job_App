@@ -26,7 +26,7 @@ import sqlite3
 import threading
 import time
 import traceback
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, wait as _futures_wait  # noqa: F401  (as_completed kept for _backfill_parallel)
 from datetime import datetime, timezone
 from typing import Callable
 
@@ -38,9 +38,18 @@ from .sources.base import infer_metadata
 # ── Globals (module-level so reload-safe) ─────────────────────────────────────
 
 _scheduler = None                              # apscheduler.schedulers.background.BackgroundScheduler
-_locks: dict[str, threading.Lock] = {}         # one Lock per source name
+_locks: dict[str, threading.Lock] = {}         # one Lock per source name (drops overlapping ticks of the SAME source)
 _connect: Callable[[], sqlite3.Connection] | None = None
 _started = False
+
+# Process-wide DB write serializer. SQLite (even in WAL mode) allows only ONE
+# writer at a time; concurrent ingest workers were tripping over each other on
+# the Pi and surfacing as "sqlite3.OperationalError: database is locked" even
+# though `_connect` already passes a 30 s busy timeout — under 8-way parallel
+# upserts the 30 s budget gets eaten by queued writers. Holding this lock only
+# around the actual `with _conn() as conn:` write block keeps `source.fetch()`
+# (network-bound, the actual reason we want parallelism) outside contention.
+_WRITE_LOCK = threading.Lock()
 
 
 def _utc_now() -> str:
@@ -76,10 +85,15 @@ def run_one(source: JobSource) -> dict:
                 continue
             rows.append(infer_metadata(raw))
             fetched += 1
-        with _conn() as conn:
-            inserted, _skipped = job_repo.upsert_many(conn, rows)
-            # Soft-delete rows we didn't see in this run.
-            job_repo.mark_missing(conn, name, started)
+        # Serialize the actual SQLite write — see the _WRITE_LOCK comment above.
+        # `source.fetch()` ran outside the lock so 8 concurrent network fetches
+        # still happen in parallel; only the upsert + mark_missing transaction
+        # is single-writer.
+        with _WRITE_LOCK:
+            with _conn() as conn:
+                inserted, _skipped = job_repo.upsert_many(conn, rows)
+                # Soft-delete rows we didn't see in this run.
+                job_repo.mark_missing(conn, name, started)
         ok = True
     except Exception as exc:
         err = f"{type(exc).__name__}: {exc}"
@@ -87,13 +101,17 @@ def run_one(source: JobSource) -> dict:
     finally:
         finished = _utc_now()
         try:
-            with _conn() as conn:
-                job_repo.record_source_run(
-                    conn, source=name, started_at=started,
-                    finished_at=finished, ok=ok,
-                    fetched=fetched, inserted=inserted, updated=0,
-                    error=err,
-                )
+            # Telemetry write is inside the same lock — losing the
+            # `source_runs` row on the very runs that hit lock errors would
+            # erase the diagnostic signal we want most.
+            with _WRITE_LOCK:
+                with _conn() as conn:
+                    job_repo.record_source_run(
+                        conn, source=name, started_at=started,
+                        finished_at=finished, ok=ok,
+                        fetched=fetched, inserted=inserted, updated=0,
+                        error=err,
+                    )
         except Exception:
             traceback.print_exc()
         lock.release()
@@ -103,24 +121,43 @@ def run_one(source: JobSource) -> dict:
     }
 
 
-def force_run(source_name: str | None = None) -> list[dict]:
-    """Manual trigger used by ``POST /api/jobs/source-status``.
+def force_run(source_name: str | None = None,
+              wall_clock_timeout: float = 60.0) -> list[dict]:
+    """Manual trigger used by ``POST /api/jobs/source-status`` and
+    ``phase2_discover_jobs(force_live=True)``. With no name, runs every
+    registered source in parallel and returns a per-source summary.
 
-    With no name, runs every registered source in parallel and returns
-    a per-source summary list.
+    The wall-clock cap matters: ``with ThreadPoolExecutor`` calls
+    ``shutdown(wait=True)`` on exit, so without it a single hung HTTP
+    fetch on a slow third-party API would pin the executor — and the
+    FastAPI request thread — for minutes. We instead ``wait`` with a
+    budget, tag unfinished futures as timed-out in the result, and
+    ``shutdown(wait=False, cancel_futures=True)`` so queued work is
+    cancelled and running work doesn't block return.
     """
     sources = [s for s in source_registry()
                if source_name is None or s.name == source_name]
     if not sources:
         return []
     out: list[dict] = []
-    with ThreadPoolExecutor(max_workers=min(8, len(sources))) as ex:
+    ex = ThreadPoolExecutor(max_workers=min(8, len(sources)))
+    try:
         futs = {ex.submit(run_one, s): s.name for s in sources}
-        for fut in as_completed(futs):
+        done, not_done = _futures_wait(futs, timeout=wall_clock_timeout)
+        for fut in done:
             try:
                 out.append(fut.result())
             except Exception as exc:
                 out.append({"source": futs[fut], "ok": False, "error": str(exc)})
+        for fut in not_done:
+            out.append({
+                "source": futs[fut], "ok": False,
+                "error": f"timeout after {wall_clock_timeout:.0f}s — source still running in background",
+            })
+    finally:
+        # cancel_futures=True (Python 3.9+) cancels QUEUED-but-not-started work.
+        # Running futures continue but we no longer block on them.
+        ex.shutdown(wait=False, cancel_futures=True)
     return out
 
 

@@ -104,6 +104,7 @@ _SCHEMA_SQL = [
         education_required   TEXT,
         citizenship_required TEXT,
         job_category         TEXT,
+        description          TEXT,
         posted_at            TEXT,
         fetched_at           TEXT NOT NULL,
         last_seen_at         TEXT NOT NULL,
@@ -186,12 +187,14 @@ INSERT INTO job_postings (
     id, canonical_url, source, company, company_norm, title, title_norm,
     location, remote, requirements_json, salary_range,
     experience_level, education_required, citizenship_required, job_category,
+    description,
     posted_at, fetched_at, last_seen_at, miss_count, deleted
 )
 VALUES (
     :id, :canonical_url, :source, :company, :company_norm, :title, :title_norm,
     :location, :remote, :requirements_json, :salary_range,
     :experience_level, :education_required, :citizenship_required, :job_category,
+    :description,
     :posted_at, :fetched_at, :last_seen_at, 0, 0
 )
 ON CONFLICT(canonical_url) DO UPDATE SET
@@ -213,6 +216,10 @@ ON CONFLICT(canonical_url) DO UPDATE SET
     education_required   = excluded.education_required,
     citizenship_required = excluded.citizenship_required,
     job_category         = COALESCE(excluded.job_category, job_postings.job_category),
+    -- COALESCE preserves a richer description from a prior cycle when
+    -- the new fetch came back empty (e.g. an aggregator listing that
+    -- only carries the title). Lazy job_details fills it later anyway.
+    description          = COALESCE(NULLIF(excluded.description, ''), job_postings.description),
     posted_at            = COALESCE(excluded.posted_at, job_postings.posted_at),
     last_seen_at         = excluded.last_seen_at,
     miss_count           = 0,
@@ -249,6 +256,20 @@ def upsert_many(conn: sqlite3.Connection, rows: Iterable[Mapping]) -> tuple[int,
             reqs_json = json.dumps([reqs.strip()])
         else:
             reqs_json = None
+        # Prefer ``description`` then fall back to the legacy ``description_text``
+        # alias some sources used. Strip HTML defensively — many connectors
+        # pass through whatever the upstream API gave them, and several APIs
+        # ship raw HTML. The fast path inside `strip_html` is a single `<`
+        # check, so connectors that already pass plain text pay near-zero.
+        # Trim absurdly long bodies to keep the row under SQLite's cell
+        # limit AND keep FTS5 indexing cheap — anything past ~16 KB is
+        # boilerplate / EOE disclaimers.
+        from .sources.base import strip_html as _strip_html_for_upsert
+        desc_raw = r.get("description") or r.get("description_text") or ""
+        desc = _strip_html_for_upsert(str(desc_raw)).strip()
+        if len(desc) > 16000:
+            desc = desc[:16000].rsplit(" ", 1)[0] + "…"
+
         prepared.append({
             "id": _job_id(url),
             "canonical_url": url,
@@ -265,6 +286,7 @@ def upsert_many(conn: sqlite3.Connection, rows: Iterable[Mapping]) -> tuple[int,
             "education_required": r.get("education_required") or "unknown",
             "citizenship_required": r.get("citizenship_required") or "unknown",
             "job_category": r.get("job_category") or "general",
+            "description": desc or None,
             "posted_at": r.get("posted_at") or r.get("posted_date") or None,
             "fetched_at": now,
             "last_seen_at": now,
@@ -360,7 +382,7 @@ def bulk_get_by_ids(conn: sqlite3.Connection, ids: Sequence[str]) -> list[dict]:
         f"""SELECT id, canonical_url, source, company, title, location, remote,
                    requirements_json, salary_range, experience_level,
                    education_required, citizenship_required, posted_at,
-                   last_seen_at
+                   last_seen_at, description
               FROM job_postings
              WHERE id IN ({placeholders}) AND deleted = 0""",
         list(ids),
@@ -388,4 +410,7 @@ def _row_to_dict(r) -> dict:
         "citizenship_required": r[11] or "unknown",
         "posted_at": r[12],
         "last_seen_at": r[13],
+        # description column was added 2026-05-08; legacy SELECT callers
+        # that don't include it produce 14-tuple rows — guard with len().
+        "description": (r[14] if len(r) > 14 else "") or "",
     }

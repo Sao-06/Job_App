@@ -25,6 +25,11 @@ from .helpers import (infer_experience_level, infer_education_required,
                       filter_jobs_by_education, validate_job_urls)
 from .providers import BaseProvider, RUBRIC_WEIGHTS, compute_skill_coverage
 from .resume import _build_demo_resume, _save_tailored_resume
+from .heuristic_tailor import (
+    validate_tailoring,
+    heuristic_tailor_resume,
+    merge_with_heuristic,
+)
 
 
 # ── Phase 1 ────────────────────────────────────────────────────────────────────
@@ -342,7 +347,11 @@ def phase2_discover_jobs(profile: dict, job_titles: list, location: str,
             "location":            j.location,
             "remote":              j.remote,
             "posted_date":         j.posted_at or "",
-            "description":         "",
+            # Empty when the source didn't carry one. Phase 3's LLM-scoring
+            # loop lazy-fetches via pipeline.job_details for the top-N rows
+            # and persists the result back to the DB so subsequent loads
+            # already have it.
+            "description":         j.description or "",
             "requirements":        list(j.requirements or []),
             "salary_range":        j.salary_range,
             "application_url":     j.url,
@@ -533,20 +542,139 @@ def phase3_score_jobs(jobs: list, profile: dict, provider: BaseProvider,
             f"LLM-scoring top {llm_score_count} only"
         )
 
+    # Lazy-fetch description for top-N jobs that lack one before LLM scoring.
+    # `pipeline.job_details` is the in-memory + per-source fetcher (Greenhouse
+    # / Lever / Ashby / Workable today; new ATSes plug in incrementally). The
+    # fetched description is also persisted back to job_postings so subsequent
+    # scorings of the same job get it for free — Pareto: most users score the
+    # same handful of high-fit roles repeatedly.
+    def _ensure_description(job: dict) -> None:
+        if job.get("description"):
+            return
+        url = job.get("application_url") or job.get("url") or ""
+        source = job.get("source") or ""
+        if not url or not source:
+            return
+        try:
+            from . import job_details as _jd
+        except Exception:
+            return  # job_details.py not present in this deployment
+        try:
+            details = _jd.fetch_full_description(url, source)
+        except Exception:
+            details = None
+        if not details:
+            return
+        text = (details.get("description") or "").strip()
+        if not text:
+            return
+        # Cap before storing; same trim policy as job_repo.upsert_many.
+        if len(text) > 16000:
+            text = text[:16000].rsplit(" ", 1)[0] + "…"
+        job["description"] = text
+        # Persist back to the index so `phase2_discover_jobs` of a future
+        # session reads this description directly without paying the fetch.
+        try:
+            from .config import DB_PATH
+            import sqlite3 as _sqlite3
+            jid = job.get("id")
+            if jid and DB_PATH.exists():
+                with _sqlite3.connect(DB_PATH, timeout=15) as _conn:
+                    _conn.execute(
+                        "UPDATE job_postings SET description = ? WHERE id = ? AND (description IS NULL OR description = '')",
+                        (text, jid),
+                    )
+        except Exception:
+            pass  # best-effort cache; the in-memory fetch still helps this session
+
     _t0 = time.time()
     scored: list = []
-    for i, job in enumerate(to_llm_score, 1):
-        result = provider.score_job(job, profile)
-        merged = {**job, **result}
-        s = merged.get("score", 0)
-        merged["filter_status"] = "passed" if s >= min_score else "below_threshold"
-        merged["filter_reason"] = "" if s >= min_score else f"score {s} < {min_score}"
-        scored.append(merged)
-        if i % 5 == 0 or i == len(to_llm_score):
-            console.print(
-                f"  [dim]🧠 LLM-scored {i}/{len(to_llm_score)} jobs  "
-                f"({time.time() - _t0:.0f}s elapsed)[/dim]"
-            )
+
+    if to_llm_score:
+        # Pre-fetch descriptions for all top-N jobs before launching threads
+        # so that _ensure_description's optional DB write is not racy.
+        for job in to_llm_score:
+            _ensure_description(job)
+
+        def _score_one(job: dict):
+            """Run provider.score_job; return (job, result, err)."""
+            try:
+                result = provider.score_job(job, profile)
+                return job, result, None
+            except Exception as exc:  # noqa: BLE001
+                return job, None, exc
+
+        max_workers = min(5, len(to_llm_score))
+        # Use a dict to preserve job ordering: job id → future
+        future_to_job: dict = {}
+        scored_map: dict = {}  # job id → merged dict (filled as futures complete)
+
+        with ThreadPoolExecutor(
+            max_workers=max_workers, thread_name_prefix="phase3-score"
+        ) as pool:
+            for job in to_llm_score:
+                fut = pool.submit(_score_one, job)
+                future_to_job[fut] = job
+
+            completed = 0
+            for fut in as_completed(future_to_job, timeout=600):
+                try:
+                    job, result, err = fut.result(timeout=180)
+                except FuturesTimeout:
+                    job = future_to_job[fut]
+                    err = TimeoutError("score_job timed out after 180s")
+                    result = None
+                except Exception as exc:  # noqa: BLE001
+                    job = future_to_job[fut]
+                    err = exc
+                    result = None
+
+                if err is not None:
+                    # Per-job failure → deterministic fallback (never crashes phase)
+                    console.print(
+                        f"  [yellow]⚠ score_job failed for {job.get('id')} "
+                        f"({type(err).__name__}: {err}); using deterministic fallback[/yellow]"
+                    )
+                    coverage, matched, missing = compute_skill_coverage(job, profile)
+                    pts = int(round(coverage * 100))
+                    fallback_result = {
+                        "score": pts,
+                        "score_breakdown": {
+                            "required_skills": {
+                                "raw": coverage, "weight": RUBRIC_WEIGHTS["required_skills"],
+                                "points": int(round(coverage * RUBRIC_WEIGHTS["required_skills"])),
+                            },
+                            "industry": {"raw": 0.5, "weight": RUBRIC_WEIGHTS["industry"],
+                                         "points": int(round(0.5 * RUBRIC_WEIGHTS["industry"]))},
+                            "location_seniority": {
+                                "raw": 0.5, "weight": RUBRIC_WEIGHTS["location_seniority"],
+                                "points": int(round(0.5 * RUBRIC_WEIGHTS["location_seniority"])),
+                            },
+                        },
+                        "matching_skills": matched,
+                        "missing_skills": missing,
+                        "reasoning": "Fallback to deterministic skill coverage (LLM call failed).",
+                    }
+                    merged = {**job, **fallback_result}
+                else:
+                    merged = {**job, **result}
+
+                s = merged.get("score", 0)
+                merged["filter_status"] = "passed" if s >= min_score else "below_threshold"
+                merged["filter_reason"] = "" if s >= min_score else f"score {s} < {min_score}"
+                scored_map[job["id"]] = merged
+
+                completed += 1
+                if completed % 5 == 0 or completed == len(to_llm_score):
+                    console.print(
+                        f"  [dim]🧠 LLM-scored {completed}/{len(to_llm_score)} jobs  "
+                        f"({time.time() - _t0:.0f}s elapsed)[/dim]"
+                    )
+
+        # Restore original order (to_llm_score order = fast-score rank)
+        for job in to_llm_score:
+            if job["id"] in scored_map:
+                scored.append(scored_map[job["id"]])
 
     for job in to_skip:
         merged = {**job}
@@ -641,58 +769,79 @@ def _tailoring_is_empty(tailored: dict) -> bool:
 
 def phase4_tailor_resume(job: dict, profile: dict, resume_text: str,
                           provider: BaseProvider, include_cover_letter: bool = False,
-                          section_order: list = None) -> dict:
-    tailored = provider.tailor_resume(job, profile, resume_text) or {}
+                          section_order: list = None, *,
+                          selected_keywords: list[str] | None = None,
+                          source_format: str | None = None) -> dict:
+    """Produce a TailoredResume v2 dict for *job* against *profile*.
 
-    # Validator: if both skills_reordered and experience_bullets came back empty,
-    # the LLM silently failed.  Retry once, then fall back to profile-derived
-    # defaults so _save_tailored_resume always has something to render.
-    if _tailoring_is_empty(tailored):
-        console.print(
-            "  [yellow][!] Tailoring returned empty - retrying once.[/yellow]"
-        )
+    Pipeline:
+      1. Compute heuristic v2 baseline (cheap; used as safety net + merge target).
+      2. Ask provider for v2 (passing user-selected keywords + source_format hint).
+      3. Validate v2 shape; retry once on failure.
+      4. If still bad, fall back to heuristic.
+      5. Hybrid merge: keep LLM's good fields, heuristic backfills empties.
+      6. Compute ATS scores (before / after) over skills + bullets.
+    """
+    from .heuristic_tailor import (
+        heuristic_tailor_resume_v2, merge_with_heuristic_v2, validate_v2_or_none,
+    )
+
+    heuristic = heuristic_tailor_resume_v2(
+        job, profile, resume_text, selected_keywords=selected_keywords,
+    )
+
+    raw = None
+    try:
+        raw = provider.tailor_resume(
+            job, profile, resume_text,
+            selected_keywords=selected_keywords, source_format=source_format,
+        ) or {}
+    except TypeError:
+        # Backward-compat: legacy provider didn't accept kwargs
         try:
-            retry = provider.tailor_resume(job, profile, resume_text) or {}
+            raw = provider.tailor_resume(job, profile, resume_text) or {}
+        except Exception as e:
+            console.print(f"  [yellow]Tailoring provider error: {e}[/yellow]")
+    except Exception as e:
+        console.print(f"  [yellow]Tailoring provider error: {e}[/yellow]")
+
+    validated = validate_v2_or_none(raw)
+    if validated is None:
+        console.print("  [yellow][!] Tailoring response unusable — retrying once.[/yellow]")
+        try:
+            retry = provider.tailor_resume(
+                job, profile, resume_text,
+                selected_keywords=selected_keywords, source_format=source_format,
+            ) or {}
         except Exception as e:
             console.print(f"  [yellow]Retry failed: {e}[/yellow]")
             retry = {}
-        if not _tailoring_is_empty(retry):
-            tailored = retry
-        else:
-            console.print(
-                "  [yellow][!] Retry also empty - falling back to profile defaults.[/yellow]"
-            )
-            reqs = [str(r) for r in (job.get("requirements") or []) if r]
-            skills_fb = list(profile.get("top_hard_skills") or [])
-            # Ensure ATS "after" score can improve: surface any job requirements
-            # not already present in the profile's hard-skill list.
-            seen = {s.lower() for s in skills_fb}
-            for r in reqs:
-                if r.lower() not in seen:
-                    skills_fb.append(r)
-                    seen.add(r.lower())
-            tailored = {
-                "skills_reordered":     skills_fb,
-                "experience_bullets":   [],
-                "ats_keywords_missing": tailored.get("ats_keywords_missing") or reqs,
-                "section_order":        tailored.get("section_order")
-                                         or ["Skills", "Projects", "Experience", "Education"],
-            }
+        validated = validate_v2_or_none(retry)
+
+    if validated is None:
+        console.print("  [yellow][!] Falling back to heuristic v2 tailoring.[/yellow]")
+        tailored = heuristic
+    else:
+        tailored = merge_with_heuristic_v2(validated, heuristic)
 
     if section_order:
         tailored["section_order"] = section_order
     if include_cover_letter:
         tailored["cover_letter"] = provider.generate_cover_letter(job, profile)
 
-    # ── ATS scoring (before/after) ─────────────────────────────────────────────
+    # ── ATS scoring (before / after) — text harvested from skills + bullets ─
     requirements = job.get("requirements") or []
-    before_text  = (resume_text or "") + " " + _profile_to_text(profile)
-    after_extras = " ".join(tailored.get("skills_reordered") or [])
-    for entry in (tailored.get("experience_bullets") or []):
-        after_extras += " " + " ".join(entry.get("bullets") or [])
-    after_text = before_text + " " + after_extras
+    before_text = (resume_text or "") + " " + _profile_to_text(profile)
+    after_extras: list[str] = []
+    for cat in tailored.get("skills") or []:
+        for it in cat.get("items") or []:
+            after_extras.append(it.get("text") or "")
+    for r in tailored.get("experience") or []:
+        for b in r.get("bullets") or []:
+            after_extras.append(b.get("text") or "")
+    after_text = before_text + " " + " ".join(after_extras)
     tailored["ats_score_before"] = _ats_score(before_text, requirements)
-    tailored["ats_score_after"]  = _ats_score(after_text,  requirements)
+    tailored["ats_score_after"] = _ats_score(after_text, requirements)
     return tailored
 
 

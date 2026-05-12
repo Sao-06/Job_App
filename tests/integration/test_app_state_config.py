@@ -26,7 +26,8 @@ class TestState:
         user = r.json()["user"]
         assert user is not None
         assert user["email"] == "tester@example.com"
-        assert user["plan_tier"] == "free"
+        # Testing phase: default fixture plan is Pro.
+        assert user["plan_tier"] == "pro"
 
     def test_user_none_for_anonymous(self, fastapi_client):
         client, _, _ = fastapi_client
@@ -43,8 +44,9 @@ class TestState:
         client, _, _ = fastapi_client
         r = client.get("/api/state")
         d = r.json()
-        assert d["plan_tier"] == "free"
-        assert d["is_pro"] is False
+        # Testing phase: every user defaults to Pro.
+        assert d["plan_tier"] == "pro"
+        assert d["is_pro"] is True
 
 
 # ── /api/config ─────────────────────────────────────────────────────────────
@@ -94,33 +96,46 @@ class TestConfig:
         s = client.get("/api/state").json()
         assert "hack_me" not in s
 
-    def test_anthropic_mode_blocked_for_free_tier(self, fastapi_client):
-        client, _, _ = fastapi_client
+    def test_anthropic_mode_blocked_for_free_users(self, fastapi_client, tmp_db):
+        # After Tasks 9+10: free users get 402 plan_required (not 503
+        # coming_soon) because Anthropic Claude is now a Pro feature.
+        # fastapi_client defaults to Pro, so explicitly downgrade to free.
+        client, user_id, token = fastapi_client
+        tmp_db.set_user_plan_tier(user_id, "free")
+        tmp_db.create_auth_token(token, user_id, {
+            "id": user_id, "email": "tester@example.com",
+            "is_developer": False, "plan_tier": "free",
+        })
         r = client.post("/api/config", json={"mode": "anthropic"})
-        # 402 Payment Required.
         assert r.status_code == 402
         body = r.json()
         assert body.get("code") == "plan_required"
 
-    def test_demo_mode_allowed_for_free_tier(self, fastapi_client):
+    def test_demo_mode_rejected(self, fastapi_client):
+        # `demo` was retired from the user-selectable mode whitelist —
+        # DemoProvider still exists internally as the heuristic baseline /
+        # Ollama-down fallback, but POST /api/config rejects it as 400.
         client, _, _ = fastapi_client
         r = client.post("/api/config", json={"mode": "demo"})
-        assert r.status_code == 200
+        assert r.status_code == 400
 
     def test_ollama_mode_allowed_for_free_tier(self, fastapi_client):
         client, _, _ = fastapi_client
         r = client.post("/api/config", json={"mode": "ollama"})
         assert r.status_code == 200
 
-    def test_anthropic_mode_allowed_for_pro(self, fastapi_client, tmp_db):
+    def test_anthropic_mode_admitted_for_pro(self, fastapi_client, tmp_db):
+        # After Tasks 9+10: Pro users can select mode='anthropic' — it is now
+        # a Pro-tier feature (no longer dev-only). fastapi_client already
+        # defaults to plan_tier='pro', so no downgrade needed.
         client, user_id, token = fastapi_client
-        # Promote to pro AND refresh the cached token payload so /api/state
-        # reflects pro on the next poll.
-        tmp_db.set_user_plan_tier(user_id, "pro")
-        tmp_db.create_auth_token(token, user_id, {
-            "id": user_id, "email": "tester@example.com",
-            "is_developer": False, "plan_tier": "pro",
-        })
+        r = client.post("/api/config", json={"mode": "anthropic"})
+        assert r.status_code == 200
+
+    def test_anthropic_mode_allowed_for_devs(self, dev_client):
+        # Developers can still exercise the in-progress Claude integration so
+        # they can test it before it ships to customers.
+        client, _, _ = dev_client
         r = client.post("/api/config", json={"mode": "anthropic"})
         assert r.status_code == 200
 
@@ -154,13 +169,19 @@ class TestReset:
         assert after["email"] == before["email"]
 
     def test_preserves_provider_settings(self, fastapi_client):
+        # During the testing phase `_load_session_state` forces every
+        # Ollama session onto the single canonical model
+        # `CLOUD_OLLAMA_MODEL = gemma4:31b-cloud` — see the migration
+        # block in app.py. So the meaningful assertion here is that the
+        # mode survives reset, and the model lands on the canonical
+        # value regardless of what /api/config tried to set.
+        from app import CLOUD_OLLAMA_MODEL
         client, _, _ = fastapi_client
-        client.post("/api/config", json={"mode": "demo"})
-        client.post("/api/config", json={"ollama_model": "mistral"})
+        client.post("/api/config", json={"ollama_model": "anything-else"})
         client.post("/api/reset")
         s = client.get("/api/state").json()
-        assert s["mode"] == "demo"
-        assert s["ollama_model"] == "mistral"
+        assert s["mode"] == "ollama"
+        assert s["ollama_model"] == CLOUD_OLLAMA_MODEL
 
     def test_unauthenticated_returns_401(self, fastapi_client):
         client, _, _ = fastapi_client

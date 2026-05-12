@@ -134,7 +134,13 @@ class SQLiteSessionStore:
                     pass
 
     def _connect(self):
-        conn = sqlite3.connect(self.db_path, timeout=30)
+        # 60 s busy timeout — `pipeline.ingest._WRITE_LOCK` already serializes
+        # ingest writes, but request-thread writes (session_state save, auth
+        # token refresh) can still contend with an in-flight ingest upsert on
+        # the Pi's slow IO. Doubling the budget from 30 s gives the Python-
+        # level lock + SQLite-level wait room to absorb the worst case
+        # (~200-row executemany) without surfacing "database is locked".
+        conn = sqlite3.connect(self.db_path, timeout=60)
         try:
             conn.execute("PRAGMA journal_mode=WAL")
         except sqlite3.OperationalError:
@@ -240,11 +246,15 @@ class SQLiteSessionStore:
     def create_user(self, email: str, password_hash: str = None, google_id: str = None) -> str:
         user_id = uuid.uuid4().hex
         now = utc_now()
+        # Testing phase: every new signup starts on Pro. The plan_tier column
+        # also has a `DEFAULT 'pro'` (see pipeline/migrations.py) for any code
+        # path that bypasses this helper, but we set it explicitly here too so
+        # the value is obvious at the call site.
         with self._connect() as conn:
             conn.execute(
                 """
-                INSERT INTO users (id, email, password_hash, google_id, created_at)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO users (id, email, password_hash, google_id, plan_tier, created_at)
+                VALUES (?, ?, ?, ?, 'pro', ?)
                 """,
                 (user_id, email, password_hash, google_id, now),
             )
@@ -264,7 +274,7 @@ class SQLiteSessionStore:
             "password_hash": row[2],
             "google_id": row[3],
             "is_developer": bool(row[4]) if len(row) > 4 else False,
-            "plan_tier": (row[5] if len(row) > 5 and row[5] else "free"),
+            "plan_tier": (row[5] if len(row) > 5 and row[5] else "pro"),
             "stripe_customer_id": row[6] if len(row) > 6 else None,
             "stripe_subscription_id": row[7] if len(row) > 7 else None,
         }
@@ -577,7 +587,7 @@ class SQLiteSessionStore:
                     "name": profile.get("name") or "Unprofiled user",
                     "email": u_email or profile.get("email") or "",
                     "user_id": user_id,
-                    "plan_tier": plan_tier or ("free" if user_id else None),
+                    "plan_tier": plan_tier or ("pro" if user_id else None),
                     "is_developer": bool(u_is_dev) if u_is_dev is not None else False,
                     "has_resume": bool(state.get("resume_text")),
                     "resume_filename": state.get("resume_filename") or "",

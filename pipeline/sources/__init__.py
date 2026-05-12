@@ -27,6 +27,7 @@ from . import api_jobicy          # noqa: F401
 from . import api_himalayas       # noqa: F401
 from . import api_remotive        # noqa: F401
 from . import api_arbeitnow       # noqa: F401
+from . import api_weworkremotely  # noqa: F401  (global remote — RSS, no key)
 # Keyed sources — each self-registers only when its env var is set.
 from . import api_usajobs         # noqa: F401
 from . import api_adzuna          # noqa: F401
@@ -38,6 +39,11 @@ from . import ats_greenhouse      # noqa: F401
 from . import ats_lever           # noqa: F401
 from . import ats_ashby           # noqa: F401
 from . import ats_workable        # noqa: F401
+from . import ats_smartrecruiters # noqa: F401
+from . import ats_recruitee       # noqa: F401
+from . import ats_workday         # noqa: F401
+# Library-backed scrapers — register only if the optional pip dep is installed.
+from . import scraper_jobspy      # noqa: F401
 
 
 __all__ = [

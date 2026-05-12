@@ -1,0 +1,46 @@
+/* base.css — shared resets + variables consumed by every template */
+:root {
+  --accent: #1F4E79;
+  --body-size: 10pt;
+  --header-size: 12pt;
+  --name-size: 22pt;
+  --text-color: #111;
+  --muted-color: #555;
+  --rule-color: #d0d0d0;
+  --page-margin: 0.55in;
+  --font-body: "Times New Roman", Georgia, serif;
+  --font-heading: "Times New Roman", Georgia, serif;
+}
+* { box-sizing: border-box; }
+@page { size: Letter; margin: var(--page-margin); }
+html, body {
+  margin: 0; padding: 0; color: var(--text-color);
+  font-family: var(--font-body); font-size: var(--body-size); line-height: 1.32;
+}
+h1.name {
+  font-family: var(--font-heading); font-size: var(--name-size);
+  margin: 0 0 4pt; text-align: center; letter-spacing: 0.02em; font-weight: 700;
+}
+.contact {
+  text-align: center; color: var(--muted-color);
+  font-size: calc(var(--body-size) - 0.5pt); margin-bottom: 8pt;
+}
+.contact span + span::before { content: "  ·  "; color: var(--rule-color); }
+section.r { margin-top: 9pt; }
+section.r > h2 {
+  font-family: var(--font-heading); font-size: var(--header-size);
+  color: var(--accent); margin: 0 0 2pt;
+  text-transform: uppercase; letter-spacing: 0.05em;
+  border-bottom: 0.6pt solid var(--accent); padding-bottom: 1pt;
+}
+.entry { margin-top: 4pt; page-break-inside: avoid; }
+.entry-h { display: flex; justify-content: space-between; gap: 8pt; }
+.entry-h .l { font-weight: 700; }
+.entry-h .r { color: var(--muted-color); font-style: italic; }
+.entry-sub { display: flex; justify-content: space-between; gap: 8pt; color: var(--muted-color); font-style: italic; font-size: calc(var(--body-size) - 0.3pt); }
+ul.bullets { margin: 2pt 0 0; padding-left: 16pt; }
+ul.bullets li { margin-bottom: 1.5pt; }
+.skills-line { line-height: 1.4; }
+.skills-cat { margin-bottom: 2pt; }
+.skills-cat-name { font-weight: 700; margin-right: 4pt; }
+p { margin: 2pt 0; }

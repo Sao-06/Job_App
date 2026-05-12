@@ -270,12 +270,17 @@ class TestComputeSkillCoverage:
         assert set(matched) == {"Python", "Verilog"}
         assert missing == []
 
-    def test_no_skills_returns_neutral_coverage(self):
+    def test_no_skills_returns_zero_coverage(self):
+        # Empty top_hard_skills → coverage 0.0, NOT a fake-neutral 0.5.
+        # The previous 0.5 default inflated every job to ~50% for blank /
+        # template resumes, producing fake "68% match on senior hardware"
+        # scores against an empty profile. Killed in commit 6c550d2.
         job = {"requirements": ["Verilog"], "description": ""}
         profile = {"top_hard_skills": []}
         cov, matched, missing = compute_skill_coverage(job, profile)
-        # Empty skills → neutral 0.5.
-        assert cov == 0.5
+        assert cov == 0.0
+        assert matched == []
+        assert missing == []
 
     def test_caches_on_job_dict(self):
         job = {"requirements": ["Python"], "description": ""}

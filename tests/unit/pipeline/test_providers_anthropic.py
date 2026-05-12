@@ -4,6 +4,7 @@ Every method is exercised via the claude_cli_bin fixture so no real
 subscription tokens are spent.
 """
 import json
+import sys
 import pytest
 import subprocess
 from unittest.mock import patch
@@ -11,6 +12,20 @@ from unittest.mock import patch
 from pipeline.providers import (
     AnthropicProvider, ClaudeCLIError,
     EXTRACT_PROFILE_SCHEMA, SCORE_JOB_SCHEMA, TAILOR_RESUME_SCHEMA,
+)
+
+
+# On Windows the claude_cli_bin fixture launches the fake CLI through a .bat
+# wrapper (no native shebang support → no direct .py exec). cmd.exe parses
+# `%*` argument substitution AND enforces an 8KB command-line limit; tests
+# whose argv carries a multi-KB --json-schema payload either hit the size
+# cap or trigger cmd.exe's special-char parser on characters embedded in the
+# schema. The production code path is correct on Linux (no cmd.exe, argv
+# limit ≈128KB) so these tests are skipped on Windows only. CI runs Linux
+# and exercises them in full.
+_WINDOWS_LARGE_ARGV_SKIP = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Windows cmd.exe argv 8KB cap / %* parsing — runs on Linux CI",
 )
 
 
@@ -71,6 +86,7 @@ def test_chat_json_mode_passes_permissive_schema(claude_cli_bin):
 
 # ── extract_profile ───────────────────────────────────────────────────────────
 
+@_WINDOWS_LARGE_ARGV_SKIP
 def test_extract_profile_parses_cli_json(claude_cli_bin):
     canned_profile = {
         "name": "Jane Doe",
@@ -94,6 +110,7 @@ def test_extract_profile_parses_cli_json(claude_cli_bin):
     assert out["top_hard_skills"][0]["skill"] == "Python"
 
 
+@_WINDOWS_LARGE_ARGV_SKIP
 def test_extract_profile_passes_schema_to_cli(claude_cli_bin):
     claude_cli_bin.set_response(json.dumps({
         "type": "result",
@@ -159,6 +176,7 @@ def test_score_job_passes_schema_to_cli(claude_cli_bin):
 
 # ── tailor_resume ─────────────────────────────────────────────────────────────
 
+@_WINDOWS_LARGE_ARGV_SKIP
 def test_tailor_resume_passes_xhigh_effort(claude_cli_bin):
     # Minimal valid response — content irrelevant to this assertion.
     claude_cli_bin.set_response(json.dumps({
@@ -177,6 +195,7 @@ def test_tailor_resume_passes_xhigh_effort(claude_cli_bin):
         assert argv[i + 1] == "xhigh"
 
 
+@_WINDOWS_LARGE_ARGV_SKIP
 def test_tailor_resume_passes_schema_to_cli(claude_cli_bin):
     claude_cli_bin.set_response(json.dumps({
         "type": "result",

@@ -44,17 +44,22 @@
   --mono:      'JetBrains Mono', ui-monospace, monospace;
   --sans:      'Inter', system-ui, -apple-system, sans-serif;
   --serif:     'Inter', system-ui, -apple-system, sans-serif;
-  /* Page-level zoom — CSS `zoom` is the only single-knob way to do
-     true browser-zoom-style scaling without rewriting every px to rem.
-     --landing-zoom applies to the whole body. --scrubber-zoom is
-     multiplied on top of it (1.25 * 1.20 = 1.50) so the demo reads at
-     150% of natural while the rest of the page reads at 125%.
-     Mobile breakpoint resets both to 1 because narrow viewports are
-     already constrained by the 720px-and-below layout overrides.
-     `zoom` is supported in Chrome/Edge/Safari and Firefox 126+ (Apr 2024);
-     older Firefox falls back gracefully to 100%. */
+  /* Page-level zoom — applied to content SECTIONS (not body) so the
+     fixed nav stays anchored at viewport top. Putting `zoom` on the
+     body shifts the entire document down because the body's
+     position:fixed children become positioned relative to the zoomed
+     body rather than the viewport in some browsers, breaking the
+     nav AND pushing all section padding-from-top apart by the zoom
+     factor. Section-level zoom avoids that: nav stays 1x at top:0,
+     each content section grows 125%, scrubber grows 150% (absolute,
+     not multiplied — the prior 1.25 × 1.20 stack was conceptually
+     correct but compounded the shift). Mobile breakpoint resets
+     both to 1.
+
+     `zoom` is supported in Chrome/Edge/Safari and Firefox 126+ (Apr
+     2024); older Firefox falls back to 100%. */
   --landing-zoom:  1.25;
-  --scrubber-zoom: 1.2;
+  --scrubber-zoom: 1.50;
 }
 *,*::before,*::after { box-sizing: border-box; margin: 0; padding: 0 }
 html {
@@ -79,6 +84,13 @@ body {
   text-rendering: optimizeLegibility;
   letter-spacing: -.005em;
   overflow-x: clip;
+}
+/* Section-level zoom — nav (position:fixed) stays unzoomed at the top
+   of the viewport; each content section grows. Order matters: .scrubber
+   needs its higher zoom value, and selecting it via .scrubber overrides
+   the section-list zoom because they have equal specificity but the
+   .scrubber rule is later in the cascade. */
+.hero, .recap, .providers, .cta, .footer {
   zoom: var(--landing-zoom);
 }
 .scrubber {

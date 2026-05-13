@@ -227,12 +227,12 @@ input, select, textarea { font-family:var(--sans) }
   user-select: none;
 }
 .brand-glyph {
-  width: 28px; height: 28px;
-  background: var(--accent);
-  border-radius: 7px;
-  display: flex; align-items: center; justify-content: center;
-  flex-shrink: 0;
-  box-shadow: 0 4px 12px -4px rgba(124,92,255,.55);
+  width: 32px; height: 32px; flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  filter: drop-shadow(0 6px 16px rgba(124,92,255,.45));
+}
+.brand-glyph img, .brand-glyph svg {
+  width: 100%; height: 100%; display: block;
 }
 .brand-name {
   font-family: var(--serif);
@@ -1458,6 +1458,82 @@ button.auto-save { cursor: pointer; font: inherit; }
   font-family: var(--sans);
 }
 .set-select:focus { border-color: var(--accent) }
+
+/* "Best pick" recommendation card above the Ollama-model dropdown.
+   Surfaces gemma4:31b-cloud as the current production-recommended model
+   without making the user scroll through the dropdown to find it. */
+.set-best-pick {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas: "eyebrow eyebrow" "body cta";
+  gap: 10px 12px;
+  padding: 14px 16px;
+  margin-bottom: 10px;
+  border-radius: 11px;
+  border: 1px solid var(--accent2-b, rgba(34,229,255,.30));
+  background:
+    radial-gradient(120% 100% at 0% 0%, rgba(34,229,255,.10) 0%, transparent 60%),
+    var(--bg-2);
+  align-items: center;
+  transition: border-color .15s, box-shadow .15s;
+}
+.set-best-pick.active {
+  border-color: var(--good-b, rgba(61,255,154,.40));
+  background:
+    radial-gradient(120% 100% at 0% 0%, rgba(61,255,154,.08) 0%, transparent 60%),
+    var(--bg-2);
+}
+.set-best-eyebrow {
+  grid-area: eyebrow;
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: var(--mono); font-size: 10px; font-weight: 700;
+  letter-spacing: .16em; text-transform: uppercase;
+  color: var(--accent2);
+}
+.set-best-pick.active .set-best-eyebrow { color: var(--good) }
+.set-best-body {
+  grid-area: body;
+  display: flex; flex-direction: column; gap: 4px; min-width: 0;
+}
+.set-best-model {
+  font-family: var(--mono); font-size: 15px; font-weight: 700;
+  color: var(--t1); letter-spacing: -.01em;
+  padding: 2px 7px; border-radius: 5px;
+  background: var(--bg-3); border: 1px solid var(--bdr);
+  align-self: flex-start;
+}
+.set-best-tagline {
+  font-size: 12.5px; line-height: 1.5; color: var(--t3);
+}
+.set-best-cta {
+  grid-area: cta;
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 8px 14px; border-radius: 8px;
+  background: linear-gradient(135deg, var(--accent2) 0%, var(--accent-h) 100%);
+  color: #07070e;
+  font-size: 13px; font-weight: 700; letter-spacing: -.005em;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: transform .12s, box-shadow .12s, opacity .12s;
+  box-shadow: 0 6px 14px -6px var(--accent2);
+}
+.set-best-cta:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 18px -6px var(--accent-h);
+}
+.set-best-cta:disabled { opacity: .55; cursor: not-allowed }
+.set-best-arrow { font-family: var(--mono); font-weight: 700; transition: transform .12s }
+.set-best-cta:hover:not(:disabled) .set-best-arrow { transform: translateX(2px) }
+.set-best-active {
+  grid-area: cta;
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 8px 14px; border-radius: 8px;
+  background: var(--good-d, rgba(61,255,154,.10));
+  border: 1px solid var(--good-b, rgba(61,255,154,.40));
+  color: var(--good);
+  font-family: var(--mono); font-size: 11px; font-weight: 700;
+  letter-spacing: .12em; text-transform: uppercase;
+}
 .set-input {
   padding: 11px 14px; border-radius: 9px; border: 1px solid var(--bdr);
   background: var(--bg-2); color: var(--t1); font-size: 15.5px; outline: none; width: 100%;
@@ -3150,8 +3226,8 @@ mark.diff-mod { background: rgba(74,222,128,.10); color: var(--good); border-bot
 /* Brand atop card */
 .auth-brand { display: flex; justify-content: center; margin-bottom: 26px }
 .auth-brand .brand-mark { cursor: default }
-.auth-brand .brand-glyph { width: 26px; height: 26px; border-radius: 7px }
-.auth-brand .brand-glyph svg { width: 13px; height: 13px }
+.auth-brand .brand-glyph { width: 30px; height: 30px }
+.auth-brand .brand-glyph img, .auth-brand .brand-glyph svg { width: 100%; height: 100% }
 .auth-brand .brand-name { font-size: 19px }
 
 /* Editorial heading */
@@ -5701,6 +5777,51 @@ code { font-family: var(--mono); font-size: 14px; background: var(--bg-3); paddi
   opacity: 0; filter: blur(16px); transition: opacity .3s;
 }
 .plan-card-pro:hover .plan-glow { opacity: .35 }
+
+/* Plan-engine centerpiece — the giant wordmark "Ollama" / "Claude" that
+   replaces the small bullet-buried engine mention. Reads as the card's
+   visual anchor; the feature list below is supporting detail. */
+.plan-engine-card {
+  position: relative;
+  display: flex; flex-direction: column;
+  gap: 4px;
+  padding: 18px 18px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--bdr);
+  background:
+    radial-gradient(120% 100% at 0% 0%, rgba(124,92,255,.05) 0%, transparent 60%),
+    var(--bg-2);
+  overflow: hidden;
+}
+.plan-engine-eyebrow {
+  font-family: var(--mono); font-size: 10px; font-weight: 700;
+  letter-spacing: .18em; text-transform: uppercase;
+  color: var(--t3);
+}
+.plan-engine-wordmark {
+  font-family: var(--serif); font-weight: 600;
+  font-size: clamp(40px, 6vw, 56px); line-height: 0.92;
+  letter-spacing: -.04em;
+  background-clip: text; -webkit-background-clip: text;
+  color: transparent;
+  margin: 2px 0 4px;
+}
+.plan-engine-ollama {
+  background-image: linear-gradient(105deg, #3dff9a 0%, #22e5ff 60%, #34d399 110%);
+}
+.plan-engine-claude {
+  background-image: linear-gradient(105deg, #ff9a5a 0%, #ff5a78 55%, #c87a3a 110%);
+}
+.plan-engine-tagline {
+  font-size: 13px; line-height: 1.55; color: var(--t3);
+}
+.plan-card-pro .plan-engine-card {
+  border-color: var(--accent2-b, rgba(34,229,255,.32));
+  background:
+    radial-gradient(120% 100% at 100% 100%, rgba(255,154,90,.10) 0%, transparent 60%),
+    var(--bg-2);
+}
+
 .plan-card-h {
   display: flex; flex-direction: column; gap: 10px;
   padding-bottom: 14px; border-bottom: 1px solid var(--bdr);

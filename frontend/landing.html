@@ -44,6 +44,17 @@
   --mono:      'JetBrains Mono', ui-monospace, monospace;
   --sans:      'Inter', system-ui, -apple-system, sans-serif;
   --serif:     'Inter', system-ui, -apple-system, sans-serif;
+  /* Page-level zoom — CSS `zoom` is the only single-knob way to do
+     true browser-zoom-style scaling without rewriting every px to rem.
+     --landing-zoom applies to the whole body. --scrubber-zoom is
+     multiplied on top of it (1.25 * 1.20 = 1.50) so the demo reads at
+     150% of natural while the rest of the page reads at 125%.
+     Mobile breakpoint resets both to 1 because narrow viewports are
+     already constrained by the 720px-and-below layout overrides.
+     `zoom` is supported in Chrome/Edge/Safari and Firefox 126+ (Apr 2024);
+     older Firefox falls back gracefully to 100%. */
+  --landing-zoom:  1.25;
+  --scrubber-zoom: 1.2;
 }
 *,*::before,*::after { box-sizing: border-box; margin: 0; padding: 0 }
 html {
@@ -68,6 +79,13 @@ body {
   text-rendering: optimizeLegibility;
   letter-spacing: -.005em;
   overflow-x: clip;
+  zoom: var(--landing-zoom);
+}
+.scrubber {
+  zoom: var(--scrubber-zoom);
+}
+@media (max-width: 720px) {
+  :root { --landing-zoom: 1; --scrubber-zoom: 1 }
 }
 /* Common offenders for horizontal scroll on small screens. */
 img, video, iframe, canvas, svg, embed, object {
@@ -90,10 +108,12 @@ em, i, cite, var { font-style: normal }
 }
 .brand { display: inline-flex; align-items: center; gap: 10px; cursor: pointer; user-select: none; text-decoration: none }
 .brand-glyph {
-  width: 28px; height: 28px; border-radius: 7px; flex-shrink: 0;
+  width: 32px; height: 32px; flex-shrink: 0;
   display: inline-flex; align-items: center; justify-content: center;
-  background: linear-gradient(135deg, #7c5cff 0%, #ff3d9a 100%);
-  box-shadow: 0 6px 18px -6px rgba(124,92,255,.65);
+  filter: drop-shadow(0 6px 18px rgba(124,92,255,.45));
+}
+.brand-glyph img, .brand-glyph svg {
+  width: 100%; height: 100%; display: block;
 }
 .brand-name {
   font-family: var(--serif); font-size: 22px; line-height: 1; letter-spacing: -.3px;
@@ -882,20 +902,37 @@ em, i, cite, var { font-style: normal }
   font-family: var(--mono); font-size: 11px; font-weight: 600;
   color: var(--t3); letter-spacing: .14em; text-transform: uppercase;
 }
-.prov-name {
-  font-family: var(--serif); font-weight: 500;
-  font-size: 28px; line-height: 1.1;
-  letter-spacing: -.03em; color: var(--t1);
+/* Provider wordmarks — the engine names as oversized type. Each provider
+   gets its own gradient palette so the card-pair reads as a clean
+   "Ollama vs Claude" centerpiece. Headline-version variants live in
+   .pv-headline (used inside the section <h2>); the card-version is
+   .prov-wordmark. */
+.prov-wordmark {
+  font-family: var(--serif); font-weight: 600;
+  font-size: clamp(64px, 8vw, 88px); line-height: 0.9;
+  letter-spacing: -.045em;
+  background-clip: text; -webkit-background-clip: text;
+  color: transparent;
+  display: inline-block;
+  margin: 4px 0 6px;
 }
-.prov-name em {
-  background: linear-gradient(105deg, #a78bff 0%, #ff3d9a 60%, #22e5ff 110%);
-  background-clip: text; -webkit-background-clip: text; color: transparent;
+.pv-headline {
+  font-style: normal;
+  background-clip: text; -webkit-background-clip: text;
+  color: transparent;
   font-weight: 600;
 }
-.prov-models {
-  font-family: var(--mono); font-size: 12px; color: var(--t4);
-  letter-spacing: .04em;
+.pv-word-ollama {
+  background-image: linear-gradient(105deg, #3dff9a 0%, #22e5ff 60%, #34d399 110%);
 }
+.pv-word-claude {
+  background-image: linear-gradient(105deg, #ff9a5a 0%, #ff5a78 55%, #c87a3a 110%);
+}
+.prov-tagline {
+  margin: 0; font-size: 14.5px; line-height: 1.55;
+  color: var(--t3); max-width: 36ch;
+}
+.prov-tagline b { color: var(--t1); font-weight: 600 }
 .prov-list {
   display: flex; flex-direction: column; gap: 8px;
   margin-top: 4px;
@@ -1180,9 +1217,7 @@ function Nav() {
     <nav className="nav" role="navigation" aria-label="Primary">
       <a href="#" className="brand">
         <span className="brand-glyph">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-            <polyline points="20 6 9 17 4 12"/>
-          </svg>
+          <img src="/frontend/favicon.svg" alt="" draggable="false"/>
         </span>
         <span className="brand-name">Jobs <em>AI</em></span>
       </a>
@@ -1746,28 +1781,30 @@ function Recap() {
    row (that mode was retired in this same redesign).
    ══════════════════════════════════════════════════════════════════════ */
 function Providers() {
-  const localOllama = {
-    eyebrow: 'Free · local · on our server',
-    name:    <>Local <em>Ollama</em></>,
-    models:  'llama · mistral · qwen · gemma',
+  const ollama = {
+    wordmark:  'Ollama',
+    wordmarkClass: 'pv-word-ollama',
+    eyebrow:   'Free · open-weight',
+    tagline:   'On our server. No API keys. No rate limits.',
     list: [
-      'Small open-weight models hosted on our Pi',
+      'Small open-weight models hosted on the Pi',
       'Full 7-phase pipeline at zero cost',
-      'Fast, private, no API keys to wrangle',
+      'Fast, private, predictable',
     ],
-    cost: '$0',
+    cost:  '$0',
     costL: '/ forever',
   };
-  const cloudOllama = {
-    eyebrow: 'Pro · cloud · much higher quality',
-    name:    <>Cloud <em>Ollama</em></>,
-    models:  'frontier-class · proxied via Ollama Turbo',
+  const claude = {
+    wordmark:  'Claude',
+    wordmarkClass: 'pv-word-claude',
+    eyebrow:   'Pro · frontier intelligence',
+    tagline:   'Atlas runs on Claude when you go Pro. Premium tailoring, sharper rubrics, deeper résumé reads.',
     list: [
-      'Sharper scoring rubrics &amp; tailoring',
-      'Better résumé critique &amp; ATS gap analysis',
-      'No Pi-hardware ceiling — faster, more reliable runs',
+      'Higher-fidelity scoring & tailoring',
+      'Long-form résumé critique + ATS gap analysis',
+      'OAuth-keychain auth — no API key on your side',
     ],
-    cost: '$4',
+    cost:  '$4',
     costL: '/ month',
     recommended: true,
   };
@@ -1779,18 +1816,18 @@ function Providers() {
           <span>Pick your engine</span>
         </div>
         <h2 className="providers-h">
-          Free for <em>local.</em> Pro for <em>cloud.</em>
+          <em className="pv-headline pv-word-ollama">Ollama</em>{' '}for local.{' '}
+          <em className="pv-headline pv-word-claude">Claude</em>{' '}for cloud.
         </h2>
         <p className="providers-sub">
-          Both tiers run through the same Ollama daemon on our server — Free uses small
-          local models, Pro routes through cloud-hosted frontier models. Switch in
-          Settings without losing pipeline state. <b>Anthropic Claude Sonnet 4.6</b> is
-          published and included in Pro at no extra cost — no API key required.
+          Free tier runs through small open-weight models on our server. Pro routes
+          Atlas through <b>Anthropic Claude</b> — premium quality, no API key on your
+          side. Switch in Settings without losing pipeline state.
         </p>
 
         <div className="provider-row">
-          <ProviderCard c={localOllama}/>
-          <ProviderCard c={cloudOllama}/>
+          <ProviderCard c={ollama}/>
+          <ProviderCard c={claude}/>
         </div>
       </div>
     </section>
@@ -1802,8 +1839,8 @@ function ProviderCard({ c }) {
     <div className={'provider-card' + (c.recommended ? ' recommended' : '')}>
       {c.recommended && <span className="provider-tag">Recommended</span>}
       <span className="prov-eyebrow">{c.eyebrow}</span>
-      <span className="prov-name">{c.name}</span>
-      <span className="prov-models">{c.models}</span>
+      <span className={'prov-wordmark ' + (c.wordmarkClass || '')}>{c.wordmark}</span>
+      <p className="prov-tagline">{c.tagline}</p>
       <div className="prov-list">
         {c.list.map((li, i) => (
           <div key={i} className="prov-li">

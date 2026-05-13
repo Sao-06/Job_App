@@ -9833,8 +9833,13 @@ function SettingsPage({ state, refresh, setPage }) {
                           <Icon name="check" size={11}/> Active
                         </span>
                       ) : (
+                        // Not `disabled` for non-Pro callers — a disabled
+                        // button swallows the onClick, so the inline
+                        // setPlanError branch never fires. Leave the button
+                        // active and let the onClick guard surface the
+                        // upgrade prompt (matches the dropdown's gate at
+                        // line ~9858).
                         <button className="set-best-cta"
-                          disabled={!isPro}
                           onClick={() => {
                             if (!isPro) {
                               setPlanError('Cloud models require the Pro plan');

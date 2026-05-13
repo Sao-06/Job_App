@@ -5822,6 +5822,27 @@ code { font-family: var(--mono); font-size: 14px; background: var(--bg-3); paddi
     var(--bg-2);
 }
 
+/* Pro card hosts TWO engine cards stacked vertically (Claude primary +
+   Ollama Cloud secondary). Each keeps the same big-wordmark treatment
+   so neither feels demoted. The "Primary engine" / "Also unlocked"
+   eyebrows do the priority cueing without shrinking the secondary. */
+.plan-engine-stack {
+  display: flex; flex-direction: column; gap: 10px;
+}
+.plan-engine-card-primary {
+  /* Claude card — keeps the warm coral tint from .plan-card-pro
+     .plan-engine-card above. No extra rules needed. */
+}
+.plan-engine-card-secondary {
+  /* Ollama Cloud card — flip the tint to green so the two reads as
+     two distinct engines, not two halves of the same one. */
+  background:
+    radial-gradient(120% 100% at 100% 100%, rgba(61,255,154,.10) 0%, transparent 60%),
+    var(--bg-2) !important;
+  border-color: var(--good-b, rgba(61,255,154,.32)) !important;
+}
+.plan-engine-card-secondary .plan-engine-eyebrow { color: var(--good) }
+
 .plan-card-h {
   display: flex; flex-direction: column; gap: 10px;
   padding-bottom: 14px; border-bottom: 1px solid var(--bdr);

@@ -9723,28 +9723,288 @@ function SettingsPage({ state, refresh, setPage }) {
 
       <div className="page-body solo" style={{ paddingTop:14 }}>
         <div className="settings-grid">
-          {/* LLM Backend */}
-          <div className="set-sec">
+          {/* LLM Backend — spans the full settings-grid row so the
+              engine picker cards have room to breathe. */}
+          <div className="set-sec set-sec-wide">
             <div className="set-sec-h">
               <Icon name="cpu" size={14}/> LLM Provider
               {isPro && <span className="plan-chip plan-chip-pro">Pro</span>}
             </div>
-            <div className="set-field">
-              <div className="set-label">
-                Model mode
-              </div>
-              <select className="set-select" value={cfg.mode} onChange={e => update({ mode: e.target.value })}>
-                <option value="anthropic" disabled={!isDev && !isPro}
-                  title={!isDev && !isPro
-                    ? 'Upgrade to Pro to use Claude'
-                    : 'Anthropic Claude via the official CLI — premium AI tailoring & career advice.'}>
-                  Anthropic Claude (Published)
-                </option>
-                <option value="ollama">Ollama (local + cloud models)</option>
-              </select>
+            {/* Engine picker — replaces the previous flat <select>. Two
+                brand-coherent cards instead of a one-row dropdown; the
+                Claude card finally feels premium (warm-coral gradient
+                that matches the landing page wordmark, editorial dossier
+                body when active, aurora seam animation). Free users see
+                a locked Claude card with a Pro pill that routes to
+                /plans. See .engine-pick in index.html for the design. */}
+            <div className="set-label" style={{ marginBottom:6 }}>Engine</div>
+            <div className="engine-pick" role="radiogroup" aria-label="LLM engine">
+              {(() => {
+                const claudeEligible = isPro || isDev;
+                const claudeActive   = cfg.mode === 'anthropic';
+                const ollamaActive   = cfg.mode === 'ollama';
+                const claudeLocked   = !claudeEligible && !claudeActive;
+
+                const pickClaude = () => {
+                  if (claudeActive) return;
+                  if (claudeLocked) { setPage && setPage('plans'); return; }
+                  update({ mode: 'anthropic' });
+                };
+                const pickOllama = () => {
+                  if (ollamaActive) return;
+                  update({ mode: 'ollama' });
+                };
+                const onKey = (handler) => (e) => {
+                  if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handler(); }
+                };
+
+                return <>
+                  {/* ── Claude card ───────────────────────────────────── */}
+                  <div
+                    className={'engine-card claude'
+                      + (claudeActive ? ' active' : '')
+                      + (claudeLocked ? ' locked' : '')}
+                    role="radio"
+                    aria-checked={claudeActive}
+                    aria-label={claudeLocked ? 'Anthropic Claude — Pro plan required' : 'Anthropic Claude engine'}
+                    tabIndex={0}
+                    onClick={pickClaude}
+                    onKeyDown={onKey(pickClaude)}>
+                    {claudeLocked && (
+                      <span className="engine-lock-pill">
+                        <Icon name="lock" size={9}/> Pro plan
+                      </span>
+                    )}
+                    <div className="engine-card-head">
+                      <span className="engine-eyebrow">
+                        <Icon name="sparkles" size={10}/> Anthropic · Frontier engine
+                      </span>
+                      {!claudeLocked && (
+                        <span className="engine-status">
+                          <span className="engine-status-dot"/>
+                          {claudeActive ? 'Active' : 'Standby'}
+                        </span>
+                      )}
+                    </div>
+                    <div className="engine-wordmark">Claude</div>
+                    <p className="engine-subhead">
+                      The editorial pick — long-context reasoning, principled judgement, tailoring that reads like a senior recruiter wrote it.
+                    </p>
+
+                    {!claudeActive && (
+                      <span className="engine-switch-cue">
+                        {claudeLocked ? 'Unlock with Pro' : 'Switch to Claude'}
+                        <span className="engine-switch-cue-arrow">→</span>
+                      </span>
+                    )}
+
+                    {claudeActive && (
+                      <>
+                        <div className="engine-card-rule"/>
+                        <div className="engine-body"><div className="engine-body-inner">
+                          <div className="engine-cap-list">
+                            <div className="engine-cap-row">
+                              <span className="engine-cap-icon"><Icon name="file-text" size={12}/></span>
+                              <span><b>Long-form résumé critique</b> grounded in the actual job description — citations, not keyword bingo.</span>
+                            </div>
+                            <div className="engine-cap-row">
+                              <span className="engine-cap-icon"><Icon name="award" size={12}/></span>
+                              <span><b>Highest-fidelity scoring &amp; tailoring</b> — bullets rewritten for seniority &amp; tone without fabricating experience.</span>
+                            </div>
+                            <div className="engine-cap-row">
+                              <span className="engine-cap-icon"><Icon name="message-square" size={12}/></span>
+                              <span><b>Ask Atlas with deeper memory</b> of your career narrative across every job in the feed.</span>
+                            </div>
+                          </div>
+                          <div className="engine-meta">
+                            <span className="engine-meta-pair">
+                              <span className="engine-meta-k">Powered by</span>
+                              <span className="engine-meta-v">Anthropic</span>
+                            </span>
+                            <span className="engine-meta-pair">
+                              <span className="engine-meta-k">Setup</span>
+                              <span className="engine-meta-v">Nothing on your side — included with Pro</span>
+                            </span>
+                          </div>
+                        </div></div>
+                      </>
+                    )}
+                  </div>
+
+                  {/* ── Ollama card ───────────────────────────────────── */}
+                  <div
+                    className={'engine-card ollama' + (ollamaActive ? ' active' : '')}
+                    role="radio"
+                    aria-checked={ollamaActive}
+                    aria-label="Ollama engine — local & cloud models"
+                    tabIndex={0}
+                    onClick={pickOllama}
+                    onKeyDown={onKey(pickOllama)}>
+                    <div className="engine-card-head">
+                      <span className="engine-eyebrow">
+                        <Icon name="cpu" size={10}/> Ollama · Open-weight
+                      </span>
+                      <span className="engine-status">
+                        <span className="engine-status-dot"/>
+                        {ollamaActive ? 'Active' : 'Standby'}
+                      </span>
+                    </div>
+                    <div className="engine-wordmark">Ollama</div>
+                    <p className="engine-subhead">
+                      Open-weight models — local for free, frontier-class for Pro. Predictable, private, $0 to start.
+                    </p>
+
+                    {!ollamaActive && (
+                      <span className="engine-switch-cue">
+                        Switch to Ollama
+                        <span className="engine-switch-cue-arrow">→</span>
+                      </span>
+                    )}
+
+                    {ollamaActive && (
+                      <>
+                        <div className="engine-card-rule"/>
+                        {/* stopPropagation so clicks on the inner model
+                            dropdown / best-pick / banner don't bubble
+                            back to the card click handler (which is a
+                            no-op when active, but defensive). */}
+                        <div className="engine-body">
+                          <div className="engine-body-inner" onClick={e => e.stopPropagation()}>
+                            <div className="set-label" style={{ marginBottom:8 }}>
+                              Model
+                              {!isPro && <span className="set-label-hint">cloud models require Pro</span>}
+                            </div>
+
+                            {/* Engine status — user-facing only. Internal host URL,
+                                daemon name, and "go SSH into the box and run X"
+                                hints are intentionally NOT exposed here. */}
+                            <div className={'ollama-banner' + (
+                              ollamaStatus == null      ? ' ob-loading'
+                              : !ollamaStatus.running   ? ' ob-down'
+                              : ollamaStatus.pull?.status === 'pulling' || ollamaStatus.pull?.status === 'starting' ? ' ob-pulling'
+                              : !ollamaStatus.pulled    ? ' ob-missing'
+                              : ' ob-ok'
+                            )}>
+                              <div className="ob-row">
+                                <span className="ob-tag">Engine</span>
+                                <span className="ob-state">
+                                  {ollamaStatus == null
+                                    ? <><span className="spin" style={{ width:9, height:9, borderWidth:1.5 }}/> Checking…</>
+                                    : !ollamaStatus.running
+                                      ? <>● Offline</>
+                                      : ollamaStatus.pull?.status === 'pulling' || ollamaStatus.pull?.status === 'starting'
+                                        ? <>● Setting up{typeof ollamaStatus.pull?.percent === 'number' ? ` · ${ollamaStatus.pull.percent}%` : '…'}</>
+                                        : ollamaStatus.pulled
+                                          ? <>● Ready</>
+                                          : <>● Preparing model</>}
+                                </span>
+                              </div>
+                              {ollamaStatus?.pull?.status === 'pulling' || ollamaStatus?.pull?.status === 'starting' ? (
+                                <div className="ob-progress">
+                                  <div className="ob-progress-bar" style={{ width: `${Math.max(2, ollamaStatus?.pull?.percent || 2)}%` }}/>
+                                  <div className="ob-progress-stage">
+                                    First-time setup — this takes about a minute.
+                                  </div>
+                                </div>
+                              ) : null}
+                              {!ollamaStatus?.running && (
+                                <div className="ob-help">
+                                  The engine is offline. Try again in a moment.
+                                </div>
+                              )}
+                              {ollamaStatus?.running && !ollamaStatus?.pulled && ollamaStatus?.pull?.status !== 'pulling' && ollamaStatus?.pull?.status !== 'starting' && (
+                                <div className="ob-help">
+                                  Getting your model ready — first use takes about a minute.
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Server-side recommendation pill. gemma4:31b-cloud is the
+                                best Ollama model currently pulled on our deployment server
+                                (single source of truth — see CLAUDE.md §2 "testing-phase"
+                                docs). Surface it as a one-click switch so Pro users land
+                                on the right engine without scrolling the dropdown. */}
+                            {(() => {
+                              const BEST = 'gemma4:31b-cloud';
+                              const bestAvailable = ollamaModels.some(m => m.name === BEST);
+                              const isCurrent = cfg.ollama_model === BEST;
+                              if (!bestAvailable) return null;
+                              return (
+                                <div className={'set-best-pick' + (isCurrent ? ' active' : '')}>
+                                  <span className="set-best-eyebrow">
+                                    <Icon name="zap" size={11}/> Recommended · Best quality
+                                  </span>
+                                  <div className="set-best-body">
+                                    <code className="set-best-model">{BEST}</code>
+                                    <span className="set-best-tagline">
+                                      Our strongest open-weight model. Best results for scoring &amp; tailoring on Pro.
+                                    </span>
+                                  </div>
+                                  {isCurrent ? (
+                                    <span className="set-best-active">
+                                      <Icon name="check" size={11}/> Active
+                                    </span>
+                                  ) : (
+                                    <button className="set-best-cta"
+                                      onClick={() => {
+                                        if (!isPro) {
+                                          setPlanError('Cloud models require the Pro plan');
+                                          return;
+                                        }
+                                        update({ ollama_model: BEST });
+                                      }}>
+                                      {isPro ? 'Use this model' : 'Pro only'}
+                                      <span className="set-best-arrow">→</span>
+                                    </button>
+                                  )}
+                                </div>
+                              );
+                            })()}
+
+                            <select className="set-select" value={cfg.ollama_model || ''}
+                              disabled={!ollamaModels.length}
+                              onChange={e => {
+                                const name = e.target.value;
+                                if (isCloudModel(name) && !isPro) {
+                                  setPlanError('Cloud models require the Pro plan');
+                                  return;
+                                }
+                                update({ ollama_model: name });
+                              }}>
+                              {ollamaModels.length > 0 ? (() => {
+                                const local = ollamaModels.filter(m => !isCloudModel(m.name));
+                                const cloud = ollamaModels.filter(m => isCloudModel(m.name));
+                                const BEST = 'gemma4:31b-cloud';
+                                const tag = (m) => (m.name === BEST ? '  ·  BEST' : '');
+                                return <>
+                                  {local.length > 0 && <optgroup label="Local">
+                                    {local.map(m => (
+                                      <option key={m.name} value={m.name}>
+                                        {m.name}{m.size_gb ? `  ·  ${m.size_gb} GB` : ''}{m.params ? `  ·  ${m.params}` : ''}{tag(m)}
+                                      </option>
+                                    ))}
+                                  </optgroup>}
+                                  {cloud.length > 0 && <optgroup label={`Cloud${isPro ? '' : ' — Pro'}`}>
+                                    {cloud.map(m => (
+                                      <option key={m.name} value={m.name} disabled={!isPro}>
+                                        {m.name}{tag(m)}{!isPro ? ' — Pro' : ''}
+                                      </option>
+                                    ))}
+                                  </optgroup>}
+                                </>;
+                              })()
+                              : <option>{ollamaStatus == null ? 'Loading models…' : ollamaStatus.running ? 'No models pulled yet' : 'Ollama offline'}</option>}
+                            </select>
+                          </div>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </>;
+              })()}
             </div>
             {planError && (
-              <div className="plan-banner">
+              <div className="plan-banner engine-pick-error">
                 <Icon name="lock" size={14}/>
                 <div className="plan-banner-body">
                   <b>{planError}</b>
@@ -9753,145 +10013,6 @@ function SettingsPage({ state, refresh, setPage }) {
                 <button className="plan-banner-cta" onClick={() => setPage && setPage('plans')}>
                   View plans <Icon name="arrow-right" size={11}/>
                 </button>
-              </div>
-            )}
-            {cfg.mode === 'ollama' && (
-              <div className="set-field">
-                <div className="set-label">
-                  Ollama Model
-                  {!isPro && <span className="set-label-hint">cloud models require Pro</span>}
-                </div>
-
-                {/* Server-side status banner — makes it clear this is on the
-                    deployment host (the RPi), not the user's machine. */}
-                <div className={'ollama-banner' + (
-                  ollamaStatus == null      ? ' ob-loading'
-                  : !ollamaStatus.running   ? ' ob-down'
-                  : ollamaStatus.pull?.status === 'pulling' || ollamaStatus.pull?.status === 'starting' ? ' ob-pulling'
-                  : !ollamaStatus.pulled    ? ' ob-missing'
-                  : ' ob-ok'
-                )}>
-                  <div className="ob-row">
-                    <span className="ob-tag">SERVER</span>
-                    <code className="ob-host">{ollamaStatus?.host || 'http://localhost:11434'}</code>
-                    <span className="ob-state">
-                      {ollamaStatus == null
-                        ? <><span className="spin" style={{ width:9, height:9, borderWidth:1.5 }}/> CHECKING</>
-                        : !ollamaStatus.running
-                          ? <>● OFFLINE</>
-                          : ollamaStatus.pull?.status === 'pulling' || ollamaStatus.pull?.status === 'starting'
-                            ? <>● PULLING {typeof ollamaStatus.pull?.percent === 'number' ? `${ollamaStatus.pull.percent}%` : ''}</>
-                            : ollamaStatus.pulled
-                              ? <>● READY</>
-                              : <>● MODEL MISSING</>}
-                    </span>
-                  </div>
-                  {ollamaStatus?.pull?.status === 'pulling' || ollamaStatus?.pull?.status === 'starting' ? (
-                    <div className="ob-progress">
-                      <div className="ob-progress-bar" style={{ width: `${Math.max(2, ollamaStatus?.pull?.percent || 2)}%` }}/>
-                      <div className="ob-progress-stage">
-                        Pulling <code>{ollamaStatus?.pull?.model || cfg.ollama_model}</code> · {ollamaStatus?.pull?.stage || 'starting'}
-                      </div>
-                    </div>
-                  ) : null}
-                  {!ollamaStatus?.running && (
-                    <div className="ob-help">
-                      The deployment server can't reach Ollama. On the RPi, run <code>ollama serve</code>
-                      {' '}— or set <code>OLLAMA_URL</code> to point at the host that's running it.
-                    </div>
-                  )}
-                  {ollamaStatus?.running && !ollamaStatus?.pulled && ollamaStatus?.pull?.status !== 'pulling' && ollamaStatus?.pull?.status !== 'starting' && (
-                    <div className="ob-help">
-                      Model <code>{cfg.ollama_model}</code> isn't pulled on the server yet — auto-pull starting…
-                    </div>
-                  )}
-                </div>
-
-                {/* Server-side recommendation pill. gemma4:31b-cloud is the
-                    best Ollama model currently pulled on our deployment server
-                    (single source of truth — see CLAUDE.md §2 "testing-phase"
-                    docs). Surface it as a one-click switch so Pro users land
-                    on the right engine without scrolling the dropdown. */}
-                {(() => {
-                  const BEST = 'gemma4:31b-cloud';
-                  const bestAvailable = ollamaModels.some(m => m.name === BEST);
-                  const isCurrent = cfg.ollama_model === BEST;
-                  if (!bestAvailable) return null;
-                  return (
-                    <div className={'set-best-pick' + (isCurrent ? ' active' : '')}>
-                      <span className="set-best-eyebrow">
-                        <Icon name="zap" size={11}/> Recommended · Pulled on server
-                      </span>
-                      <div className="set-best-body">
-                        <code className="set-best-model">{BEST}</code>
-                        <span className="set-best-tagline">
-                          The strongest Ollama model currently pulled. Best quality for scoring &amp; tailoring on Pro.
-                        </span>
-                      </div>
-                      {isCurrent ? (
-                        <span className="set-best-active">
-                          <Icon name="check" size={11}/> Active
-                        </span>
-                      ) : (
-                        // Not `disabled` for non-Pro callers — a disabled
-                        // button swallows the onClick, so the inline
-                        // setPlanError branch never fires. Leave the button
-                        // active and let the onClick guard surface the
-                        // upgrade prompt (matches the dropdown's gate at
-                        // line ~9858).
-                        <button className="set-best-cta"
-                          onClick={() => {
-                            if (!isPro) {
-                              setPlanError('Cloud models require the Pro plan');
-                              return;
-                            }
-                            update({ ollama_model: BEST });
-                          }}>
-                          {isPro ? 'Use this model' : 'Pro only'}
-                          <span className="set-best-arrow">→</span>
-                        </button>
-                      )}
-                    </div>
-                  );
-                })()}
-
-                <select className="set-select" value={cfg.ollama_model || ''}
-                  disabled={!ollamaModels.length}
-                  onChange={e => {
-                    const name = e.target.value;
-                    if (isCloudModel(name) && !isPro) {
-                      setPlanError('Cloud models require the Pro plan');
-                      return;
-                    }
-                    update({ ollama_model: name });
-                  }}>
-                  {ollamaModels.length > 0 ? (() => {
-                    const local = ollamaModels.filter(m => !isCloudModel(m.name));
-                    const cloud = ollamaModels.filter(m => isCloudModel(m.name));
-                    const BEST = 'gemma4:31b-cloud';
-                    const tag = (m) => (m.name === BEST ? '  ·  BEST' : '');
-                    return <>
-                      {local.length > 0 && <optgroup label="Local">
-                        {local.map(m => (
-                          <option key={m.name} value={m.name}>
-                            {m.name}{m.size_gb ? `  ·  ${m.size_gb} GB` : ''}{m.params ? `  ·  ${m.params}` : ''}{tag(m)}
-                          </option>
-                        ))}
-                      </optgroup>}
-                      {cloud.length > 0 && <optgroup label={`Cloud${isPro ? '' : ' — Pro'}`}>
-                        {cloud.map(m => (
-                          <option key={m.name} value={m.name} disabled={!isPro}>
-                            {m.name}{tag(m)}{!isPro ? ' — Pro' : ''}
-                          </option>
-                        ))}
-                      </optgroup>}
-                    </>;
-                  })()
-                  : <option>{ollamaStatus == null ? 'Loading models…' : ollamaStatus.running ? 'No models pulled yet' : 'Ollama offline'}</option>}
-                </select>
-                <div className="set-helper" style={{ marginTop:6 }}>
-                  Ollama is hosted on the deployment server. Browser ↔ FastAPI traffic goes over your Tailnet Funnel; FastAPI ↔ Ollama stays internal on the host.
-                </div>
               </div>
             )}
             <div className="set-field">
@@ -10006,7 +10127,7 @@ function PlansPage({ state, setPage }) {
 
       <div className="page-body solo plans-wrap">
         <div className="plans-eyebrow">
-          <Icon name="zap" size={11}/> Free runs the local models on our server. Pro unlocks the high-quality cloud models.
+          <Icon name="zap" size={11}/> Free runs on open-weight models. Pro unlocks frontier-class engines.
         </div>
 
         <div className="plans-grid">
@@ -10017,17 +10138,17 @@ function PlansPage({ state, setPage }) {
               <div className="plan-name">Free</div>
               <div className="plan-price"><b>$0</b><span>/forever</span></div>
             </div>
-            <div className="plan-tag">Local Ollama models on our server</div>
+            <div className="plan-tag">Open-weight Ollama, hosted for you</div>
             <div className="plan-engine-card">
               <span className="plan-engine-eyebrow">Free engine</span>
               <span className="plan-engine-wordmark plan-engine-ollama">Ollama</span>
               <span className="plan-engine-tagline">
-                Open-weight models on our Pi. Full pipeline, no rate limits,
+                Open-weight models we host for you. Full pipeline, no rate limits,
                 no API keys to wrangle.
               </span>
             </div>
             <ul className="plan-features">
-              <li><Icon name="check" size={13}/> Local LLMs — small open-weight models hosted on the Pi</li>
+              <li><Icon name="check" size={13}/> Small open-weight models — hosted for you, $0</li>
               <li><Icon name="check" size={13}/> Full 7-phase pipeline</li>
               <li><Icon name="check" size={13}/> Excel tracker + run reports</li>
               <li><Icon name="check" size={13}/> Job discovery across 22+ sources</li>
@@ -10053,17 +10174,16 @@ function PlansPage({ state, setPage }) {
                 <span className="plan-engine-eyebrow">Primary engine</span>
                 <span className="plan-engine-wordmark plan-engine-claude">Claude</span>
                 <span className="plan-engine-tagline">
-                  Anthropic frontier intelligence via the official CLI — your
-                  subscription covers it, no API key on your side.
+                  Anthropic's frontier intelligence — your subscription covers it,
+                  nothing to install or wire up.
                 </span>
               </div>
               <div className="plan-engine-card plan-engine-card-secondary">
                 <span className="plan-engine-eyebrow">Also unlocked</span>
                 <span className="plan-engine-wordmark plan-engine-ollama">Ollama&nbsp;Cloud</span>
                 <span className="plan-engine-tagline">
-                  Frontier-class open-weight models proxied through our Ollama
-                  daemon. Same pipeline, no Pi-hardware ceiling — faster,
-                  more reliable runs.
+                  Frontier-class open-weight models. Same pipeline, more reasoning
+                  depth, faster and more reliable runs.
                 </span>
               </div>
             </div>
@@ -10073,7 +10193,7 @@ function PlansPage({ state, setPage }) {
               <li className="plan-feature-hi"><Icon name="sparkles" size={13}/> <b>Ollama Cloud</b> frontier models unlocked — switch engines per task in Settings</li>
               <li><Icon name="check" size={13}/> Higher-fidelity scoring &amp; tailoring</li>
               <li><Icon name="check" size={13}/> Sharper résumé critique &amp; ATS gap analysis</li>
-              <li><Icon name="check" size={13}/> Faster, more reliable runs (no Pi-hardware ceiling)</li>
+              <li><Icon name="check" size={13}/> Faster, more reliable runs</li>
               <li><Icon name="check" size={13}/> Priority support</li>
             </ul>
             {tier === 'pro' ? (
@@ -10097,22 +10217,21 @@ function PlansPage({ state, setPage }) {
         <div className="plans-faq">
           <div className="plans-faq-h">FAQ</div>
           <details className="plans-faq-item" open>
-            <summary>What's the difference between local and cloud models?</summary>
+            <summary>What's the difference between Free and Pro?</summary>
             <div>
-              The Free tier uses small open-weight models hosted directly on our Pi server —
-              fast, private, and free, but the reasoning depth is limited. Pro upgrades you to
-              the cloud-hosted Ollama Turbo models (proxied through the same daemon), which
-              are dramatically larger and produce noticeably better scoring rubrics, tailoring,
-              and résumé critique. Same pipeline, much sharper output.
+              Free runs on small open-weight models — fast, private, and $0, but the
+              reasoning depth is limited. Pro upgrades you to frontier-class engines
+              (Claude as the primary, plus Ollama Cloud), which are dramatically larger and
+              produce noticeably better scoring rubrics, tailoring, and résumé critique.
+              Same pipeline, much sharper output.
             </div>
           </details>
           <details className="plans-faq-item">
             <summary>Is Claude available?</summary>
             <div>
-              Yes — <b>Anthropic Claude</b> is published and live for Pro
-              subscribers. The app invokes Claude via the official Anthropic CLI on our
-              server (so you don't need an API key — your Pro subscription covers it).
-              Switch to <i>Anthropic Claude</i> in Settings → LLM Provider once you're on Pro.
+              Yes — <b>Anthropic Claude</b> is live for Pro subscribers. No API key, no
+              setup on your side — your Pro subscription covers it. Switch to <i>Claude</i>
+              in Settings → LLM Provider once you're on Pro.
             </div>
           </details>
           <details className="plans-faq-item">
@@ -10122,10 +10241,9 @@ function PlansPage({ state, setPage }) {
           <details className="plans-faq-item">
             <summary>Where do the models actually run?</summary>
             <div>
-              Both tiers go through the same Ollama daemon on our Pi server. Free uses local
-              models pulled to disk; Pro routes through Ollama Turbo, where the daemon
-              transparently proxies your request to Ollama's hosted servers and streams the
-              answer back. Either way, you don't need to install or run anything yourself.
+              We host everything for you. Free uses smaller open-weight models; Pro routes
+              through frontier-class models. Either way, you don't need to install or run
+              anything yourself.
             </div>
           </details>
         </div>

@@ -918,15 +918,49 @@ em, i, cite, var { font-style: normal }
    gets its own gradient palette so the card-pair reads as a clean
    "Ollama vs Claude" centerpiece. Headline-version variants live in
    .pv-headline (used inside the section <h2>); the card-version is
-   .prov-wordmark. */
+   .prov-wordmark.
+
+   Two states on the card:
+   • Resting — muted off-white, NO gradient, no arrow cue. Calm.
+   • Hovered — full provider gradient sweeps in via background-position
+                animation, arrow cue slides out from the right. Reads
+                as an obvious "click to sign in" affordance.
+   The .pv-headline variant inside the section <h2> stays always-colored
+   because it's headline copy, not a CTA. */
 .prov-wordmark {
   font-family: var(--serif); font-weight: 600;
   font-size: clamp(64px, 8vw, 88px); line-height: 0.9;
   letter-spacing: -.045em;
-  background-clip: text; -webkit-background-clip: text;
-  color: transparent;
-  display: inline-block;
+  display: inline-flex; align-items: baseline; gap: 6px;
   margin: 4px 0 6px;
+  color: rgba(220, 225, 245, .55);
+  /* Pre-stage the gradient (background already painted) but mask it off
+     until hover by leaving fill solid via -webkit-text-fill-color. The
+     transition crossfades from solid to gradient by toggling fill to
+     transparent on hover. */
+  background-image: linear-gradient(105deg, currentColor 0%, currentColor 100%);
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: currentColor;
+  transition: color .35s ease, -webkit-text-fill-color .35s ease, transform .35s cubic-bezier(.22,1,.36,1);
+}
+.prov-wordmark-link { cursor: pointer; text-decoration: none }
+.prov-wordmark-link:hover {
+  -webkit-text-fill-color: transparent;
+  transform: translateX(2px);
+}
+.prov-wordmark-cue {
+  opacity: 0;
+  transform: translateX(-8px) scale(.85);
+  color: var(--t2);
+  display: inline-flex; align-items: center;
+  transition: opacity .35s ease, transform .35s cubic-bezier(.22,1,.36,1);
+  margin-left: -2px;
+}
+.prov-wordmark-link:hover .prov-wordmark-cue {
+  opacity: 1;
+  transform: none;
+  color: var(--t1);
 }
 .pv-headline {
   font-style: normal;
@@ -934,6 +968,10 @@ em, i, cite, var { font-style: normal }
   color: transparent;
   font-weight: 600;
 }
+/* Per-provider gradient — applied as background-image so the
+   :hover -webkit-text-fill-color flip reveals it through the text.
+   The .pv-headline version (used inline in <h2>) doesn't get masked;
+   the .prov-wordmark version is masked until :hover (see above). */
 .pv-word-ollama {
   background-image: linear-gradient(105deg, #3dff9a 0%, #22e5ff 60%, #34d399 110%);
 }
@@ -1851,7 +1889,17 @@ function ProviderCard({ c }) {
     <div className={'provider-card' + (c.recommended ? ' recommended' : '')}>
       {c.recommended && <span className="provider-tag">Recommended</span>}
       <span className="prov-eyebrow">{c.eyebrow}</span>
-      <span className={'prov-wordmark ' + (c.wordmarkClass || '')}>{c.wordmark}</span>
+      {/* Wordmark doubles as the section's primary CTA: muted at rest,
+          full gradient + sign-in arrow on hover. Click → /app. Matches
+          the always-on plan-engine wordmark on the Plans page, but
+          gated behind hover here so a marketing visitor sees a calmer
+          first paint and the colorful reveal is the "click-me" cue. */}
+      <a href={LAUNCH_URL} className={'prov-wordmark prov-wordmark-link ' + (c.wordmarkClass || '')}>
+        {c.wordmark}
+        <span className="prov-wordmark-cue" aria-hidden="true">
+          <ArrowR size={26}/>
+        </span>
+      </a>
       <p className="prov-tagline">{c.tagline}</p>
       <div className="prov-list">
         {c.list.map((li, i) => (

@@ -10047,21 +10047,32 @@ function PlansPage({ state, setPage }) {
               <div className="plan-name">Pro</div>
               <div className="plan-price"><b>$4</b><span>/month</span></div>
             </div>
-            <div className="plan-tag">Atlas runs on Claude. Premium tailoring, sharper rubrics.</div>
-            <div className="plan-engine-card">
-              <span className="plan-engine-eyebrow">Pro engine</span>
-              <span className="plan-engine-wordmark plan-engine-claude">Claude</span>
-              <span className="plan-engine-tagline">
-                Anthropic frontier intelligence via the official CLI — your
-                subscription covers it, no API key on your side.
-              </span>
+            <div className="plan-tag">Two engines, one subscription. Claude for the heaviest reasoning, Ollama Cloud for the rest.</div>
+            <div className="plan-engine-stack">
+              <div className="plan-engine-card plan-engine-card-primary">
+                <span className="plan-engine-eyebrow">Primary engine</span>
+                <span className="plan-engine-wordmark plan-engine-claude">Claude</span>
+                <span className="plan-engine-tagline">
+                  Anthropic frontier intelligence via the official CLI — your
+                  subscription covers it, no API key on your side.
+                </span>
+              </div>
+              <div className="plan-engine-card plan-engine-card-secondary">
+                <span className="plan-engine-eyebrow">Also unlocked</span>
+                <span className="plan-engine-wordmark plan-engine-ollama">Ollama&nbsp;Cloud</span>
+                <span className="plan-engine-tagline">
+                  Frontier-class open-weight models proxied through our Ollama
+                  daemon. Same pipeline, no Pi-hardware ceiling — faster,
+                  more reliable runs.
+                </span>
+              </div>
             </div>
             <ul className="plan-features">
               <li><Icon name="check" size={13}/> Everything in Free</li>
               <li className="plan-feature-hi"><Icon name="sparkles" size={13}/> Atlas runs on <b>Anthropic Claude</b> — premium AI tailoring &amp; career advice</li>
+              <li className="plan-feature-hi"><Icon name="sparkles" size={13}/> <b>Ollama Cloud</b> frontier models unlocked — switch engines per task in Settings</li>
               <li><Icon name="check" size={13}/> Higher-fidelity scoring &amp; tailoring</li>
               <li><Icon name="check" size={13}/> Sharper résumé critique &amp; ATS gap analysis</li>
-              <li><Icon name="check" size={13}/> Cloud Ollama models also unlocked (fallback / option)</li>
               <li><Icon name="check" size={13}/> Faster, more reliable runs (no Pi-hardware ceiling)</li>
               <li><Icon name="check" size={13}/> Priority support</li>
             </ul>

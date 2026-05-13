@@ -44,18 +44,29 @@
   --mono:      'JetBrains Mono', ui-monospace, monospace;
   --sans:      'Inter', system-ui, -apple-system, sans-serif;
   --serif:     'Inter', system-ui, -apple-system, sans-serif;
-  /* Page-level zoom — applied to content SECTIONS individually (NOT body
-     and NOT scrubber). Body-level zoom shifts the entire document down
-     because position:fixed children become anchored to the zoomed body
-     in some browsers. Scrubber-level zoom inflates the sticky 100vh
-     pin to 150vh, which pushes its centered phase contents below the
-     viewport center. Section-only zoom is the only knob that doesn't
-     break the layout: nav stays 1x at viewport top, sections grow, the
-     scroll-driven scrubber stays untouched.
+  /* Two independent zoom knobs, tuned to avoid the layout pitfalls of
+     body-level or section-level zoom on the scrubber:
 
-     `zoom` is supported in Chrome/Edge/Safari and Firefox 126+ (Apr
-     2024); older Firefox falls back to 100%. */
+       --landing-zoom    → applied to non-scrubber content sections
+                            (.hero, .recap, .providers, .cta, .footer)
+                            Body-level zoom shifts the document down,
+                            section-level zoom on .scrubber inflates
+                            the sticky pin to >100vh. So we zoom
+                            sections individually, scrubber separately.
+
+       --scrubber-zoom   → applied to .scrubber-pin specifically, with
+                            its height set to (100vh / zoom). The pin
+                            renders at exactly 100vh visual (no
+                            overflow, no centering shift) while inner
+                            content scales by --scrubber-zoom. The
+                            "size the layout box smaller and let zoom
+                            inflate it" trick is the only way to keep
+                            sticky-pin content vertically centered.
+
+     Both supported in Chrome/Edge/Safari and Firefox 126+ (Apr 2024);
+     older Firefox falls back to 1x for both. */
   --landing-zoom:  1.25;
+  --scrubber-zoom: 1.30;
 }
 *,*::before,*::after { box-sizing: border-box; margin: 0; padding: 0 }
 html {
@@ -100,7 +111,7 @@ body {
   zoom: var(--landing-zoom);
 }
 @media (max-width: 720px) {
-  :root { --landing-zoom: 1 }
+  :root { --landing-zoom: 1; --scrubber-zoom: 1 }
 }
 /* Common offenders for horizontal scroll on small screens. */
 img, video, iframe, canvas, svg, embed, object {
@@ -280,12 +291,25 @@ em, i, cite, var { font-style: normal }
   height: 2400vh;         /* total scroll travel; tune for desired pacing */
   background: var(--bg);
 }
+/* THE CENTERING TRICK: pin's LAYOUT height = 100vh / zoom, with zoom
+   applied via the zoom property. Net effect: pin renders at 100vh
+   visual (fills viewport), but inner content sizes against
+   (100vh / zoom) — so flex-centering anchors content at the visual
+   viewport center, not below it.
+
+   Example: --scrubber-zoom = 1.3 → layout height = 100vh / 1.3 = 76.9vh
+   in CSS pixels, rendered at 1.3x = 100vh visual. The .scr-stage
+   below the rail fills 100% of the pin layout; phase frames inside it
+   are flex-centered. All of it gets the 1.3x scale, so the demo looks
+   30% bigger AND stays vertically centered in the viewport. */
 .scrubber-pin {
   position: sticky; top: 0;
-  height: 100vh; width: 100%;
+  height: calc(100vh / var(--scrubber-zoom, 1));
+  width: 100%;
   display: flex; flex-direction: column;
   overflow: hidden;
   background: radial-gradient(60% 60% at 50% 50%, #0e0e1f 0%, #07070d 80%);
+  zoom: var(--scrubber-zoom, 1);
 }
 
 .scr-rail {
@@ -934,15 +958,34 @@ em, i, cite, var { font-style: normal }
    gradient painted under a currentColor mask and depended on
    -webkit-text-fill-color resolving as solid; Chrome rendered it
    transparent regardless, producing always-colored text. */
+.prov-wordmark-stack {
+  display: flex; flex-direction: column;
+  gap: 14px;
+  margin: 4px 0 8px;
+}
+.prov-wordmark-slot {
+  display: flex; flex-direction: column;
+  gap: 4px;
+}
+.prov-wordmark-label {
+  font-family: var(--mono); font-size: 10.5px; font-weight: 700;
+  letter-spacing: .18em; text-transform: uppercase;
+  color: var(--t4);
+}
 .prov-wordmark {
   font-family: var(--serif); font-weight: 600;
   font-size: clamp(64px, 8vw, 88px); line-height: 0.9;
   letter-spacing: -.045em;
   display: inline-flex; align-items: baseline; gap: 6px;
-  margin: 4px 0 6px;
   color: rgba(220, 225, 245, .55);
   /* No gradient at rest. transparent transitions handled below per state. */
   transition: color .35s ease, transform .35s cubic-bezier(.22,1,.36,1);
+}
+/* Compact variant for the Pro card where TWO wordmarks share vertical
+   space. ~70% of the standalone size so both Claude + Ollama Cloud
+   fit cleanly without the second crowding the feature list. */
+.prov-wordmark.prov-wordmark-compact {
+  font-size: clamp(44px, 5.4vw, 60px);
 }
 .prov-wordmark-link { cursor: pointer; text-decoration: none; color: rgba(220, 225, 245, .55) }
 .prov-wordmark-cue {
@@ -1848,8 +1891,9 @@ function Recap() {
    ══════════════════════════════════════════════════════════════════════ */
 function Providers() {
   const ollama = {
-    wordmark:  'Ollama',
-    wordmarkClass: 'pv-word-ollama',
+    wordmarks: [
+      { text: 'Ollama', gradient: 'pv-word-ollama' },
+    ],
     eyebrow:   'Free · open-weight',
     tagline:   'On our server. No API keys. No rate limits.',
     list: [
@@ -1860,11 +1904,18 @@ function Providers() {
     cost:  '$0',
     costL: '/ forever',
   };
-  const claude = {
-    wordmark:  'Claude',
-    wordmarkClass: 'pv-word-claude',
-    eyebrow:   'Pro · frontier intelligence',
-    tagline:   'Atlas runs on Claude when you go Pro. Premium tailoring, sharper rubrics, deeper résumé reads.',
+  const pro = {
+    // Pro tier ships TWO engines — Claude as the primary (heavy reasoning,
+    // résumé critique) and Ollama Cloud as the high-quality fallback /
+    // alternate. Both rendered as full gradient wordmarks so neither
+    // feels demoted; the "Primary engine" / "Also unlocked" eyebrows
+    // do the priority cueing.
+    wordmarks: [
+      { text: 'Claude',       gradient: 'pv-word-claude', label: 'Primary engine' },
+      { text: 'Ollama Cloud', gradient: 'pv-word-ollama', label: 'Also unlocked' },
+    ],
+    eyebrow:   'Pro · two engines, one subscription',
+    tagline:   'Atlas runs on Claude when you go Pro, with Ollama Cloud unlocked as a second frontier-class option. Switch per task in Settings.',
     list: [
       'Higher-fidelity scoring & tailoring',
       'Long-form résumé critique + ATS gap analysis',
@@ -1883,17 +1934,19 @@ function Providers() {
         </div>
         <h2 className="providers-h">
           <em className="pv-headline pv-word-ollama">Ollama</em>{' '}for local.{' '}
-          <em className="pv-headline pv-word-claude">Claude</em>{' '}for cloud.
+          <em className="pv-headline pv-word-claude">Claude</em>{' '}+{' '}
+          <em className="pv-headline pv-word-ollama">Ollama Cloud</em>{' '}for Pro.
         </h2>
         <p className="providers-sub">
-          Free tier runs through small open-weight models on our server. Pro routes
-          Atlas through <b>Anthropic Claude</b> — premium quality, no API key on your
-          side. Switch in Settings without losing pipeline state.
+          Free tier runs through small open-weight models on our server. Pro unlocks
+          <b> Anthropic Claude</b> (primary engine) <i>and</i> <b>Ollama Cloud</b>{' '}
+          frontier models — switch per task in Settings without losing pipeline state.
+          No API key on your side.
         </p>
 
         <div className="provider-row">
           <ProviderCard c={ollama}/>
-          <ProviderCard c={claude}/>
+          <ProviderCard c={pro}/>
         </div>
       </div>
     </section>
@@ -1901,21 +1954,31 @@ function Providers() {
 }
 
 function ProviderCard({ c }) {
+  const multi = c.wordmarks.length > 1;
   return (
-    <div className={'provider-card' + (c.recommended ? ' recommended' : '')}>
+    <div className={'provider-card' + (c.recommended ? ' recommended' : '') + (multi ? ' multi-engine' : '')}>
       {c.recommended && <span className="provider-tag">Recommended</span>}
       <span className="prov-eyebrow">{c.eyebrow}</span>
-      {/* Wordmark doubles as the section's primary CTA: muted at rest,
-          full gradient + sign-in arrow on hover. Click → /app. Matches
-          the always-on plan-engine wordmark on the Plans page, but
-          gated behind hover here so a marketing visitor sees a calmer
-          first paint and the colorful reveal is the "click-me" cue. */}
-      <a href={LAUNCH_URL} className={'prov-wordmark prov-wordmark-link ' + (c.wordmarkClass || '')}>
-        {c.wordmark}
-        <span className="prov-wordmark-cue" aria-hidden="true">
-          <ArrowR size={26}/>
-        </span>
-      </a>
+      {/* Each wordmark doubles as a sign-in CTA: muted at rest, full
+          gradient + arrow cue on hover, click → /app. For the Pro card
+          two wordmarks stack vertically (Claude + Ollama Cloud); the
+          Free card has a single one. Both stay always-on label-side. */}
+      <div className="prov-wordmark-stack">
+        {c.wordmarks.map((w, i) => (
+          <div key={i} className="prov-wordmark-slot">
+            {w.label && <span className="prov-wordmark-label">{w.label}</span>}
+            <a href={LAUNCH_URL}
+               className={'prov-wordmark prov-wordmark-link '
+                 + w.gradient
+                 + (multi ? ' prov-wordmark-compact' : '')}>
+              {w.text}
+              <span className="prov-wordmark-cue" aria-hidden="true">
+                <ArrowR size={multi ? 20 : 26}/>
+              </span>
+            </a>
+          </div>
+        ))}
+      </div>
       <p className="prov-tagline">{c.tagline}</p>
       <div className="prov-list">
         {c.list.map((li, i) => (

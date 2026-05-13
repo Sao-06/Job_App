@@ -334,13 +334,14 @@ function Markdown({ text }) {
 
 /* ── Brand glyph (original design) ── */
 function BrandMark({ onClick }) {
+  // Single source of truth: the Ascent monogram lives in frontend/favicon.svg
+  // and is served as both the browser-tab favicon and the in-app brand mark.
+  // Wrapping <img> in .brand-glyph gives us the sizing + drop-shadow without
+  // duplicating the SVG path. Updating the file updates every brand surface.
   return (
     <div className="brand-mark" onClick={onClick}>
       <div className="brand-glyph">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
-          <path d="M4 6h16M4 12h11M4 18h7" stroke="#fff" strokeWidth="2.5" strokeLinecap="round"/>
-          <circle cx="20" cy="18" r="2.5" stroke="#fff" strokeWidth="2" fill="none"/>
-        </svg>
+        <img src="/frontend/favicon.svg" alt="" draggable="false"/>
       </div>
       <div className="brand-name">jobs<em>ai</em></div>
     </div>
@@ -6187,7 +6188,9 @@ function ResumePage({ state, refresh, setPage }) {
                           <p className="rs-empty-sub">
                             Reading every bullet for action verbs, quantification, weak phrasing,
                             and section structure — then asking your configured AI to double-check.
-                            Usually 5–30 seconds.
+                            {state?.mode === 'anthropic'
+                              ? <> Running on <b>Claude</b> for higher quality: this can take up to <b>~4 minutes</b> end-to-end.</>
+                              : <> Usually 5–30 seconds.</>}
                           </p>
                         </>
                       ) : (
@@ -7223,13 +7226,26 @@ function ProfilePage({ state, refresh, setPage }) {
 
   if (!p) {
     if (isExtractingPrimary || extracting) {
+      const usingClaude = state?.mode === 'anthropic';
       return (
         <div className="placeholder-page">
           <span className="spin" style={{ width:28, height:28, borderWidth:3, marginBottom:16 }}/>
           <div style={{ fontSize:20, fontWeight:600 }}>Analyzing resume…</div>
-          <div style={{ fontSize:15.5, color:'var(--t2)', maxWidth:340, textAlign:'center', lineHeight:1.55, marginTop:6 }}>
-            Extracting skills, experience, and target roles from <strong>{primaryResume?.filename}</strong>. This usually takes 5–30 seconds.
+          <div style={{ fontSize:15.5, color:'var(--t2)', maxWidth:380, textAlign:'center', lineHeight:1.55, marginTop:6 }}>
+            Extracting skills, experience, and target roles from <strong>{primaryResume?.filename}</strong>.
+            {usingClaude
+              ? <> Running on <b>Claude</b> for higher quality — this can take <b>up to ~4 minutes</b>.</>
+              : <> This usually takes 5–30 seconds.</>}
           </div>
+          {usingClaude && (
+            <div style={{ marginTop:14, padding:'8px 14px', borderRadius:8,
+                          background:'var(--accent-d, rgba(124,92,255,.08))',
+                          border:'1px solid var(--accent-b, rgba(124,92,255,.30))',
+                          fontFamily:'var(--mono)', fontSize:11.5, letterSpacing:'.06em',
+                          textTransform:'uppercase', color:'var(--accent-h)' }}>
+              Atlas · Claude · deeper analysis active
+            </div>
+          )}
         </div>
       );
     }
@@ -9721,7 +9737,7 @@ function SettingsPage({ state, refresh, setPage }) {
                 <option value="anthropic" disabled={!isDev && !isPro}
                   title={!isDev && !isPro
                     ? 'Upgrade to Pro to use Claude'
-                    : 'Claude Sonnet 4.6 via Anthropic CLI — published.'}>
+                    : 'Anthropic Claude via the official CLI — premium AI tailoring & career advice.'}>
                   Anthropic Claude (Published)
                 </option>
                 <option value="ollama">Ollama (local + cloud models)</option>
@@ -9791,6 +9807,49 @@ function SettingsPage({ state, refresh, setPage }) {
                   )}
                 </div>
 
+                {/* Server-side recommendation pill. gemma4:31b-cloud is the
+                    best Ollama model currently pulled on our deployment server
+                    (single source of truth — see CLAUDE.md §2 "testing-phase"
+                    docs). Surface it as a one-click switch so Pro users land
+                    on the right engine without scrolling the dropdown. */}
+                {(() => {
+                  const BEST = 'gemma4:31b-cloud';
+                  const bestAvailable = ollamaModels.some(m => m.name === BEST);
+                  const isCurrent = cfg.ollama_model === BEST;
+                  if (!bestAvailable) return null;
+                  return (
+                    <div className={'set-best-pick' + (isCurrent ? ' active' : '')}>
+                      <span className="set-best-eyebrow">
+                        <Icon name="zap" size={11}/> Recommended · Pulled on server
+                      </span>
+                      <div className="set-best-body">
+                        <code className="set-best-model">{BEST}</code>
+                        <span className="set-best-tagline">
+                          The strongest Ollama model currently pulled. Best quality for scoring &amp; tailoring on Pro.
+                        </span>
+                      </div>
+                      {isCurrent ? (
+                        <span className="set-best-active">
+                          <Icon name="check" size={11}/> Active
+                        </span>
+                      ) : (
+                        <button className="set-best-cta"
+                          disabled={!isPro}
+                          onClick={() => {
+                            if (!isPro) {
+                              setPlanError('Cloud models require the Pro plan');
+                              return;
+                            }
+                            update({ ollama_model: BEST });
+                          }}>
+                          {isPro ? 'Use this model' : 'Pro only'}
+                          <span className="set-best-arrow">→</span>
+                        </button>
+                      )}
+                    </div>
+                  );
+                })()}
+
                 <select className="set-select" value={cfg.ollama_model || ''}
                   disabled={!ollamaModels.length}
                   onChange={e => {
@@ -9804,18 +9863,20 @@ function SettingsPage({ state, refresh, setPage }) {
                   {ollamaModels.length > 0 ? (() => {
                     const local = ollamaModels.filter(m => !isCloudModel(m.name));
                     const cloud = ollamaModels.filter(m => isCloudModel(m.name));
+                    const BEST = 'gemma4:31b-cloud';
+                    const tag = (m) => (m.name === BEST ? '  ·  BEST' : '');
                     return <>
                       {local.length > 0 && <optgroup label="Local">
                         {local.map(m => (
                           <option key={m.name} value={m.name}>
-                            {m.name}{m.size_gb ? `  ·  ${m.size_gb} GB` : ''}{m.params ? `  ·  ${m.params}` : ''}
+                            {m.name}{m.size_gb ? `  ·  ${m.size_gb} GB` : ''}{m.params ? `  ·  ${m.params}` : ''}{tag(m)}
                           </option>
                         ))}
                       </optgroup>}
                       {cloud.length > 0 && <optgroup label={`Cloud${isPro ? '' : ' — Pro'}`}>
                         {cloud.map(m => (
                           <option key={m.name} value={m.name} disabled={!isPro}>
-                            {m.name}{!isPro ? ' — Pro' : ''}
+                            {m.name}{tag(m)}{!isPro ? ' — Pro' : ''}
                           </option>
                         ))}
                       </optgroup>}
@@ -9952,13 +10013,20 @@ function PlansPage({ state, setPage }) {
               <div className="plan-price"><b>$0</b><span>/forever</span></div>
             </div>
             <div className="plan-tag">Local Ollama models on our server</div>
+            <div className="plan-engine-card">
+              <span className="plan-engine-eyebrow">Free engine</span>
+              <span className="plan-engine-wordmark plan-engine-ollama">Ollama</span>
+              <span className="plan-engine-tagline">
+                Open-weight models on our Pi. Full pipeline, no rate limits,
+                no API keys to wrangle.
+              </span>
+            </div>
             <ul className="plan-features">
               <li><Icon name="check" size={13}/> Local LLMs — small open-weight models hosted on the Pi</li>
               <li><Icon name="check" size={13}/> Full 7-phase pipeline</li>
               <li><Icon name="check" size={13}/> Excel tracker + run reports</li>
               <li><Icon name="check" size={13}/> Job discovery across 22+ sources</li>
               <li><Icon name="check" size={13}/> Cover letter generation (template)</li>
-              <li className="plan-feature-muted"><Icon name="x" size={13}/> High-quality cloud models</li>
               <li className="plan-feature-muted"><Icon name="x" size={13}/> Anthropic Claude (Pro only)</li>
             </ul>
             <button className="plan-cta plan-cta-ghost" disabled>
@@ -9974,15 +10042,23 @@ function PlansPage({ state, setPage }) {
               <div className="plan-name">Pro</div>
               <div className="plan-price"><b>$4</b><span>/month</span></div>
             </div>
-            <div className="plan-tag">High-quality cloud models — sharper scoring &amp; tailoring</div>
+            <div className="plan-tag">Atlas runs on Claude. Premium tailoring, sharper rubrics.</div>
+            <div className="plan-engine-card">
+              <span className="plan-engine-eyebrow">Pro engine</span>
+              <span className="plan-engine-wordmark plan-engine-claude">Claude</span>
+              <span className="plan-engine-tagline">
+                Anthropic frontier intelligence via the official CLI — your
+                subscription covers it, no API key on your side.
+              </span>
+            </div>
             <ul className="plan-features">
               <li><Icon name="check" size={13}/> Everything in Free</li>
-              <li className="plan-feature-hi"><Icon name="sparkles" size={13}/> Cloud Ollama models unlocked (frontier-class quality)</li>
+              <li className="plan-feature-hi"><Icon name="sparkles" size={13}/> Atlas runs on <b>Anthropic Claude</b> — premium AI tailoring &amp; career advice</li>
               <li><Icon name="check" size={13}/> Higher-fidelity scoring &amp; tailoring</li>
               <li><Icon name="check" size={13}/> Sharper résumé critique &amp; ATS gap analysis</li>
+              <li><Icon name="check" size={13}/> Cloud Ollama models also unlocked (fallback / option)</li>
               <li><Icon name="check" size={13}/> Faster, more reliable runs (no Pi-hardware ceiling)</li>
               <li><Icon name="check" size={13}/> Priority support</li>
-              <li className="plan-feature-hi"><Icon name="sparkles" size={13}/> Claude Sonnet 4.6 via Anthropic CLI — premium AI tailoring &amp; career advice</li>
             </ul>
             {tier === 'pro' ? (
               <button className="plan-cta plan-cta-ghost" disabled>Active</button>
@@ -10017,7 +10093,7 @@ function PlansPage({ state, setPage }) {
           <details className="plans-faq-item">
             <summary>Is Claude available?</summary>
             <div>
-              Yes — Anthropic Claude Sonnet 4.6 is <b>published</b> and live for Pro
+              Yes — <b>Anthropic Claude</b> is published and live for Pro
               subscribers. The app invokes Claude via the official Anthropic CLI on our
               server (so you don't need an API key — your Pro subscription covers it).
               Switch to <i>Anthropic Claude</i> in Settings → LLM Provider once you're on Pro.

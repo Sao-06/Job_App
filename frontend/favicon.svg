@@ -1,16 +1,22 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="JobsAI">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="JobsAI">
   <defs>
-    <linearGradient id="jb" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#7c5cff"/>
+    <linearGradient id="ja-bezel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"  stop-color="#161a36"/>
+      <stop offset="100%" stop-color="#0a0d22"/>
+    </linearGradient>
+    <linearGradient id="ja-mark" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0%"  stop-color="#7c5cff"/>
       <stop offset="100%" stop-color="#a78bff"/>
     </linearGradient>
+    <linearGradient id="ja-arrow" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0%"  stop-color="#a78bff"/>
+      <stop offset="100%" stop-color="#22e5ff"/>
+    </linearGradient>
   </defs>
-  <rect width="32" height="32" rx="7" ry="7" fill="url(#jb)"/>
-  <g stroke="#ffffff" stroke-linecap="round" fill="none">
-    <line x1="6" y1="10" x2="26" y2="10" stroke-width="2.6"/>
-    <line x1="6" y1="16" x2="20" y2="16" stroke-width="2.6"/>
-    <line x1="6" y1="22" x2="14" y2="22" stroke-width="2.6"/>
-    <circle cx="24" cy="22" r="3.1" stroke-width="2"/>
-  </g>
+  <rect width="64" height="64" rx="14" ry="14" fill="url(#ja-bezel)"/>
+  <path d="M42 12 V36 a14 14 0 0 1 -28 0"
+        stroke="url(#ja-mark)" stroke-width="8" stroke-linecap="round" fill="none"/>
+  <path d="M14 36 L46 4 M38 4 L46 4 L46 12"
+        stroke="url(#ja-arrow)" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
 </svg>

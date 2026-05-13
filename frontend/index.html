@@ -603,6 +603,11 @@ button.auto-save { cursor: pointer; font: inherit; }
 /* ── SETTINGS ── */
 .settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px }
 @media (max-width: 900px) { .settings-grid { grid-template-columns: 1fr } }
+/* LLM Provider gets the full row so the engine picker cards aren't
+   squashed into a 280px column. The remaining sections (Job Discovery,
+   General Settings, Data Management) flow into the normal 2-col grid
+   below. */
+.settings-grid > .set-sec.set-sec-wide { grid-column: 1 / -1 }
 .set-sec { display: flex; flex-direction: column; gap: 12px }
 .set-sec-h {
   display: flex; align-items: center; gap: 7px;
@@ -1533,6 +1538,324 @@ button.auto-save { cursor: pointer; font: inherit; }
   color: var(--good);
   font-family: var(--mono); font-size: 11px; font-weight: 700;
   letter-spacing: .12em; text-transform: uppercase;
+}
+
+/* ── ENGINE PICKER ───────────────────────────────────────────────────────
+   Premium dual-card replacement for the flat <select> that previously
+   handled `mode`. Designed so picking Claude finally feels like a deliberate
+   premium choice rather than a one-row checkbox: the active card unfurls
+   an "editorial dossier" of capabilities + status, with the inactive
+   sibling stepping back to a quiet "switch-to" treatment. Brand gradients
+   match the landing page's wordmark colors so visitors who saw Claude
+   on the marketing site recognize it instantly here.
+
+   Layout: 2-up grid on desktop, stacked on mobile.
+   Active card: brand-gradient border + animated aurora seam at top edge,
+                expanded body grid (collapses to 0fr when inactive).
+   Locked card (Claude for Free): dimming veil + Pro pill, click routes
+                to /plans. Still clickable.
+   ─────────────────────────────────────────────────────────────────────── */
+.engine-pick {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin: 6px 0 18px;
+}
+.engine-card {
+  position: relative;
+  border-radius: 14px;
+  background: var(--bg-2);
+  border: 1px solid var(--bdr);
+  padding: 18px 22px 18px;
+  overflow: hidden;
+  cursor: pointer;
+  isolation: isolate;          /* aurora ::after stays scoped to the card */
+  transition: opacity .25s, transform .25s cubic-bezier(.22,1,.36,1), border-color .25s;
+}
+.engine-card:not(.active):not(.locked) { opacity: .68 }
+.engine-card:not(.active):not(.locked):hover {
+  opacity: .96;
+  transform: translateY(-1px);
+}
+
+/* Per-brand identity: each card declares its gradient on a CSS variable
+   so the border + aurora + wordmark all reach for the same value. The
+   Claude palette mirrors the landing-page wordmark (#ff9a5a→#ff5a78→
+   #c87a3a); Ollama mirrors the green/cyan one. */
+.engine-card.claude {
+  --engine-grad: linear-gradient(105deg, #ff9a5a 0%, #ff5a78 55%, #c87a3a 110%);
+  --engine-tint: rgba(255,154,90,.10);
+  --engine-edge: rgba(255,90,120,.42);
+}
+.engine-card.ollama {
+  --engine-grad: linear-gradient(105deg, #3dff9a 0%, #22e5ff 60%, #34d399 110%);
+  --engine-tint: rgba(34,229,255,.08);
+  --engine-edge: rgba(34,229,255,.36);
+}
+
+/* Tactile diagonal striping at very low alpha — reads as a textured
+   surface, not a pattern. Different angle per brand so Claude's "rolled
+   paper" diverges visually from Ollama's "industrial mesh." */
+.engine-card::before {
+  content: '';
+  position: absolute; inset: 0;
+  pointer-events: none; z-index: 0;
+}
+.engine-card.claude::before {
+  background:
+    radial-gradient(140% 100% at 0% 0%, var(--engine-tint) 0%, transparent 55%),
+    repeating-linear-gradient(105deg, transparent 0 6px, rgba(255,154,90,.022) 6px 7px);
+}
+.engine-card.ollama::before {
+  background:
+    radial-gradient(140% 100% at 100% 0%, var(--engine-tint) 0%, transparent 55%),
+    repeating-linear-gradient(-75deg, transparent 0 10px, rgba(34,229,255,.025) 10px 11px);
+}
+
+/* Active card — gradient border via padding-box/border-box masking
+   trick (real 1px gradient border, not a thick wrapper). The aurora
+   seam is a 1px-tall ::after layer with an 8s linear-gradient slide. */
+.engine-card.active {
+  background:
+    linear-gradient(var(--bg-2), var(--bg-2)) padding-box,
+    var(--engine-grad) border-box;
+  border-color: transparent;
+  transform: translateY(-1px);
+}
+.engine-card.active::after {
+  content: '';
+  position: absolute; top: 0; left: 0; right: 0; height: 1px;
+  background: var(--engine-grad);
+  background-size: 220% 100%;
+  animation: engine-aurora 8s linear infinite;
+  pointer-events: none;
+  z-index: 2;
+}
+@keyframes engine-aurora {
+  0%   { background-position:   0% 0%; opacity: .9 }
+  50%  { background-position: 110% 0%; opacity: 1   }
+  100% { background-position: 220% 0%; opacity: .9 }
+}
+
+/* Header row — eyebrow on left, status pill on right. */
+.engine-card-head {
+  position: relative; z-index: 1;
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 10px; margin-bottom: 8px;
+}
+.engine-eyebrow {
+  font-family: var(--mono); font-size: 10px; font-weight: 700;
+  letter-spacing: .18em; text-transform: uppercase;
+  color: var(--t4);
+  display: inline-flex; align-items: center; gap: 6px;
+  transition: color .25s;
+}
+.engine-card.active .engine-eyebrow { color: var(--t2) }
+
+.engine-status {
+  font-family: var(--mono); font-size: 10px; font-weight: 700;
+  letter-spacing: .14em; text-transform: uppercase;
+  padding: 3px 8px 3px 7px; border-radius: 999px;
+  border: 1px solid var(--bdr);
+  color: var(--t3); background: var(--bg-3);
+  display: inline-flex; align-items: center; gap: 6px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.engine-card.active .engine-status {
+  color: var(--good);
+  border-color: var(--good-b, rgba(61,255,154,.40));
+  background: var(--good-d, rgba(61,255,154,.08));
+}
+.engine-status-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 5px currentColor;
+}
+.engine-card.active .engine-status-dot {
+  animation: engine-pulse 1.6s ease-in-out infinite;
+}
+@keyframes engine-pulse {
+  0%, 100% { opacity: 1;  transform: scale(1) }
+  50%      { opacity: .55; transform: scale(.78) }
+}
+
+/* Wordmark — large display type. Always colored with the brand
+   gradient; opacity/saturation dip when inactive so the active card
+   visibly "wins" the eye. */
+.engine-wordmark {
+  position: relative; z-index: 1;
+  font-family: var(--serif);
+  font-size: 54px;
+  font-weight: 600;
+  letter-spacing: -.035em;
+  line-height: .95;
+  display: inline-flex; align-items: baseline; gap: 4px;
+  background: var(--engine-grad);
+  background-clip: text; -webkit-background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  opacity: .82;
+  filter: saturate(.88);
+  transition: opacity .25s, filter .25s, transform .25s;
+  margin: 2px 0 6px;
+}
+.engine-card.active .engine-wordmark {
+  opacity: 1;
+  filter: saturate(1.06) brightness(1.03);
+}
+.engine-card:not(.active):not(.locked):hover .engine-wordmark {
+  opacity: .98;
+  filter: saturate(1) brightness(1);
+}
+
+/* Subhead — italic serif lead-in. Quiet but on-brand. */
+.engine-subhead {
+  position: relative; z-index: 1;
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: 13.5px; line-height: 1.45;
+  color: var(--t2);
+  max-width: 320px;
+  margin: 0 0 12px;
+}
+
+/* "Switch to" CTA on the inactive card — a small mono pill that
+   replaces the expanded body. Hover brightens it slightly. */
+.engine-switch-cue {
+  position: relative; z-index: 1;
+  font-family: var(--mono); font-size: 10.5px; font-weight: 700;
+  letter-spacing: .14em; text-transform: uppercase;
+  color: var(--t3);
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 7px 11px;
+  border-radius: 7px;
+  background: var(--bg-3);
+  border: 1px solid var(--bdr);
+  transition: color .2s, background .2s, border-color .2s, transform .2s;
+}
+.engine-card:hover .engine-switch-cue {
+  color: var(--t1);
+  background: var(--bg-2);
+  border-color: var(--engine-edge);
+  transform: translateX(2px);
+}
+.engine-switch-cue-arrow { font-weight: 700; transition: transform .2s }
+.engine-card:hover .engine-switch-cue .engine-switch-cue-arrow { transform: translateX(2px) }
+
+/* Inset divider — visible only when active. The active card unfurls. */
+.engine-card-rule {
+  position: relative; z-index: 1;
+  height: 1px;
+  background: linear-gradient(90deg, transparent 0%, var(--bdr2) 25%, var(--bdr2) 75%, transparent 100%);
+  margin: 4px -4px 12px;
+}
+
+/* Expanding body — CSS grid-template-rows 0fr→1fr collapses cleanly
+   without needing JS to read content height. Active card animates open. */
+.engine-body {
+  position: relative; z-index: 1;
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows .35s cubic-bezier(.22,1,.36,1);
+}
+.engine-body-inner { min-height: 0; overflow: hidden }
+
+/* Capability list — 3 rows. Refined icon chips + body text. */
+.engine-cap-list {
+  display: flex; flex-direction: column; gap: 9px;
+  margin-bottom: 14px;
+}
+.engine-cap-row {
+  display: flex; align-items: flex-start; gap: 11px;
+  font-size: 13px; line-height: 1.45;
+  color: var(--t2);
+}
+.engine-cap-icon {
+  flex-shrink: 0; margin-top: 1px;
+  width: 22px; height: 22px;
+  border-radius: 6px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--bg-3); border: 1px solid var(--bdr);
+  color: var(--t2);
+}
+.engine-card.active .engine-cap-icon {
+  color: var(--t1);
+  border-color: var(--engine-edge);
+}
+.engine-cap-row b { color: var(--t1); font-weight: 600 }
+
+/* Meta strip — kv pairs (e.g. "AUTH · OAuth-keychain"). Tucked under
+   the capability list as a quiet provenance footer. */
+.engine-meta {
+  display: flex; flex-wrap: wrap; gap: 8px 18px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--bdr);
+  font-size: 11.5px;
+  color: var(--t3);
+}
+.engine-meta-pair { display: inline-flex; align-items: center; gap: 6px }
+.engine-meta-k {
+  font-family: var(--mono); font-size: 10px; font-weight: 700;
+  letter-spacing: .14em; text-transform: uppercase;
+  color: var(--t4);
+}
+.engine-meta-v { color: var(--t2) }
+
+/* Lock veil for non-Pro users — Claude card shows the design but
+   adds a soft inset overlay + Pro pill at top-right. Still clickable;
+   click routes to /plans. */
+.engine-card.locked {
+  cursor: pointer;
+  filter: saturate(.85);
+}
+.engine-card.locked::after {
+  content: '';
+  position: absolute; inset: 0;
+  background:
+    radial-gradient(120% 80% at 50% 100%, rgba(7,7,13,.55) 0%, rgba(7,7,13,.10) 70%);
+  pointer-events: none;
+  z-index: 1;
+}
+.engine-lock-pill {
+  position: absolute; top: 14px; right: 14px;
+  z-index: 3;
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, var(--accent-h) 0%, var(--accent) 100%);
+  border: 1px solid rgba(255,255,255,.15);
+  color: #07070e;
+  font-family: var(--mono); font-size: 10px; font-weight: 700;
+  letter-spacing: .14em; text-transform: uppercase;
+  box-shadow: 0 8px 18px -8px rgba(124,92,255,.55);
+  pointer-events: none;       /* whole-card click handles the route */
+}
+.engine-card.locked .engine-status { display: none }
+
+/* Nested Ollama body content (banner + best-pick + dropdown + helper)
+   reuses its existing classes; the engine card just provides the
+   frame. A small top-margin keeps the existing block from kissing
+   the divider. */
+.engine-card .ollama-banner,
+.engine-card .set-best-pick,
+.engine-card .set-select {
+  margin-top: 0;
+}
+.engine-card .engine-body-inner > .ollama-banner { margin-bottom: 10px }
+.engine-card .engine-body-inner > .set-best-pick { margin-bottom: 10px }
+
+/* Plan-gate banner under the engine cards keeps its visual weight
+   but no longer needs to live INSIDE the LLM section — it slots
+   between the cards and the LLM-score-limit slider below. */
+.engine-pick-error { margin-top: -8px; margin-bottom: 14px }
+
+@media (max-width: 720px) {
+  .engine-pick { grid-template-columns: 1fr; gap: 12px }
+  .engine-card { padding: 16px 18px }
+  .engine-wordmark { font-size: 44px; line-height: .94 }
+  .engine-subhead { font-size: 13px }
+  .engine-cap-row { font-size: 12.5px }
 }
 .set-input {
   padding: 11px 14px; border-radius: 9px; border: 1px solid var(--bdr);

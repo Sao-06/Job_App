@@ -44,22 +44,18 @@
   --mono:      'JetBrains Mono', ui-monospace, monospace;
   --sans:      'Inter', system-ui, -apple-system, sans-serif;
   --serif:     'Inter', system-ui, -apple-system, sans-serif;
-  /* Page-level zoom — applied to content SECTIONS (not body) so the
-     fixed nav stays anchored at viewport top. Putting `zoom` on the
-     body shifts the entire document down because the body's
-     position:fixed children become positioned relative to the zoomed
-     body rather than the viewport in some browsers, breaking the
-     nav AND pushing all section padding-from-top apart by the zoom
-     factor. Section-level zoom avoids that: nav stays 1x at top:0,
-     each content section grows 125%, scrubber grows 150% (absolute,
-     not multiplied — the prior 1.25 × 1.20 stack was conceptually
-     correct but compounded the shift). Mobile breakpoint resets
-     both to 1.
+  /* Page-level zoom — applied to content SECTIONS individually (NOT body
+     and NOT scrubber). Body-level zoom shifts the entire document down
+     because position:fixed children become anchored to the zoomed body
+     in some browsers. Scrubber-level zoom inflates the sticky 100vh
+     pin to 150vh, which pushes its centered phase contents below the
+     viewport center. Section-only zoom is the only knob that doesn't
+     break the layout: nav stays 1x at viewport top, sections grow, the
+     scroll-driven scrubber stays untouched.
 
      `zoom` is supported in Chrome/Edge/Safari and Firefox 126+ (Apr
      2024); older Firefox falls back to 100%. */
   --landing-zoom:  1.25;
-  --scrubber-zoom: 1.50;
 }
 *,*::before,*::after { box-sizing: border-box; margin: 0; padding: 0 }
 html {
@@ -85,19 +81,26 @@ body {
   letter-spacing: -.005em;
   overflow-x: clip;
 }
-/* Section-level zoom — nav (position:fixed) stays unzoomed at the top
-   of the viewport; each content section grows. Order matters: .scrubber
-   needs its higher zoom value, and selecting it via .scrubber overrides
-   the section-list zoom because they have equal specificity but the
-   .scrubber rule is later in the cascade. */
+/* Section-level zoom — nav (position:fixed) stays unzoomed at viewport
+   top; each non-scrubber section grows.
+
+   Scrubber is INTENTIONALLY excluded: zooming a section that contains
+   a `position: sticky; height: 100vh` pin makes the pin taller than
+   the viewport (e.g. 150vh visual for 1.5 zoom). Content centered
+   inside the pin via flex then visually sits BELOW the viewport's
+   vertical center — the "Submission" phase form ends up with a giant
+   empty area above it because half the pin is below the fold. The
+   pin's geometry is load-bearing for the scroll-driven scrubber
+   animation; we leave it at 1x.
+
+   Each phase frame's INNER content is already pretty large; users
+   that need more can browser-zoom (Ctrl++) which Real-Zooms the
+   viewport. */
 .hero, .recap, .providers, .cta, .footer {
   zoom: var(--landing-zoom);
 }
-.scrubber {
-  zoom: var(--scrubber-zoom);
-}
 @media (max-width: 720px) {
-  :root { --landing-zoom: 1; --scrubber-zoom: 1 }
+  :root { --landing-zoom: 1 }
 }
 /* Common offenders for horizontal scroll on small screens. */
 img, video, iframe, canvas, svg, embed, object {
@@ -914,19 +917,23 @@ em, i, cite, var { font-style: normal }
   font-family: var(--mono); font-size: 11px; font-weight: 600;
   color: var(--t3); letter-spacing: .14em; text-transform: uppercase;
 }
-/* Provider wordmarks — the engine names as oversized type. Each provider
-   gets its own gradient palette so the card-pair reads as a clean
-   "Ollama vs Claude" centerpiece. Headline-version variants live in
-   .pv-headline (used inside the section <h2>); the card-version is
-   .prov-wordmark.
+/* Provider wordmarks — the engine names as oversized type. Two
+   variants share the per-provider gradients (.pv-word-ollama,
+   .pv-word-claude) but apply them at different times:
 
-   Two states on the card:
-   • Resting — muted off-white, NO gradient, no arrow cue. Calm.
-   • Hovered — full provider gradient sweeps in via background-position
-                animation, arrow cue slides out from the right. Reads
-                as an obvious "click to sign in" affordance.
-   The .pv-headline variant inside the section <h2> stays always-colored
-   because it's headline copy, not a CTA. */
+   • .pv-headline (used inline in the section <h2>) — ALWAYS colored.
+     Background-clip:text + color:transparent painted unconditionally.
+   • .prov-wordmark (used in the provider cards) — colored ONLY on
+     hover. At rest the text is muted off-white and the gradient is
+     not set. On hover, the gradient is applied and the text-fill
+     becomes transparent so the gradient shows through.
+
+   Splitting the gradient application by state — rather than trying
+   to mask the gradient at rest via -webkit-text-fill-color — is the
+   reliable cross-browser approach. The previous attempt had the
+   gradient painted under a currentColor mask and depended on
+   -webkit-text-fill-color resolving as solid; Chrome rendered it
+   transparent regardless, producing always-colored text. */
 .prov-wordmark {
   font-family: var(--serif); font-weight: 600;
   font-size: clamp(64px, 8vw, 88px); line-height: 0.9;
@@ -934,21 +941,10 @@ em, i, cite, var { font-style: normal }
   display: inline-flex; align-items: baseline; gap: 6px;
   margin: 4px 0 6px;
   color: rgba(220, 225, 245, .55);
-  /* Pre-stage the gradient (background already painted) but mask it off
-     until hover by leaving fill solid via -webkit-text-fill-color. The
-     transition crossfades from solid to gradient by toggling fill to
-     transparent on hover. */
-  background-image: linear-gradient(105deg, currentColor 0%, currentColor 100%);
-  background-clip: text;
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: currentColor;
-  transition: color .35s ease, -webkit-text-fill-color .35s ease, transform .35s cubic-bezier(.22,1,.36,1);
+  /* No gradient at rest. transparent transitions handled below per state. */
+  transition: color .35s ease, transform .35s cubic-bezier(.22,1,.36,1);
 }
-.prov-wordmark-link { cursor: pointer; text-decoration: none }
-.prov-wordmark-link:hover {
-  -webkit-text-fill-color: transparent;
-  transform: translateX(2px);
-}
+.prov-wordmark-link { cursor: pointer; text-decoration: none; color: rgba(220, 225, 245, .55) }
 .prov-wordmark-cue {
   opacity: 0;
   transform: translateX(-8px) scale(.85);
@@ -957,25 +953,45 @@ em, i, cite, var { font-style: normal }
   transition: opacity .35s ease, transform .35s cubic-bezier(.22,1,.36,1);
   margin-left: -2px;
 }
+.prov-wordmark-link:hover {
+  transform: translateX(2px);
+  /* Become the gradient — painted via background-image + clipped to
+     text shape + transparent fill so the gradient shows through. */
+  background-clip: text; -webkit-background-clip: text;
+  color: transparent; -webkit-text-fill-color: transparent;
+}
 .prov-wordmark-link:hover .prov-wordmark-cue {
   opacity: 1;
   transform: none;
   color: var(--t1);
+  -webkit-text-fill-color: var(--t1);
 }
+/* Per-provider gradient ONLY on hover — these compound with the
+   :hover state above so the gradient paints in. Pure :hover trigger
+   means at rest the element has NO background-image set at all,
+   guaranteeing the muted color shows. */
+.prov-wordmark-link.pv-word-ollama:hover {
+  background-image: linear-gradient(105deg, #3dff9a 0%, #22e5ff 60%, #34d399 110%);
+}
+.prov-wordmark-link.pv-word-claude:hover {
+  background-image: linear-gradient(105deg, #ff9a5a 0%, #ff5a78 55%, #c87a3a 110%);
+}
+
+/* Always-colored variant for the section <h2>. Standalone class so it
+   can't accidentally inherit the resting-muted color of .prov-wordmark. */
 .pv-headline {
   font-style: normal;
   background-clip: text; -webkit-background-clip: text;
   color: transparent;
+  -webkit-text-fill-color: transparent;
   font-weight: 600;
 }
-/* Per-provider gradient — applied as background-image so the
-   :hover -webkit-text-fill-color flip reveals it through the text.
-   The .pv-headline version (used inline in <h2>) doesn't get masked;
-   the .prov-wordmark version is masked until :hover (see above). */
-.pv-word-ollama {
+.pv-headline.pv-word-ollama,
+.pv-headline.pv-word-claude { /* gradients below */ }
+.pv-headline.pv-word-ollama {
   background-image: linear-gradient(105deg, #3dff9a 0%, #22e5ff 60%, #34d399 110%);
 }
-.pv-word-claude {
+.pv-headline.pv-word-claude {
   background-image: linear-gradient(105deg, #ff9a5a 0%, #ff5a78 55%, #c87a3a 110%);
 }
 .prov-tagline {

@@ -31,9 +31,10 @@ class TestGoogleAuthDummy:
         monkeypatch.delenv("GOOGLE_CLIENT_ID", raising=False)
         monkeypatch.delenv("GOOGLE_CLIENT_SECRET", raising=False)
         monkeypatch.setenv("GOOGLE_OAUTH_DEV_DUMMY", "1")
-        url, state = auth_utils.get_google_auth_url("http://localhost:8000/cb")
+        url, state, code_verifier = auth_utils.get_google_auth_url("http://localhost:8000/cb")
         assert url == "/api/auth/google/callback?code=dummy_code&state=dummy_state"
         assert state == "dummy_state"
+        assert code_verifier is None
 
     def test_raises_without_dummy_flag(self, monkeypatch):
         monkeypatch.delenv("GOOGLE_CLIENT_ID", raising=False)

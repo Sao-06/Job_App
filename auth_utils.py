@@ -46,13 +46,20 @@ def verify_password(password: str, hashed: str) -> bool:
 def get_google_auth_url(redirect_uri: str):
     GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")
     GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET")
+    # Google frequently returns a granted-scope set that differs (order or
+    # extra scopes like `openid`) from what we requested. oauthlib treats that
+    # as a hard error ("Scope has changed…") during fetch_token unless this is
+    # set — the single most common reason a successful Google consent still
+    # bounces the user back to the sign-in page. Not transport-specific, so it
+    # applies in production too, not just localhost.
+    os.environ.setdefault("OAUTHLIB_RELAX_TOKEN_SCOPE", "1")
     if redirect_uri.startswith("http://localhost") or redirect_uri.startswith("http://127.0.0.1"):
         os.environ.setdefault("OAUTHLIB_INSECURE_TRANSPORT", "1")
     if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
         # Dummy dev flow — only active when GOOGLE_OAUTH_DEV_DUMMY=1 is explicitly set.
         # Never allow this in production (where GOOGLE_CLIENT_ID should always be present).
         if _is_dev_dummy_enabled():
-            return f"/api/auth/google/callback?code=dummy_code&state=dummy_state", "dummy_state"
+            return f"/api/auth/google/callback?code=dummy_code&state=dummy_state", "dummy_state", None
         raise RuntimeError(
             "Google OAuth is not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET, "
             "or set GOOGLE_OAUTH_DEV_DUMMY=1 to use a local dev placeholder."
@@ -79,11 +86,22 @@ def get_google_auth_url(redirect_uri: str):
         access_type='offline',
         include_granted_scopes='true'
     )
-    return authorization_url, state
+    # google-auth-oauthlib auto-enables PKCE: authorization_url() generated a
+    # secret code_verifier and sent only its hash (code_challenge) to Google.
+    # Google will demand the raw verifier back at token exchange. Because the
+    # callback builds a *fresh* Flow in a different request, we must persist
+    # this verifier alongside `state` and replay it in verify_google_token —
+    # otherwise fetch_token fails with "(invalid_grant) Missing code verifier"
+    # and the user silently bounces back to the sign-in page.
+    code_verifier = getattr(flow, "code_verifier", None)
+    return authorization_url, state, code_verifier
 
-def verify_google_token(code: str, redirect_uri: str, state: str):
+def verify_google_token(code: str, redirect_uri: str, state: str, code_verifier: str | None = None):
     GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")
     GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET")
+    # See get_google_auth_url: relax oauthlib's strict scope-equality check so a
+    # granted-scope superset from Google doesn't make fetch_token raise.
+    os.environ.setdefault("OAUTHLIB_RELAX_TOKEN_SCOPE", "1")
     if redirect_uri.startswith("http://localhost") or redirect_uri.startswith("http://127.0.0.1"):
         os.environ.setdefault("OAUTHLIB_INSECURE_TRANSPORT", "1")
     # Only accept dummy tokens when the dummy dev flow is explicitly enabled.
@@ -110,6 +128,11 @@ def verify_google_token(code: str, redirect_uri: str, state: str):
 
     flow = Flow.from_client_config(client_config, scopes=['https://www.googleapis.com/auth/userinfo.email', 'openid', 'https://www.googleapis.com/auth/userinfo.profile'], state=state)
     flow.redirect_uri = redirect_uri
+    # Replay the PKCE verifier captured in get_google_auth_url. fetch_token does
+    # `kwargs.setdefault("code_verifier", self.code_verifier)`, so setting this
+    # attribute is what actually sends it to Google's token endpoint.
+    if code_verifier:
+        flow.code_verifier = code_verifier
     flow.fetch_token(code=code)
     
     credentials = flow.credentials

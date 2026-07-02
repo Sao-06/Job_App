@@ -169,7 +169,7 @@ except ImportError as _exc:
         raise RuntimeError(_AUTH_PW_HINT)
     def get_google_auth_url(_redirect_uri):
         raise RuntimeError(_AUTH_GOOGLE_HINT)
-    def verify_google_token(_code, _redirect_uri, _state):
+    def verify_google_token(_code, _redirect_uri, _state, _code_verifier=None):
         raise RuntimeError(_AUTH_GOOGLE_HINT)
 
 from session_store import SQLiteSessionStore
@@ -3618,8 +3618,12 @@ def auth_logout(request: Request):
 def auth_google(request: Request):
     try:
         redirect_uri = str(request.url_for("auth_google_callback"))
-        url, state = get_google_auth_url(redirect_uri)
+        url, state, code_verifier = get_google_auth_url(redirect_uri)
         _S["google_oauth_state"] = state
+        # PKCE: persist the verifier next to the state so the callback (a
+        # separate request with a fresh Flow) can replay it. Without this,
+        # Google rejects the token exchange with "Missing code verifier".
+        _S["google_oauth_code_verifier"] = code_verifier
         # Persist explicitly: GET requests skip the post-response middleware
         # save (see session_state_middleware) so the OAuth state would
         # otherwise vanish before the callback can verify it.
@@ -3657,7 +3661,8 @@ def auth_google_callback(request: Request, code: str = "", state: str = ""):
             return RedirectResponse("/app#auth")
     try:
         redirect_uri = str(request.url_for("auth_google_callback"))
-        info = verify_google_token(code, redirect_uri, state)
+        code_verifier = _S.get("google_oauth_code_verifier")
+        info = verify_google_token(code, redirect_uri, state, code_verifier)
         email = (info.get("email") or "").strip().lower()
         google_id = info.get("sub") or info.get("id")
         name = info.get("name") or email.split("@")[0]
@@ -3699,6 +3704,7 @@ def auth_google_callback(request: Request, code: str = "", state: str = ""):
         # Verify it actually persisted; this is the most common silent failure.
         _verify = _auth_token_lookup(token)
         _S.pop("google_oauth_state", None)
+        _S.pop("google_oauth_code_verifier", None)
         print(
             f"[google oauth callback] success: "
             f"user_id={auth_user.get('id')} email={auth_user.get('email')} "
@@ -3714,8 +3720,14 @@ def auth_google_callback(request: Request, code: str = "", state: str = ""):
     except Exception as exc:
         # Log to the server console so "Continue with Google does nothing" is at least
         # diagnosable from the terminal output. Common causes: redirect_uri_mismatch in
-        # Google Cloud Console; missing google-auth-oauthlib package; expired/wrong code.
+        # Google Cloud Console; missing google-auth-oauthlib package; expired/wrong code;
+        # oauthlib "Scope has changed" (needs OAUTHLIB_RELAX_TOKEN_SCOPE=1, set in
+        # auth_utils.verify_google_token). Emit on stdout too — some run contexts
+        # capture stdout but not stderr, and a silent bounce is undebuggable.
+        import traceback as _tb
         print(f"[google oauth callback] FAILED: {type(exc).__name__}: {exc}", file=sys.stderr)
+        print(f"[google oauth callback] FAILED: {type(exc).__name__}: {exc}", flush=True)
+        _tb.print_exc(file=sys.stdout)
         return RedirectResponse("/app#auth")
 
 

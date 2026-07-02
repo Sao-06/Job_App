@@ -82,7 +82,13 @@
       "Bash(curl -s --max-time 8 -o ./_jsx_check.tmp -w \"HTTP %{http_code}, content-length: %{size_download}\\\\n\" \"http://127.0.0.1:8000/frontend/app.jsx\")",
       "Bash(Get-ChildItem *)",
       "PowerShell(python -m py_compile app.py; if \\($?\\) { \"OK\" } else { \"FAIL\" })",
-      "Bash(curl -s -o NUL -w \"%{http_code}\" http://127.0.0.1:8765/api/state)"
+      "Bash(curl -s -o NUL -w \"%{http_code}\" http://127.0.0.1:8765/api/state)",
+      "Bash(python *)",
+      "Bash(curl *)",
+      "Bash(awk '{print $5}')",
+      "Bash(kill %1)",
+      "Bash(taskkill //F //PID 60444)",
+      "Bash(PYTHONUNBUFFERED=1 python *)"
     ]
   }
 }
